@@ -1,35 +1,92 @@
 # Pulse 1.0 - Troubleshooting Guide
 
+## 🚨 Quick Fix: White Screen After Installation
+
+**Problem:** After running the quick setup and rebooting, you see only a white screen with a cursor.
+
+**Quick Solution:**
+1. Press `Ctrl+Alt+F2` to get to terminal
+2. Login as `pi`
+3. Run: `pkill chromium`
+4. Run: `export DISPLAY=:0 && /opt/pulse/dashboard/kiosk/start.sh`
+5. The wizard should now open at `http://localhost:9090`
+
+**Or simply:** Press `ESC`, then manually navigate Chromium to `http://localhost:9090`
+
+See detailed recovery steps below ⬇️
+
+---
+
 ## Installation and First Boot Issues
 
-### Issue: System Reboots After Installation But Wizard Doesn't Appear
+### Issue: White Screen After Installation Reboot
 
 **Symptoms:**
-- Installation completes successfully
-- System reboots as expected
-- After reboot, nothing happens or blank screen
-- Setup wizard at `http://localhost:9090` is not accessible
+- Installation completes successfully and system reboots
+- After reboot, you see a white screen with only a cursor visible
+- The browser appears to be running but shows nothing
+- Setup wizard is not accessible
 
 **Root Cause:**
-The first-boot wizard service wasn't starting correctly, or the kiosk browser wasn't opening the wizard URL.
+The kiosk mode browser was trying to open the dashboard (`localhost:8080`) before the setup wizard was completed. Only the setup wizard (`localhost:9090`) is running on first boot, causing the browser to load a blank page.
 
 **Solution:**
 
-This issue has been fixed in the latest version. The fixes include:
+This issue has been **FIXED** in the latest version. The fixes include:
 
 1. **Smart Kiosk Detection**: The kiosk start script now checks if the wizard has been completed and opens the correct URL:
    - First boot: Opens `http://localhost:9090` (Setup Wizard)
    - After setup: Opens `http://localhost:8080` (Dashboard)
 
-2. **Proper Marker File Creation**: The wizard now correctly creates `/opt/pulse/config/.wizard_complete` when setup is finished.
+2. **Wait/Retry Logic**: The script now waits up to 60 seconds for the service to be ready before opening the browser.
 
-3. **Service Dependencies**: Services are properly configured:
+3. **Proper Service Coordination**: Services are properly configured:
    - `pulse-firstboot.service` runs ONLY when wizard is NOT complete
    - `pulse-hub.service` and `pulse-dashboard.service` run ONLY when wizard IS complete
 
 **Manual Recovery Steps:**
 
-If you're stuck after a reboot with a blank screen:
+If you're currently stuck with a white screen after installation:
+
+**Method 1: Kill and Restart the Browser (Fastest)**
+
+1. **Switch to terminal:**
+   - Press `Ctrl+Alt+F2` on your keyboard
+   - Login with username: `pi` (default password: `raspberry` unless you changed it)
+
+2. **Kill the frozen browser:**
+   ```bash
+   pkill chromium
+   ```
+
+3. **Restart the kiosk with the fixed script:**
+   ```bash
+   export DISPLAY=:0
+   /opt/pulse/dashboard/kiosk/start.sh
+   ```
+
+   The wizard should now open automatically at `http://localhost:9090`
+
+4. **Switch back to GUI:**
+   - Press `Ctrl+Alt+F1` or `Ctrl+Alt+F7`
+
+**Method 2: Manually Open the Wizard**
+
+1. **Exit fullscreen mode:**
+   - Press `ESC` key (if the white screen is in fullscreen)
+   
+2. **Open Chromium manually:**
+   - Open Chromium browser (if not already open)
+   - Type in address bar: `http://localhost:9090`
+   - The setup wizard should load
+
+3. **Complete the wizard:**
+   - Fill in venue information
+   - Follow wizard steps
+   - Click "Complete Setup"
+   - System will reboot and open dashboard correctly
+
+**Method 3: Check Service Status**
 
 1. **Check if wizard is running:**
    ```bash
@@ -41,27 +98,32 @@ If you're stuck after a reboot with a blank screen:
    sudo journalctl -u pulse-firstboot.service -n 50
    ```
 
-3. **Manually open the wizard:**
-   - Open Chromium browser
-   - Navigate to `http://localhost:9090`
-   - Complete the setup wizard
-
-4. **If wizard service is not running, start it:**
+3. **If wizard service is not running, start it:**
    ```bash
    sudo systemctl start pulse-firstboot.service
    ```
 
-5. **If the browser is frozen:**
-   - Press `Ctrl+Alt+F2` to switch to terminal
-   - Login as `pi`
-   - Kill the browser: `pkill chromium`
-   - Restart the kiosk: `/opt/pulse/dashboard/kiosk/start.sh`
-
-6. **Reset and start over:**
-   ```bash
-   sudo rm /opt/pulse/config/.wizard_complete
-   sudo reboot
+4. **Wait 10 seconds, then open browser to:**
    ```
+   http://localhost:9090
+   ```
+
+**Method 4: Complete Reset (Last Resort)**
+
+If nothing else works, reset and start over:
+
+```bash
+# Remove wizard completion marker (if it exists)
+sudo rm -f /opt/pulse/config/.wizard_complete
+
+# Stop all pulse services
+sudo systemctl stop pulse-*
+
+# Reboot
+sudo reboot
+```
+
+After reboot, the wizard should open automatically at `localhost:9090`.
 
 ---
 

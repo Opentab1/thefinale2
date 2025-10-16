@@ -59,6 +59,7 @@ COMMON_FLAGS=(
   --no-first-run
   --disable-session-crashed-bubble
   --disable-features=TranslateUI
+  --disable-pinch
   --overscroll-history-navigation=0
   --password-store=basic
   --use-mock-keychain
