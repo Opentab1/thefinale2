@@ -30,13 +30,18 @@ class HealthMonitor:
         
     def _load_status(self) -> Dict:
         """Load hardware status from file"""
+        default_status = {
+            "last_check": None,
+            "modules": {}
+        }
+        
         try:
             if os.path.exists(self.config_path):
                 with open(self.config_path, 'r') as f:
                     data = json.load(f)
                     # If legacy format (flat keys like 'camera', 'mic', etc.), migrate lazily
                     if not isinstance(data, dict):
-                        return {"last_check": None, "modules": {}}
+                        return default_status
                     if "modules" not in data or not isinstance(data.get("modules"), dict):
                         return {
                             "last_check": data.get("last_check") or data.get("last_checked"),
@@ -46,10 +51,7 @@ class HealthMonitor:
         except Exception as e:
             logger.error(f"Error loading hardware status: {e}")
         
-        return {
-            "last_check": None,
-            "modules": {}
-        }
+        return default_status
     
     def _save_status(self):
         """Save hardware status to file"""
