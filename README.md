@@ -80,7 +80,7 @@ Pulse 1.0 is a complete operating system for physical venues, designed to run on
 ### 2. Install Pulse (One Command)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/pulse/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Opentab1/pulse/main/install.sh | sudo bash
 ```
 
 The installer will:
