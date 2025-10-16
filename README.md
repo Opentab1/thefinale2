@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 🎵 Pulse 1.0 – AI-Driven Venue Operating System
 
 > **Turn your bar, restaurant, or event space into an autonomous, self-optimizing venue.**
@@ -82,6 +81,8 @@ Pulse 1.0 is a complete operating system for physical venues, designed to run on
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
 ```
+
+Note (Raspberry Pi OS Bookworm): the installer uses `chromium` and `libopenblas-dev` (replacing the older `chromium-browser` and `libatlas-base-dev`).
 
 The installer will:
 - ✓ Install all dependencies
@@ -394,8 +395,8 @@ We welcome contributions! Here's how to get started:
 
 ```bash
 # Clone repository
-git clone https://github.com/YOUR_ORG/pulse.git
-cd pulse
+git clone https://github.com/Opentab1/thefinale2.git
+cd thefinale2
 
 # Set up Python environment
 python3 -m venv venv
@@ -427,9 +428,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- **Documentation**: [GitHub Wiki](https://github.com/YOUR_ORG/pulse/wiki)
-- **Issues**: [GitHub Issues](https://github.com/YOUR_ORG/pulse/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/YOUR_ORG/pulse/discussions)
+- **Documentation**: [GitHub Wiki](https://github.com/Opentab1/thefinale2/wiki)
+- **Issues**: [GitHub Issues](https://github.com/Opentab1/thefinale2/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/Opentab1/thefinale2/discussions)
 
 ---
 
@@ -457,14 +458,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 <p align="center">
   Made with 🎵 Pulse
 </p>
-=======
-# Pulse 1.0 (Alpha)
 
-Local-first, self-healing venue OS for Raspberry Pi 5.
-
-- One-line install
-- Autostart on boot (kiosk dashboard)
-- Sensors + controls with graceful degradation
-
-See `install.sh` for bootstrap. This is a scaffold; features are WIP.
->>>>>>> origin/main

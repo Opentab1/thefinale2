@@ -13,7 +13,7 @@ Thank you for your interest in contributing to Pulse! This document provides gui
 
 ### Reporting Bugs
 
-1. Check if the bug has already been reported in [Issues](https://github.com/YOUR_ORG/pulse/issues)
+1. Check if the bug has already been reported in [Issues](https://github.com/Opentab1/thefinale2/issues)
 2. If not, create a new issue with:
    - Clear title and description
    - Steps to reproduce
@@ -32,7 +32,7 @@ Thank you for your interest in contributing to Pulse! This document provides gui
 
 1. **Fork the repository**
    ```bash
-   git clone https://github.com/YOUR_ORG/pulse.git
+   git clone https://github.com/Opentab1/thefinale2.git
    cd pulse
    ```
 
@@ -161,8 +161,8 @@ export default ComponentName
 
 ## Need Help?
 
-- Check the [Wiki](https://github.com/YOUR_ORG/pulse/wiki)
-- Ask in [Discussions](https://github.com/YOUR_ORG/pulse/discussions)
+- Check the [Wiki](https://github.com/Opentab1/thefinale2/wiki)
+- Ask in [Discussions](https://github.com/Opentab1/thefinale2/discussions)
 - Join our community chat (link TBD)
 
 ## Recognition
