@@ -104,7 +104,8 @@ chown -R ${USER}:${USER} "$INSTALL_DIR"
 
 echo -e "${YELLOW}[5/10] Setting up Python virtual environment...${NC}"
 cd "$INSTALL_DIR"
-sudo -u ${USER} python3 -m venv venv
+# Enable system site packages so apt-installed Python libs are visible in venv
+sudo -u ${USER} python3 -m venv --system-site-packages venv
 sudo -u ${USER} venv/bin/pip install --upgrade pip
 # Install build dependencies first for Python 3.13 compatibility
 sudo -u ${USER} venv/bin/pip install setuptools wheel
