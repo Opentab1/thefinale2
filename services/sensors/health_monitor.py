@@ -21,17 +21,26 @@ class HealthMonitor:
         
     def _load_status(self) -> Dict:
         """Load hardware status from file"""
-        try:
-            if os.path.exists(self.config_path):
-                with open(self.config_path, 'r') as f:
-                    return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading hardware status: {e}")
-        
-        return {
+        default_status = {
             "last_check": None,
             "modules": {}
         }
+        
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, 'r') as f:
+                    loaded_status = json.load(f)
+                    # Ensure loaded status has required keys
+                    if isinstance(loaded_status, dict):
+                        if "modules" not in loaded_status:
+                            loaded_status["modules"] = {}
+                        if "last_check" not in loaded_status:
+                            loaded_status["last_check"] = None
+                        return loaded_status
+        except Exception as e:
+            logger.error(f"Error loading hardware status: {e}")
+        
+        return default_status
     
     def _save_status(self):
         """Save hardware status to file"""
