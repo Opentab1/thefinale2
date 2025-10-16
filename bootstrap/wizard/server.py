@@ -95,6 +95,13 @@ WIZARD_HTML = """
             width: 24px;
             height: 24px;
             border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-weight: 700;
+            font-size: 16px;
+            line-height: 1;
         }
         .status-ok { background: #4caf50; }
         .status-missing { background: #f44336; }
@@ -183,7 +190,7 @@ WIZARD_HTML = """
             <!-- Step 2: Hardware Check -->
             <div class="step" data-step="2">
                 <h2>Hardware Detection</h2>
-                <p>Checking connected hardware modules...</p>
+                <p id="hardwareCheckMessage">Checking connected hardware modules...</p>
                 <div class="hardware-status" id="hardwareStatus">
                     <div class="hardware-item"><span>Camera</span><div class="status-icon"></div></div>
                     <div class="hardware-item"><span>Microphone</span><div class="status-icon"></div></div>
@@ -293,14 +300,17 @@ WIZARD_HTML = """
             if (step === totalSteps) {
                 document.querySelector('.buttons').style.display = 'none';
             }
+
+            // Trigger hardware check when entering step 2 so user can see results
+            if (step === 2) {
+                checkHardware();
+            }
             
             updateProgress();
         }
         
         function nextStep() {
-            if (currentStep === 2) {
-                checkHardware();
-            } else if (currentStep === totalSteps - 1) {
+            if (currentStep === totalSteps - 1) {
                 completeSetup();
             } else {
                 currentStep++;
@@ -315,13 +325,57 @@ WIZARD_HTML = """
             }
         }
         
+        function updateHardwareStatus(results) {
+            const statusContainer = document.getElementById('hardwareStatus');
+            const nameToKey = {
+                'Camera': 'camera',
+                'Microphone': 'mic',
+                'BME280 Sensor': 'bme280',
+                'Light Sensor': 'light_sensor',
+                'Pan-Tilt HAT': 'pan_tilt',
+                'AI HAT': 'ai_hat'
+            };
+
+            const items = statusContainer.querySelectorAll('.hardware-item');
+            items.forEach(item => {
+                const labelEl = item.querySelector('span');
+                const iconEl = item.querySelector('.status-icon');
+                const label = labelEl ? labelEl.textContent.trim() : '';
+                const key = nameToKey[label];
+                const isPresent = key ? Boolean(results[key]) : false;
+
+                item.classList.remove('ok', 'missing');
+                iconEl.classList.remove('status-ok', 'status-missing');
+
+                iconEl.setAttribute('role', 'img');
+
+                if (isPresent) {
+                    item.classList.add('ok');
+                    iconEl.classList.add('status-ok');
+                    iconEl.textContent = '✓';
+                    iconEl.setAttribute('aria-label', label + ' connected');
+                } else {
+                    item.classList.add('missing');
+                    iconEl.classList.add('status-missing');
+                    iconEl.textContent = '✗';
+                    iconEl.setAttribute('aria-label', label + ' not connected');
+                }
+            });
+        }
+
         function checkHardware() {
+            // Indicate in-Progress
+            const msg = document.getElementById('hardwareCheckMessage');
+            if (msg) msg.textContent = 'Checking connected hardware modules...';
+
             fetch('/api/wizard/hardware-check')
                 .then(r => r.json())
                 .then(data => {
-                    // Update hardware status display
-                    currentStep++;
-                    showStep(currentStep);
+                    updateHardwareStatus(data);
+                    if (msg) msg.textContent = 'Hardware check complete. Review statuses below.';
+                })
+                .catch(() => {
+                    if (msg) msg.textContent = 'Could not check hardware automatically. Review defaults below.';
                 });
         }
         
