@@ -45,6 +45,9 @@ apt-get install -y \
     python3-full \
     python3-pip \
     python3-venv \
+    python3-dev \
+    build-essential \
+    pkg-config \
     nodejs \
     npm \
     ffmpeg \
@@ -54,7 +57,9 @@ apt-get install -y \
     libopenblas-dev \
     libportaudio2 \
     portaudio19-dev \
+    libsndfile1 \
     i2c-tools \
+    python3-libgpiod \
     chromium \
     unclutter \
     cec-utils \
