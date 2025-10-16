@@ -143,6 +143,7 @@ mkdir -p "$LOG_DIR"
 mkdir -p "$INSTALL_DIR/data"
 mkdir -p "$INSTALL_DIR/models"
 mkdir -p "$INSTALL_DIR/music"
+mkdir -p "$INSTALL_DIR/config"
 
 chown -R ${USER}:${USER} "$LOG_DIR"
 chown -R ${USER}:${USER} "$INSTALL_DIR"

@@ -83,6 +83,11 @@ class HealthMonitor:
 
     def _load_status(self) -> Dict:
         """Load hardware status from file"""
+        default_status = {
+            "last_check": None,
+            "modules": {}
+        }
+        
         try:
             if os.path.exists(self.config_path):
                 with open(self.config_path, 'r') as f:
@@ -91,10 +96,7 @@ class HealthMonitor:
         except Exception as e:
             logger.error(f"Error loading hardware status: {e}")
         
-        return {
-            "last_check": None,
-            "modules": {}
-        }
+        return default_status
     
     def _save_status(self):
         """Save hardware status to file"""
