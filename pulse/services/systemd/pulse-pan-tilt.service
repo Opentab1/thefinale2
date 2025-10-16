@@ -1,0 +1,16 @@
+[Unit]
+Description=Pulse pan-tilt controller
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse/services/sensors
+ExecStart=/opt/pulse/.venv/bin/python /opt/pulse/services/sensors/pan_tilt.py
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/pulse/pan_tilt.log
+StandardError=append:/var/log/pulse/pan_tilt.err
+
+[Install]
+WantedBy=pulse-sensors.target
