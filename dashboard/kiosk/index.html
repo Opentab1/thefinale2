@@ -59,6 +59,8 @@
   <script>
     const wizardUrl = 'http://localhost:9090/';
     const dashboardUrl = 'http://localhost:8080/';
+    const params = new URLSearchParams(location.search);
+    const preferred = params.get('preferred'); // 'wizard' | 'dashboard' | null
     const statusText = document.getElementById('statusText');
     const wizardPill = document.getElementById('wizardPill');
     const dashPill = document.getElementById('dashPill');
@@ -101,10 +103,9 @@
     let tries = 0;
     function tick() {
       tries++;
-
       checkWizardStatus(() => {
         if (wizardKnown && wizardComplete) {
-          // Skip checking wizard service; go straight to dashboard when ready
+          // Wizard complete: prefer dashboard
           checkAlive(dashboardUrl,
             () => {
               dashPill.textContent = 'Dashboard: ready';
@@ -115,22 +116,23 @@
             }
           );
         } else {
-          // Normal behavior: prefer wizard if it's ready, otherwise dashboard
+          // During setup: prefer wizard if ready; otherwise dashboard
           checkAlive(wizardUrl,
             () => {
               wizardPill.textContent = 'Wizard: ready';
-              redirect(wizardUrl);
+              if (!preferred || preferred === 'wizard') redirect(wizardUrl);
             },
             () => {
               wizardPill.textContent = 'Wizard: starting…';
             }
           );
-
           checkAlive(dashboardUrl,
             () => {
               dashPill.textContent = 'Dashboard: ready';
               setTimeout(() => {
-                if (!/ready$/.test(wizardPill.textContent)) redirect(dashboardUrl);
+                if ((preferred === 'dashboard') || !/ready$/.test(wizardPill.textContent)) {
+                  redirect(dashboardUrl);
+                }
               }, 500);
             },
             () => {

@@ -8,8 +8,7 @@ import os
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, request, send_from_directory
-from flask import send_file
+from flask import Flask, jsonify, request, send_from_directory, send_file, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from threading import Thread
@@ -20,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from services.storage.db import PulseDB
 from services.sensors.health_monitor import HealthMonitor
+from services.sensors.camera_people import PeopleCounter
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 # Initialize database and health monitor
 db = PulseDB()
 health_monitor = HealthMonitor()
+camera_for_snapshot = None
 
 # Global hub instance (will be set by main)
 hub_instance = None
@@ -191,13 +192,41 @@ def get_health():
 
 @app.route('/api/camera/snapshot')
 def camera_snapshot():
-    """Serve the latest camera snapshot if available"""
+    """Return a single JPEG frame from the camera or latest saved snapshot.
+    Tries saved snapshot first, then attempts a live capture via OpenCV.
+    Falls back to a 1x1 transparent PNG if unavailable."""
     try:
+        # 1) Try an existing snapshot saved by a background process
         snapshot_path = Path('/opt/pulse/data/latest_camera.jpg')
         if snapshot_path.exists() and snapshot_path.stat().st_size > 0:
-            # Set cache control headers to avoid stale images
-            return send_file(str(snapshot_path), mimetype='image/jpeg', max_age=0)
-        return ("No snapshot", 404)
+            resp = send_file(str(snapshot_path), mimetype='image/jpeg', max_age=0)
+            # Ensure no caching
+            resp.headers['Cache-Control'] = 'no-store'
+            return resp
+
+        # 2) Try to capture a live frame
+        try:
+            import cv2
+            cap = cv2.VideoCapture(0)
+            ok, frame = cap.read()
+            cap.release()
+        except Exception:
+            ok, frame = False, None
+
+        if ok and frame is not None:
+            import cv2
+            ok, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            if ok:
+                data = buf.tobytes()
+                return Response(data, mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
+
+        # 3) Fallback: transparent PNG
+        transparent_png = (
+            b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+            b'\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0bIDATx\xda\x63\x60\x00\x00\x00\x02\x00\x01'
+            b'\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82'
+        )
+        return Response(transparent_png, mimetype='image/png', headers={'Cache-Control': 'no-store'})
     except Exception as e:
         logger.error(f"Error serving snapshot: {e}")
         return ("Error", 500)
@@ -510,6 +539,12 @@ def run_server(host='0.0.0.0', port=8080, debug=False):
     """Run the dashboard server"""
     start_broadcast_thread()
     socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
+
+
+# ===== Camera helper (optional init placeholder) =====
+def _try_init_camera_once():
+    """Placeholder for future camera warmup/init if needed."""
+    return True
 
 
 if __name__ == "__main__":

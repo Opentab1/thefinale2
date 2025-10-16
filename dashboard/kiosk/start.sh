@@ -67,6 +67,14 @@ COMMON_FLAGS=(
   --simulate-outdated-no-au='Tue, 31 Dec 2099 23:59:59 GMT'
 )
 
-TARGET_URL="http://localhost:${FALLBACK_PORT}/index.html"
+# Decide preferred target (wizard vs dashboard) based on setup marker
+PREFERRED="wizard"
+WIZARD_COMPLETE="/opt/pulse/config/.wizard_complete"
+if [[ -f "$WIZARD_COMPLETE" ]]; then
+  PREFERRED="dashboard"
+fi
+
+# Build target URL with preference hint for the fallback page script
+TARGET_URL="http://localhost:${FALLBACK_PORT}/index.html?preferred=${PREFERRED}"
 
 exec "$CHROMIUM_BIN" "${COMMON_FLAGS[@]}" "$OZONE_FLAG" --app="$TARGET_URL"

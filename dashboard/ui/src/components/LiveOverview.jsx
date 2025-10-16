@@ -2,6 +2,13 @@ import React, { useEffect, useState } from 'react'
 import { Users, Music, Volume2, Thermometer, Droplet, Sun, Cloud } from 'lucide-react'
 
 export default function LiveOverview({ sensorData }) {
+  const [snapshotUrl, setSnapshotUrl] = useState('')
+  useEffect(() => {
+    const makeUrl = () => `/api/camera/snapshot?ts=${Date.now()}`
+    setSnapshotUrl(makeUrl())
+    const interval = setInterval(() => setSnapshotUrl(makeUrl()), 3000)
+    return () => clearInterval(interval)
+  }, [])
   const {
     occupancy = 0,
     temperature_f = 0,
@@ -11,15 +18,7 @@ export default function LiveOverview({ sensorData }) {
     current_song = {}
   } = sensorData
 
-  const [snapshotUrl, setSnapshotUrl] = useState('')
-
-  useEffect(() => {
-    const makeUrl = () => `/api/camera/snapshot?ts=${Date.now()}`
-    // Preload once immediately
-    setSnapshotUrl(makeUrl())
-    const id = setInterval(() => setSnapshotUrl(makeUrl()), 2000)
-    return () => clearInterval(id)
-  }, [])
+  
 
   return (
     <div className="space-y-6">
@@ -86,10 +85,12 @@ export default function LiveOverview({ sensorData }) {
                 src={snapshotUrl}
                 alt="Live camera"
                 className="w-full h-full object-cover"
+                className="w-full h-full object-cover"
                 onError={(e) => { e.currentTarget.style.display = 'none' }}
                 onLoad={(e) => { e.currentTarget.style.display = 'block' }}
               />
             ) : (
+              <span className="text-gray-400 text-sm">No camera snapshot available</span>
               <span className="text-gray-400 text-sm">No camera snapshot available</span>
             )}
           </div>
