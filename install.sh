@@ -45,6 +45,7 @@ apt-get install -y \
     python3-full \
     python3-pip \
     python3-venv \
+    python3-dev \
     nodejs \
     npm \
     ffmpeg \
@@ -59,6 +60,7 @@ apt-get install -y \
     unclutter \
     cec-utils \
     sqlite3 \
+    python3-rpi.gpio \
     2>&1 | tee -a /tmp/pulse_install.log
 
 # Enable I2C
@@ -110,7 +112,7 @@ else
     fi
 fi
 
-sudo -u ${USER} ${PY_BIN} -m venv venv
+sudo -u ${USER} ${PY_BIN} -m venv --system-site-packages venv
 sudo -u ${USER} venv/bin/pip install --upgrade pip
 # Install build dependencies first
 sudo -u ${USER} venv/bin/pip install setuptools wheel
