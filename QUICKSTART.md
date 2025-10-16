@@ -21,7 +21,7 @@ On your Raspberry Pi, open a terminal window.
 Copy and paste this single command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/pulse/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
 ```
 
 ⏱️ **Installation takes ~15-20 minutes**

@@ -107,7 +107,7 @@ This document confirms that **Pulse 1.0** has been fully built according to the 
 
 ✅ **One-Line Installation**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/pulse/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
 ```
 
 ✅ **Zero-Touch Boot**

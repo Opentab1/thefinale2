@@ -3,6 +3,7 @@
 # For Raspberry Pi 5 with Raspberry Pi OS (64-bit)
 
 set -e
+set -o pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -50,11 +51,11 @@ apt-get install -y \
     v4l-utils \
     pulseaudio \
     alsa-utils \
-    libatlas-base-dev \
+    libopenblas-dev \
     libportaudio2 \
     portaudio19-dev \
     i2c-tools \
-    chromium-browser \
+    chromium \
     unclutter \
     cec-utils \
     sqlite3 \
@@ -81,7 +82,14 @@ if [ -d "$INSTALL_DIR" ]; then
 fi
 
 mkdir -p "$INSTALL_DIR"
-cp -r . "$INSTALL_DIR/" 2>/dev/null || git clone https://github.com/YOUR_ORG/pulse.git "$INSTALL_DIR"
+# If this script is run from a local checkout (with expected files), use it; otherwise clone from GitHub
+if [ -f "./requirements.txt" ] && [ -d "./services/systemd" ] && [ -d "./dashboard/ui" ]; then
+    echo "Using local source to install."
+    cp -a . "$INSTALL_DIR/"
+else
+    echo "Cloning repository from GitHub..."
+    git clone https://github.com/Opentab1/thefinale2.git "$INSTALL_DIR"
+fi
 
 chown -R ${USER}:${USER} "$INSTALL_DIR"
 
@@ -131,6 +139,8 @@ EOF
 
 # Configure autostart
 mkdir -p /home/${USER}/.config/autostart
+# Ensure LXDE session config directory exists before appending
+mkdir -p /home/${USER}/.config/lxsession/LXDE-pi
 cat > /home/${USER}/.config/autostart/pulse-dashboard.desktop << EOF
 [Desktop Entry]
 Type=Application
