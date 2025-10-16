@@ -58,7 +58,9 @@ apt-get install -y \
     libopenblas-dev \
     libportaudio2 \
     portaudio19-dev \
+    libsndfile1 \
     i2c-tools \
+    python3-libgpiod \
     chromium \
     unclutter \
     cec-utils \
@@ -109,6 +111,7 @@ sudo -u ${USER} python3 -m venv --system-site-packages venv
 sudo -u ${USER} venv/bin/pip install --upgrade pip
 # Install build dependencies first for Python 3.13 compatibility
 sudo -u ${USER} venv/bin/pip install setuptools wheel
+# Install Python requirements compatible with Python 3.13
 sudo -u ${USER} venv/bin/pip install -r requirements.txt
 
 echo -e "${YELLOW}[6/10] Installing Node.js dashboard...${NC}"
@@ -134,10 +137,10 @@ cp "$INSTALL_DIR/services/systemd"/*.service /etc/systemd/system/
 systemctl daemon-reload
 
 # Enable services
-systemctl enable pulse-firstboot.service
-systemctl enable pulse-hub.service
-systemctl enable pulse-dashboard.service
-systemctl enable pulse-health.service
+systemctl enable pulse-firstboot.service || true
+systemctl enable pulse-hub.service || true
+systemctl enable pulse-dashboard.service || true
+systemctl enable pulse-health.service || true
 
 echo -e "${YELLOW}[9/10] Configuring auto-login and kiosk mode...${NC}"
 
