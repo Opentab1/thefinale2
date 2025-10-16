@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, request, send_from_directory, Response
+from flask import Flask, jsonify, request, send_from_directory, send_file, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from threading import Thread
@@ -83,7 +83,37 @@ def get_current_sensors():
         if hub_instance:
             data = hub_instance._collect_sensor_data()
         else:
-            data = {}
+            # Fallback: derive current snapshot from database
+            data = {
+                "occupancy": db.get_current_occupancy(),
+                "temperature_f": None,
+                "humidity": None,
+                "light_level": None,
+                "noise_db": None,
+                "current_song": None,
+            }
+
+            env = db.get_latest_environment()
+            if env:
+                data.update({
+                    "temperature_f": env.get("temperature"),
+                    "humidity": env.get("humidity"),
+                    "light_level": env.get("light_level"),
+                    "noise_db": env.get("noise_level"),
+                })
+
+            # Last played song from music_log (if any)
+            try:
+                with db.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT track_name, artist FROM music_log ORDER BY timestamp DESC LIMIT 1")
+                    row = cur.fetchone()
+                    if row:
+                        data["current_song"] = {"title": row[0], "artist": row[1]}
+                    else:
+                        data["current_song"] = {"title": None, "artist": None}
+            except Exception:
+                data["current_song"] = {"title": None, "artist": None}
         
         return jsonify(data)
     except Exception as e:
@@ -158,6 +188,48 @@ def get_health():
     except Exception as e:
         logger.error(f"Error getting health: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/camera/snapshot')
+def camera_snapshot():
+    """Return a single JPEG frame from the camera or latest saved snapshot.
+    Tries saved snapshot first, then attempts a live capture via OpenCV.
+    Falls back to a 1x1 transparent PNG if unavailable."""
+    try:
+        # 1) Try an existing snapshot saved by a background process
+        snapshot_path = Path('/opt/pulse/data/latest_camera.jpg')
+        if snapshot_path.exists() and snapshot_path.stat().st_size > 0:
+            resp = send_file(str(snapshot_path), mimetype='image/jpeg', max_age=0)
+            # Ensure no caching
+            resp.headers['Cache-Control'] = 'no-store'
+            return resp
+
+        # 2) Try to capture a live frame
+        try:
+            import cv2
+            cap = cv2.VideoCapture(0)
+            ok, frame = cap.read()
+            cap.release()
+        except Exception:
+            ok, frame = False, None
+
+        if ok and frame is not None:
+            import cv2
+            ok, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            if ok:
+                data = buf.tobytes()
+                return Response(data, mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
+
+        # 3) Fallback: transparent PNG
+        transparent_png = (
+            b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+            b'\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0bIDATx\xda\x63\x60\x00\x00\x00\x02\x00\x01'
+            b'\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82'
+        )
+        return Response(transparent_png, mimetype='image/png', headers={'Cache-Control': 'no-store'})
+    except Exception as e:
+        logger.error(f"Error serving snapshot: {e}")
+        return ("Error", 500)
 
 
 # ===== Control API Routes =====
@@ -469,58 +541,10 @@ def run_server(host='0.0.0.0', port=8080, debug=False):
     socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
 
 
-# ===== Camera snapshot endpoint (best-effort) =====
-
+# ===== Camera helper (optional init placeholder) =====
 def _try_init_camera_once():
-    global camera_for_snapshot
-    if camera_for_snapshot is not None:
-        return camera_for_snapshot
-    try:
-        # Reuse PeopleCounter frame capture to avoid duplicating camera logic
-        pc = PeopleCounter(use_ai_hat=False)
-        camera_for_snapshot = pc
-    except Exception:
-        camera_for_snapshot = False
-    return camera_for_snapshot
-
-
-@app.route('/api/camera/snapshot.jpg')
-def camera_snapshot():
-    """Return a single JPEG frame from the default camera.
-    Falls back to 1x1 transparent pixel if unavailable."""
-    try:
-        pc = _try_init_camera_once()
-        if not pc or not hasattr(pc, 'detector'):
-            raise RuntimeError('camera not available')
-
-        import cv2
-        import numpy as np
-        # Capture a single frame using OpenCV; prefer USB camera index 0
-        try:
-            # Try picamera2 path via internal loop would be heavy; use OpenCV here
-            cap = cv2.VideoCapture(0)
-            ok, frame = cap.read()
-            cap.release()
-        except Exception:
-            ok, frame = False, None
-
-        if not ok or frame is None:
-            raise RuntimeError('no frame')
-
-        # Encode JPEG
-        ok, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
-        if not ok:
-            raise RuntimeError('encode failed')
-        data = buf.tobytes()
-        return Response(data, mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
-    except Exception:
-        # Return a 1x1 transparent PNG as a harmless fallback
-        transparent_png = (
-            b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
-            b'\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0bIDATx\xda\x63\x60\x00\x00\x00\x02\x00\x01'
-            b'\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82'
-        )
-        return Response(transparent_png, mimetype='image/png', headers={'Cache-Control': 'no-store'})
+    """Placeholder for future camera warmup/init if needed."""
+    return True
 
 
 if __name__ == "__main__":

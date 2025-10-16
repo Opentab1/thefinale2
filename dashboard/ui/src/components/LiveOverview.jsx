@@ -2,10 +2,9 @@ import React, { useEffect, useState } from 'react'
 import { Users, Music, Volume2, Thermometer, Droplet, Sun, Cloud } from 'lucide-react'
 
 export default function LiveOverview({ sensorData }) {
-  const [snapshotUrl, setSnapshotUrl] = useState(null)
+  const [snapshotUrl, setSnapshotUrl] = useState('')
   useEffect(() => {
-    // Build a cache-busted snapshot URL to refresh periodically
-    const makeUrl = () => `/api/camera/snapshot.jpg?ts=${Date.now()}`
+    const makeUrl = () => `/api/camera/snapshot?ts=${Date.now()}`
     setSnapshotUrl(makeUrl())
     const interval = setInterval(() => setSnapshotUrl(makeUrl()), 3000)
     return () => clearInterval(interval)
@@ -19,11 +18,13 @@ export default function LiveOverview({ sensorData }) {
     current_song = {}
   } = sensorData
 
+  
+
   return (
     <div className="space-y-6">
       <h2 className="text-3xl font-bold">Live Overview</h2>
       
-      {/* Main Metrics */}
+      {/* Main Metrics + Live Camera */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <MetricCard
           icon={<Users className="w-8 h-8" />}
@@ -76,22 +77,21 @@ export default function LiveOverview({ sensorData }) {
           </div>
         </div>
 
-        {/* Live Camera */}
-        <div className="bg-gray-800 rounded-xl p-0 border border-gray-700 overflow-hidden">
-          <div className="px-6 pt-5 pb-3">
-            <h3 className="text-lg font-semibold">Live Camera</h3>
-          </div>
-          <div className="bg-black flex items-center justify-center">
+        <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
+          <h3 className="text-lg font-semibold mb-3">Live Camera</h3>
+          <div className="aspect-video w-full bg-black/40 rounded-lg overflow-hidden flex items-center justify-center">
             {snapshotUrl ? (
               <img
                 src={snapshotUrl}
                 alt="Live camera"
-                className="w-full h-64 object-contain bg-black"
+                className="w-full h-full object-cover"
+                className="w-full h-full object-cover"
                 onError={(e) => { e.currentTarget.style.display = 'none' }}
                 onLoad={(e) => { e.currentTarget.style.display = 'block' }}
               />
             ) : (
-              <div className="h-64 flex items-center justify-center text-gray-500">No camera</div>
+              <span className="text-gray-400 text-sm">No camera snapshot available</span>
+              <span className="text-gray-400 text-sm">No camera snapshot available</span>
             )}
           </div>
         </div>

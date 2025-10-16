@@ -83,27 +83,41 @@
     }
 
     let tries = 0;
+    let dashboardReady = false;
+    let wizardReady = false;
+    
     function tick() {
       tries++;
-      checkAlive(wizardUrl,
-        () => {
-          wizardPill.textContent = 'Wizard: ready';
-          redirect(wizardUrl);
-        },
-        () => {
-          wizardPill.textContent = 'Wizard: starting…';
-        }
-      );
-
+      
+      // Check dashboard first (preferred after setup)
       checkAlive(dashboardUrl,
         () => {
           dashPill.textContent = 'Dashboard: ready';
-          setTimeout(() => {
-            if (!/ready$/.test(wizardPill.textContent)) redirect(dashboardUrl);
-          }, 500);
+          dashboardReady = true;
+          // If dashboard is ready and wizard hasn't appeared yet, go to dashboard
+          if (!wizardReady && tries > 3) {
+            redirect(dashboardUrl);
+          }
         },
         () => {
           dashPill.textContent = 'Dashboard: starting…';
+          dashboardReady = false;
+        }
+      );
+      
+      // Check wizard (only for first-time setup)
+      checkAlive(wizardUrl,
+        () => {
+          wizardPill.textContent = 'Wizard: ready';
+          wizardReady = true;
+          // Only redirect to wizard if dashboard isn't ready
+          if (!dashboardReady) {
+            redirect(wizardUrl);
+          }
+        },
+        () => {
+          wizardPill.textContent = 'Wizard: not running';
+          wizardReady = false;
         }
       );
 

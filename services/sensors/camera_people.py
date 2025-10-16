@@ -22,10 +22,19 @@ class PeopleCounter:
         self.current_count = 0
         self.entry_count = 0
         self.exit_count = 0
-        
+        self._last_snapshot_ts = 0.0
+        self._snapshot_interval_seconds = 2.0
+        self._snapshot_path = "/opt/pulse/data/latest_camera.jpg"
+
         # Initialize detector
         self.detector = None
         self._init_detector()
+
+        # Ensure snapshot directory exists
+        try:
+            os.makedirs(os.path.dirname(self._snapshot_path), exist_ok=True)
+        except Exception:
+            pass
     
     def _init_detector(self):
         """Initialize person detection model"""
@@ -231,6 +240,9 @@ class PeopleCounter:
                         self.exit_count += (prev_count - count)
                     
                     logger.debug(f"Count: {count}, Entry: {self.entry_count}, Exit: {self.exit_count}")
+
+                    # Opportunistically save a recent snapshot for the dashboard
+                    self._maybe_save_snapshot(frame)
                     
                 except Exception as e:
                     logger.error(f"Error in counting loop: {e}")
@@ -269,6 +281,22 @@ class PeopleCounter:
         """Reset entry/exit counters"""
         self.entry_count = 0
         self.exit_count = 0
+
+    def _maybe_save_snapshot(self, frame: np.ndarray):
+        """Save a JPEG snapshot to disk at a throttled interval."""
+        try:
+            now = datetime.now().timestamp()
+            if (now - self._last_snapshot_ts) < self._snapshot_interval_seconds:
+                return
+            # Encode JPEG
+            ok, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if not ok:
+                return
+            with open(self._snapshot_path, 'wb') as f:
+                f.write(buf.tobytes())
+            self._last_snapshot_ts = now
+        except Exception as e:
+            logger.debug(f"Snapshot save failed: {e}")
 
 
 if __name__ == "__main__":

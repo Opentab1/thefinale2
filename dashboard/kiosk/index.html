@@ -65,6 +65,9 @@
     const wizardPill = document.getElementById('wizardPill');
     const dashPill = document.getElementById('dashPill');
 
+    let wizardKnown = false;
+    let wizardComplete = false;
+
     function checkAlive(url, onOk, onFail) {
       const img = new Image();
       const t = Date.now();
@@ -84,42 +87,66 @@
       setTimeout(() => window.open(dashboardUrl, '_self'), 800);
     }
 
+    function checkWizardStatus(next) {
+      // Ask the wizard directly if setup is complete. If complete, prefer dashboard.
+      fetch(wizardUrl + 'api/wizard/status', { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(d => {
+          wizardKnown = true;
+          wizardComplete = !!(d.completed || d.flag_exists);
+          if (wizardComplete) wizardPill.textContent = 'Wizard: complete';
+        })
+        .catch(() => {/* ignore */})
+        .finally(() => next());
+    }
+
     let tries = 0;
     function tick() {
       tries++;
-      checkAlive(wizardUrl,
-        () => {
-          wizardPill.textContent = 'Wizard: ready';
-          // Only auto-redirect to wizard if preferred is wizard or dashboard not yet ready
-          if (!preferred || preferred === 'wizard') {
-            redirect(wizardUrl);
-          }
-        },
-        () => {
-          wizardPill.textContent = 'Wizard: starting…';
-        }
-      );
-
-      checkAlive(dashboardUrl,
-        () => {
-          dashPill.textContent = 'Dashboard: ready';
-          setTimeout(() => {
-            // Prefer dashboard when requested or when wizard isn't ready
-            if ((preferred === 'dashboard') || !/ready$/.test(wizardPill.textContent)) {
+      checkWizardStatus(() => {
+        if (wizardKnown && wizardComplete) {
+          // Wizard complete: prefer dashboard
+          checkAlive(dashboardUrl,
+            () => {
+              dashPill.textContent = 'Dashboard: ready';
               redirect(dashboardUrl);
+            },
+            () => {
+              dashPill.textContent = 'Dashboard: starting…';
             }
-          }, 500);
-        },
-        () => {
-          dashPill.textContent = 'Dashboard: starting…';
+          );
+        } else {
+          // During setup: prefer wizard if ready; otherwise dashboard
+          checkAlive(wizardUrl,
+            () => {
+              wizardPill.textContent = 'Wizard: ready';
+              if (!preferred || preferred === 'wizard') redirect(wizardUrl);
+            },
+            () => {
+              wizardPill.textContent = 'Wizard: starting…';
+            }
+          );
+          checkAlive(dashboardUrl,
+            () => {
+              dashPill.textContent = 'Dashboard: ready';
+              setTimeout(() => {
+                if ((preferred === 'dashboard') || !/ready$/.test(wizardPill.textContent)) {
+                  redirect(dashboardUrl);
+                }
+              }, 500);
+            },
+            () => {
+              dashPill.textContent = 'Dashboard: starting…';
+            }
+          );
         }
-      );
 
-      if (tries < 120) {
-        setTimeout(tick, 2000);
-      } else {
-        statusText.textContent = 'Still waiting… you can reboot or try directly.';
-      }
+        if (tries < 120) {
+          setTimeout(tick, 2000);
+        } else {
+          statusText.textContent = 'Still waiting… you can reboot or try directly.';
+        }
+      });
     }
 
     tick();
