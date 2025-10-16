@@ -17,8 +17,75 @@ class HealthMonitor:
     def __init__(self, config_path: str = "/opt/pulse/config/hardware_status.json"):
         self.config_path = config_path
         self.status = self._load_status()
+        # Ensure status has the expected schema, migrate legacy flat files if needed
+        if not isinstance(self.status, dict):
+            self.status = {"last_check": None, "modules": {}}
+        if "modules" not in self.status or not isinstance(self.status.get("modules"), dict):
+            legacy = self.status if isinstance(self.status, dict) else {}
+            self.status = {
+                "last_check": legacy.get("last_check") or legacy.get("last_checked"),
+                "modules": {}
+            }
         self.test_functions: Dict[str, Callable] = {}
         
+    def _normalize_status(self, data: Dict) -> Dict:
+        """Normalize/migrate status file to the expected schema.
+
+        Expected schema:
+        {
+          "last_check": str | None,
+          "modules": {
+             "<name>": {"status": str, "last_success": str|None, "failure_count": int, "error": str|None}
+          }
+        }
+
+        Supports legacy flat schema like {"camera": true, "mic": false, ...}
+        and maps it to the new structure.
+        """
+        if not isinstance(data, dict):
+            return {"last_check": None, "modules": {}}
+
+        # If already in the new format, just coerce last_check key and return
+        if isinstance(data.get("modules"), dict):
+            return {
+                "last_check": data.get("last_check") or data.get("last_checked"),
+                "modules": data.get("modules") or {}
+            }
+
+        # Migrate legacy flat keys into modules
+        migrated_modules: Dict[str, Dict] = {}
+        for key, value in data.items():
+            if key in ("last_check", "last_checked"):
+                continue
+
+            status_value = "unknown"
+            failure_count = 0
+            error = None
+
+            if isinstance(value, bool):
+                if value:
+                    status_value = "ok"
+                else:
+                    status_value = "failed"
+                    failure_count = 1
+            elif value is None:
+                status_value = "unknown"
+            else:
+                # Unexpected type; treat truthy as ok, else failed
+                status_value = "ok" if value else "failed"
+
+            migrated_modules[key] = {
+                "status": status_value,
+                "last_success": None,
+                "failure_count": failure_count,
+                "error": error
+            }
+
+        return {
+            "last_check": data.get("last_check") or data.get("last_checked"),
+            "modules": migrated_modules
+        }
+
     def _load_status(self) -> Dict:
         """Load hardware status from file"""
         default_status = {
@@ -29,14 +96,8 @@ class HealthMonitor:
         try:
             if os.path.exists(self.config_path):
                 with open(self.config_path, 'r') as f:
-                    loaded_status = json.load(f)
-                    # Ensure loaded status has required keys
-                    if isinstance(loaded_status, dict):
-                        if "modules" not in loaded_status:
-                            loaded_status["modules"] = {}
-                        if "last_check" not in loaded_status:
-                            loaded_status["last_check"] = None
-                        return loaded_status
+                    loaded = json.load(f)
+                    return self._normalize_status(loaded)
         except Exception as e:
             logger.error(f"Error loading hardware status: {e}")
         
@@ -54,6 +115,9 @@ class HealthMonitor:
     def register_test(self, module_name: str, test_func: Callable):
         """Register a hardware test function"""
         self.test_functions[module_name] = test_func
+        # Defensive: ensure the 'modules' container exists even if status file was legacy
+        if "modules" not in self.status or not isinstance(self.status.get("modules"), dict):
+            self.status["modules"] = {}
         if module_name not in self.status["modules"]:
             self.status["modules"][module_name] = {
                 "status": "unknown",

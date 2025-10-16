@@ -38,21 +38,33 @@ What it does:
 
 ### Step 3: Complete Setup Wizard
 
-After reboot, a setup wizard automatically opens.
+After reboot, **wait 30-60 seconds** for the system to start services.
 
-**Fill in:**
+The setup wizard will automatically open in your browser at `http://localhost:9090`.
+
+**If the wizard doesn't appear:**
+- Wait a bit longer (services take time to start on first boot)
+- Manually open Chromium browser and go to `http://localhost:9090`
+- See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed recovery steps
+
+**Fill in the wizard:**
 1. **Venue name** (e.g., "Joe's Bar")
 2. **Timezone** (select from dropdown)
-3. **Smart integrations** (skip if you don't have them yet)
-4. **Automation limits** (use defaults or customize)
+3. **Hardware check** (shows detected sensors - click Next)
+4. **Smart integrations** (skip if you don't have them yet)
+5. **Automation limits** (use defaults or customize)
 
 Click **"Complete Setup"** → System reboots again
 
 ### Step 4: Dashboard Auto-Launches
 
-The dashboard opens automatically at `http://localhost:8080`
+After the second reboot, the dashboard opens automatically at `http://localhost:8080`.
+
+**Wait 30-60 seconds** for services to start.
 
 **You're done!** 🎉
+
+💡 **Tip:** If you see a blank screen after either reboot, press `Ctrl+Alt+F2` to access the terminal and check service status with `sudo systemctl status pulse-*`
 
 ---
 
@@ -138,6 +150,19 @@ sudo systemctl restart pulse-hub pulse-dashboard
 
 ## Troubleshooting
 
+### Wizard doesn't appear after reboot
+
+**Quick fix:**
+```bash
+# Check if wizard service is running
+sudo systemctl status pulse-firstboot.service
+
+# If not running, start it
+sudo systemctl start pulse-firstboot.service
+
+# Then open browser to http://localhost:9090
+```
+
 ### Dashboard won't load
 ```bash
 sudo systemctl status pulse-dashboard
@@ -148,6 +173,7 @@ sudo systemctl restart pulse-dashboard
 ```bash
 tail -f /var/log/pulse/hub.log
 tail -f /var/log/pulse/dashboard.log
+sudo journalctl -u pulse-firstboot.service -n 50
 ```
 
 ### Restart all services
@@ -160,6 +186,8 @@ sudo systemctl restart pulse-*
 sudo rm /opt/pulse/config/.wizard_complete
 sudo reboot
 ```
+
+**For detailed troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)**
 
 ---
 
