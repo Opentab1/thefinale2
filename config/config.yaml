@@ -1,29 +1,10 @@
 venue:
-<<<<<<< HEAD
   name: "Pulse Venue"
   timezone: "America/Chicago"
-  open_hours:
-    monday: { open: "16:00", close: "02:00" }
-    tuesday: { open: "16:00", close: "02:00" }
-    wednesday: { open: "16:00", close: "02:00" }
-    thursday: { open: "16:00", close: "02:00" }
-    friday: { open: "16:00", close: "03:00" }
-    saturday: { open: "12:00", close: "03:00" }
-    sunday: { open: "12:00", close: "00:00" }
-
-zones:
-  - name: "Main Floor"
-    description: "Primary service area"
-  - name: "Patio"
-    description: "Outdoor seating"
-=======
-  name: "Demo Venue"
-  timezone: "America/Chicago"
 
 zones:
   - name: "Main Floor"
   - name: "Patio"
->>>>>>> origin/main
 
 modules:
   camera: true
@@ -31,7 +12,6 @@ modules:
   bme280: true
   light_sensor: true
   ai_hat: true
-<<<<<<< HEAD
   pan_tilt: true
 
 smart_integrations:
@@ -70,24 +50,10 @@ policies:
     max_change_per_3min: 5
   tv:
     auto_mode: true
-=======
-
-smart_integrations:
-  hvac: {enabled: true, provider: "nest"}
-  lighting: {enabled: true, provider: "hue"}
-  tv: {enabled: true, provider: "cec"}
-  music: {enabled: true, provider: "spotify"}
-
-policies:
-  hvac: {min_f: 67, max_f: 71}
-  lighting: {min_pct: 20, max_pct: 85}
-  music: {volume_min: 25, volume_max: 70}
->>>>>>> origin/main
 
 recovery:
   auto_disable_failed_modules: true
   retry_interval_seconds: 60
-<<<<<<< HEAD
   max_retries: 5
 
 logging:
@@ -103,5 +69,3 @@ dashboard:
 wizard:
   port: 9090
   completed: false
-=======
->>>>>>> origin/main
