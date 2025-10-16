@@ -1,62 +1,72 @@
 #!/bin/bash
-# Pulse Dashboard Kiosk Mode Startup Script
+set -euo pipefail
 
-# Disable screen blanking
-xset s off
-xset s noblank
-xset -dpms
+# Pulse Dashboard Kiosk Mode Startup Script (resilient)
 
-# Hide mouse cursor after inactivity
-unclutter -idle 0.1 &
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Detect which service should be running and set the correct URL
-WIZARD_COMPLETE="/opt/pulse/config/.wizard_complete"
-PULSE_URL="http://localhost:8080"
-
-if [ ! -f "$WIZARD_COMPLETE" ]; then
-  # First boot - wizard is running
-  PULSE_URL="http://localhost:9090"
-  echo "First boot detected. Opening setup wizard at $PULSE_URL"
-else
-  # Wizard complete - dashboard is running
-  echo "Setup complete. Opening dashboard at $PULSE_URL"
+# Disable screen blanking if X11 is available
+if [[ -n "${DISPLAY:-}" ]] && command -v xset >/dev/null 2>&1; then
+  xset s off || true
+  xset s noblank || true
+  xset -dpms || true
 fi
 
-# Wait for the service to be ready (max 60 seconds)
-echo "Waiting for service to be ready..."
-MAX_WAIT=60
-ELAPSED=0
-while [ $ELAPSED -lt $MAX_WAIT ]; do
-  if curl -s -o /dev/null -w "%{http_code}" "$PULSE_URL" | grep -q "200\|301\|302"; then
-    echo "Service is ready!"
-    break
+# Hide mouse cursor after inactivity on X11
+if command -v unclutter >/dev/null 2>&1 && [[ "${XDG_SESSION_TYPE:-x11}" != "wayland" ]]; then
+  unclutter -idle 0.5 -root >/dev/null 2>&1 &
+fi
+
+# Start a lightweight local HTTP server to host the offline fallback page
+FALLBACK_PORT=9977
+PID_FILE="/tmp/pulse-kiosk-http.pid"
+
+if [[ -f "$PID_FILE" ]]; then
+  old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  if [[ -n "${old_pid:-}" ]] && kill -0 "$old_pid" >/dev/null 2>&1; then
+    kill "$old_pid" >/dev/null 2>&1 || true
+    sleep 0.2 || true
   fi
-  sleep 2
-  ELAPSED=$((ELAPSED + 2))
-  echo "Waiting... ($ELAPSED/$MAX_WAIT seconds)"
-done
-
-if [ $ELAPSED -ge $MAX_WAIT ]; then
-  echo "Warning: Service did not respond after $MAX_WAIT seconds. Attempting to open anyway..."
 fi
 
-# Start Chromium in kiosk mode (detect binary name)
+python3 -m http.server "$FALLBACK_PORT" --directory "$SCRIPT_DIR" >/dev/null 2>&1 &
+echo $! > "$PID_FILE"
+trap 'kill "$(cat "$PID_FILE" 2>/dev/null)" >/dev/null 2>&1 || true' EXIT
+
+# Detect Chromium binary
 CHROMIUM_BIN="$(command -v chromium-browser || true)"
-if [ -z "$CHROMIUM_BIN" ]; then
+if [[ -z "$CHROMIUM_BIN" ]]; then
   CHROMIUM_BIN="$(command -v chromium || true)"
 fi
-if [ -z "$CHROMIUM_BIN" ]; then
-  echo "Chromium is not installed. Please install 'chromium'." >&2
+if [[ -z "$CHROMIUM_BIN" ]]; then
+  echo "Chromium is not installed. Please install the 'chromium' package." >&2
   exit 1
 fi
 
-"$CHROMIUM_BIN" \
-  --kiosk \
-  --noerrdialogs \
-  --disable-infobars \
-  --no-first-run \
-  --disable-session-crashed-bubble \
-  --disable-features=TranslateUI \
-  --disable-pinch \
-  --overscroll-history-navigation=0 \
-  --app="$PULSE_URL"
+# Wayland/X11 handling
+OZONE_FLAG="--ozone-platform-hint=auto"
+if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
+  OZONE_FLAG="--ozone-platform=wayland"
+else
+  OZONE_FLAG="--ozone-platform=x11"
+fi
+
+# Common Chromium flags for kiosk stability
+COMMON_FLAGS=(
+  --kiosk
+  --noerrdialogs
+  --disable-infobars
+  --no-first-run
+  --disable-session-crashed-bubble
+  --disable-features=TranslateUI
+  --disable-pinch
+  --overscroll-history-navigation=0
+  --password-store=basic
+  --use-mock-keychain
+  --check-for-update-interval=31536000
+  --simulate-outdated-no-au='Tue, 31 Dec 2099 23:59:59 GMT'
+)
+
+TARGET_URL="http://localhost:${FALLBACK_PORT}/index.html"
+
+exec "$CHROMIUM_BIN" "${COMMON_FLAGS[@]}" "$OZONE_FLAG" --app="$TARGET_URL"
