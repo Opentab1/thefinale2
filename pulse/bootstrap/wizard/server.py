@@ -34,10 +34,14 @@ async def save(request: Request):
         pass
     try:
         SETUP_FLAG.write_text('done')
-        os.system('systemctl disable pulse-firstboot.service >/dev/null 2>&1')
+        # Disable and stop the firstboot service immediately
+        os.system('sudo systemctl disable pulse-firstboot.service >/dev/null 2>&1')
+        os.system('sudo systemctl stop pulse-firstboot.service >/dev/null 2>&1')
+        # Trigger reboot in background after short delay
+        os.system('(sleep 2 && sudo reboot) &')
     except Exception:
         pass
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "message": "Setup complete! Rebooting..."})
 
 if __name__ == '__main__':
     import uvicorn

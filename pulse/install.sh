@@ -90,6 +90,9 @@ EOF
   echo '[*] Running hardware detection...'
   python3 /services/sensors/hardware_detect.py > /hardware_report.txt 2>&1 || true
 
+  echo '[*] Initializing sensor data directories...'
+  bash /services/sensors/init_sensor_dirs.sh || true
+
   echo '[*] Installation complete. Rebooting in 5 seconds...'
   sleep 5
   reboot

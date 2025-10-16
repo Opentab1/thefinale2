@@ -7,20 +7,163 @@
     <style>
       body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#0b0f17;color:#ecf0f3}
       .wrap{max-width:900px;margin:40px auto;padding:24px}
-      .card{background:#101828;border:1px solid #1f2937;border-radius:12px;padding:20px}
+      .card{background:#101828;border:1px solid #1f2937;border-radius:12px;padding:20px;margin-bottom:20px}
       .row{display:flex;gap:12px;margin:8px 0}
-      .btn{background:#2563eb;border:none;color:white;padding:10px 14px;border-radius:8px;cursor:pointer}
+      .btn{background:#2563eb;border:none;color:white;padding:12px 20px;border-radius:8px;cursor:pointer;font-size:16px}
+      .btn:hover{background:#1d4ed8}
+      .btn:disabled{background:#4b5563;cursor:not-allowed}
       input,select{background:#0b1220;border:1px solid #1f2937;border-radius:8px;color:#e5e7eb;padding:10px;flex:1}
+      label{display:block;margin:12px 0 6px;font-size:14px;color:#9ca3af}
+      h1{margin:0 0 12px}
+      h2{margin:0 0 12px;font-size:18px}
+      .status{padding:12px;border-radius:8px;margin:12px 0;background:#064e3b;color:#6ee7b7;border:1px solid #047857}
+      .progress{height:4px;background:#1f2937;border-radius:4px;margin:20px 0}
+      .progress-bar{height:100%;background:#2563eb;border-radius:4px;transition:width 0.3s}
     </style>
   </head>
   <body>
     <div class="wrap">
-      <h1>Pulse Setup Wizard</h1>
-      <div class="card">
-        <p>Quickly set up your venue. This is a placeholder UI.</p>
-        <div class="row"><input placeholder="Venue name"><select><option>Timezone</option></select></div>
-        <div class="row"><button class="btn" onclick="alert('Saved! Rebooting…')">Save & Reboot</button></div>
+      <h1>🎵 Pulse Setup Wizard</h1>
+      <div class="progress"><div id="progressBar" class="progress-bar" style="width:0%"></div></div>
+      
+      <div class="card" id="step1">
+        <h2>Step 1: Basic Information</h2>
+        <label>Venue Name</label>
+        <input id="venueName" type="text" placeholder="e.g., Joe's Bar & Grill" />
+        
+        <label>Timezone</label>
+        <select id="timezone">
+          <option value="America/New_York">America/New_York (EST/EDT)</option>
+          <option value="America/Chicago">America/Chicago (CST/CDT)</option>
+          <option value="America/Denver">America/Denver (MST/MDT)</option>
+          <option value="America/Los_Angeles">America/Los_Angeles (PST/PDT)</option>
+          <option value="America/Phoenix">America/Phoenix (MST)</option>
+          <option value="Europe/London">Europe/London (GMT/BST)</option>
+          <option value="UTC">UTC</option>
+        </select>
+        
+        <div class="row" style="margin-top:20px">
+          <button class="btn" onclick="nextStep(2)">Next →</button>
+        </div>
+      </div>
+
+      <div class="card" id="step2" style="display:none">
+        <h2>Step 2: Smart Home Integrations (Optional)</h2>
+        <p style="color:#9ca3af;font-size:14px">You can add these later in Settings if needed</p>
+        
+        <label>Google Nest Thermostat</label>
+        <input id="nestEnabled" type="checkbox" style="width:auto"/> <span style="font-size:14px">I have a Nest thermostat</span>
+        
+        <label style="margin-top:16px">Philips Hue Lighting</label>
+        <input id="hueEnabled" type="checkbox" style="width:auto"/> <span style="font-size:14px">I have Philips Hue lights</span>
+        
+        <label style="margin-top:16px">Spotify Integration</label>
+        <input id="spotifyEnabled" type="checkbox" style="width:auto"/> <span style="font-size:14px">Connect with Spotify</span>
+        
+        <div class="row" style="margin-top:20px">
+          <button class="btn" onclick="prevStep(1)" style="background:#4b5563">← Back</button>
+          <button class="btn" onclick="nextStep(3)">Next →</button>
+        </div>
+      </div>
+
+      <div class="card" id="step3" style="display:none">
+        <h2>Step 3: Automation Settings</h2>
+        
+        <label>Comfort Temperature Range (°F)</label>
+        <div class="row">
+          <input id="tempMin" type="number" value="68" min="60" max="80" />
+          <span style="padding:10px">to</span>
+          <input id="tempMax" type="number" value="75" min="60" max="80" />
+        </div>
+        
+        <label>Maximum Occupancy Alert</label>
+        <input id="maxOccupancy" type="number" value="50" min="10" max="500" placeholder="Number of people" />
+        
+        <label>Noise Level Limit (dB)</label>
+        <input id="noiseLimit" type="number" value="85" min="60" max="100" />
+        
+        <div class="row" style="margin-top:20px">
+          <button class="btn" onclick="prevStep(2)" style="background:#4b5563">← Back</button>
+          <button class="btn" onclick="completeSetup()">Complete Setup</button>
+        </div>
+      </div>
+
+      <div class="card" id="stepDone" style="display:none">
+        <div class="status">
+          <strong>✓ Setup Complete!</strong><br>
+          Your system is rebooting now. The live analytics dashboard will appear in about 30 seconds.
+        </div>
+        <p style="color:#9ca3af;font-size:14px;margin-top:16px">
+          If the dashboard doesn't load automatically, please wait a moment and refresh the page.
+        </p>
       </div>
     </div>
+
+    <script>
+      let currentStep = 1;
+      
+      function updateProgress() {
+        const progress = (currentStep / 3) * 100;
+        document.getElementById('progressBar').style.width = progress + '%';
+      }
+      
+      function nextStep(step) {
+        document.getElementById('step' + currentStep).style.display = 'none';
+        currentStep = step;
+        document.getElementById('step' + currentStep).style.display = 'block';
+        updateProgress();
+      }
+      
+      function prevStep(step) {
+        document.getElementById('step' + currentStep).style.display = 'none';
+        currentStep = step;
+        document.getElementById('step' + currentStep).style.display = 'block';
+        updateProgress();
+      }
+      
+      async function completeSetup() {
+        const config = {
+          venue_name: document.getElementById('venueName').value || 'My Venue',
+          timezone: document.getElementById('timezone').value,
+          integrations: {
+            nest_enabled: document.getElementById('nestEnabled').checked,
+            hue_enabled: document.getElementById('hueEnabled').checked,
+            spotify_enabled: document.getElementById('spotifyEnabled').checked
+          },
+          automation: {
+            temp_min: parseInt(document.getElementById('tempMin').value),
+            temp_max: parseInt(document.getElementById('tempMax').value),
+            max_occupancy: parseInt(document.getElementById('maxOccupancy').value),
+            noise_limit: parseInt(document.getElementById('noiseLimit').value)
+          },
+          setup_completed: true,
+          setup_timestamp: new Date().toISOString()
+        };
+        
+        try {
+          const response = await fetch('/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+          });
+          
+          if (response.ok) {
+            document.getElementById('step3').style.display = 'none';
+            document.getElementById('stepDone').style.display = 'block';
+            document.getElementById('progressBar').style.width = '100%';
+            
+            // Wait for reboot, then redirect to dashboard
+            setTimeout(() => {
+              window.location.href = 'http://localhost:8080';
+            }, 35000);
+          }
+        } catch (error) {
+          alert('Error saving configuration. Please try again.');
+          console.error(error);
+        }
+      }
+      
+      updateProgress();
+    </script>
   </body>
 </html>
