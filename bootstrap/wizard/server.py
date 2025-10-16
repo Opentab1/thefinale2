@@ -99,6 +99,7 @@ WIZARD_HTML = """
             align-items: center;
             justify-content: center;
             font-weight: 700;
+            font-size: 16px;
             color: white;
         }
         .status-ok { background: #4caf50; }
