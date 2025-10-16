@@ -381,12 +381,24 @@ def index():
 @app.route('/api/wizard/hardware-check')
 def hardware_check():
     """Check hardware availability"""
-    # This would actually test hardware
+    try:
+        # Try to load hardware detection results
+        hardware_report_path = Path("/var/log/pulse/hardware_report.txt")
+        if hardware_report_path.exists():
+            import json
+            with open(hardware_report_path, 'r') as f:
+                results = json.load(f)
+                logger.info(f"Loaded hardware detection results: {results}")
+                return jsonify(results)
+    except Exception as e:
+        logger.warning(f"Could not load hardware detection results: {e}")
+    
+    # Default to basic hardware available
     return jsonify({
         "camera": True,
         "mic": True,
         "bme280": False,
-        "light_sensor": True,
+        "light_sensor": False,
         "pan_tilt": False,
         "ai_hat": False
     })
@@ -397,6 +409,10 @@ def complete_setup():
     """Complete setup and save configuration"""
     try:
         data = request.json
+        
+        # Ensure config directory exists
+        config_dir = Path(CONFIG_PATH).parent
+        config_dir.mkdir(parents=True, exist_ok=True)
         
         # Update config.yaml
         config = load_config()
@@ -425,6 +441,11 @@ def complete_setup():
                 f.write(f"SECRET_KEY={key.decode()}\n")
                 f.write(f"ENCRYPTION_KEY={key.decode()}\n")
         
+        # Create wizard completion marker file
+        marker_file = config_dir / ".wizard_complete"
+        marker_file.touch()
+        logger.info(f"Created wizard completion marker at {marker_file}")
+        
         return jsonify({"success": True})
     
     except Exception as e:
@@ -441,6 +462,62 @@ def reboot():
 
 def load_config():
     """Load configuration"""
+    config_path = Path(CONFIG_PATH)
+    
+    # If config doesn't exist, create default config
+    if not config_path.exists():
+        default_config = {
+            'venue': {
+                'name': 'Pulse Venue',
+                'timezone': 'America/Chicago'
+            },
+            'modules': {
+                'camera': True,
+                'mic': True,
+                'bme280': True,
+                'light_sensor': True,
+                'ai_hat': True,
+                'pan_tilt': True
+            },
+            'smart_integrations': {
+                'hvac': {
+                    'enabled': False,
+                    'provider': 'nest'
+                },
+                'lighting': {
+                    'enabled': False,
+                    'provider': 'hue'
+                },
+                'music': {
+                    'enabled': False,
+                    'provider': 'spotify'
+                }
+            },
+            'policies': {
+                'hvac': {
+                    'min_f': 67,
+                    'max_f': 75,
+                    'auto_mode': True
+                },
+                'lighting': {
+                    'min_pct': 20,
+                    'max_pct': 85,
+                    'auto_mode': True
+                },
+                'music': {
+                    'volume_min': 25,
+                    'volume_max': 70,
+                    'auto_mode': True
+                }
+            },
+            'wizard': {
+                'completed': False
+            }
+        }
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        save_config(default_config)
+        return default_config
+    
     with open(CONFIG_PATH, 'r') as f:
         return yaml.safe_load(f)
 
