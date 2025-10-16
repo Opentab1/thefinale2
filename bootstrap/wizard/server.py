@@ -18,6 +18,7 @@ app = Flask(__name__)
 
 CONFIG_PATH = "/opt/pulse/config/config.yaml"
 ENV_PATH = "/opt/pulse/.env"
+WIZARD_FLAG_PATH = "/opt/pulse/config/.wizard_complete"
 
 WIZARD_HTML = """
 <!DOCTYPE html>
@@ -417,6 +418,24 @@ def complete_setup():
         config['wizard']['completed'] = True
         
         save_config(config)
+
+        # Mark wizard as completed so first-boot service will not run again
+        try:
+            Path(WIZARD_FLAG_PATH).parent.mkdir(parents=True, exist_ok=True)
+            Path(WIZARD_FLAG_PATH).touch(exist_ok=True)
+        except Exception:
+            pass
+
+        # Try to disable the first-boot wizard and enable core services
+        # These commands may require elevated privileges; ignore failures gracefully
+        try:
+            os.system('systemctl disable --now pulse-firstboot.service >/dev/null 2>&1')
+        except Exception:
+            pass
+        try:
+            os.system('systemctl enable --now pulse-hub.service pulse-dashboard.service pulse-health.service >/dev/null 2>&1')
+        except Exception:
+            pass
         
         # Generate encryption key if not exists
         if not os.path.exists(ENV_PATH):
