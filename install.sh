@@ -40,11 +40,15 @@ apt-get update -qq
 apt-get upgrade -y -qq
 
 echo -e "${YELLOW}[2/10] Installing dependencies...${NC}"
+# Base and build dependencies (ensure wheels/sdists build on Python 3.13, aarch64)
 apt-get install -y \
     git \
     python3-full \
     python3-pip \
     python3-venv \
+    python3-dev \
+    build-essential \
+    pkg-config \
     nodejs \
     npm \
     ffmpeg \
@@ -58,6 +62,11 @@ apt-get install -y \
     chromium \
     unclutter \
     cec-utils \
+    libcec-dev \
+    libcap-dev \
+    libsndfile1 \
+    libgl1 \
+    libglib2.0-0 \
     sqlite3 \
     2>&1 | tee -a /tmp/pulse_install.log
 
