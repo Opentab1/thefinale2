@@ -25,19 +25,18 @@ board==1.0
 adafruit-circuitpython-bme280==2.6.23
 
 # Computer Vision & AI
-opencv-python==4.8.1.78
-# Pillow 10.x fails to build on Python 3.13 (no wheels, metadata error)
-# Pin to 11.x which supports Python 3.13 and provides prebuilt wheels on aarch64
+# Upgrade OpenCV to a version with Python 3.13 wheels and NumPy 2.x support
+opencv-python>=4.10.0
+# Pillow 11.x supports Python 3.13 and provides prebuilt wheels on aarch64
 pillow>=11.0.0,<12
-# numpy 1.24.3 doesn't have wheels for Python 3.13 - use 1.26+ which supports 3.13
-numpy>=1.26.0,<2.0.0
+# Use NumPy 2.x which provides Python 3.13 wheels for aarch64
+numpy>=2.1.0,<3.0.0
 # tflite-runtime removed: no Python 3.13 wheels available yet
 # Will be re-added when Python 3.13 support is available
 
-# Audio Processing
-librosa==0.10.1
-soundfile==0.12.1
-pydub==0.25.1
+# Audio Processing (none required at install time)
+# Removed librosa/soundfile/pydub due to NumPy 2.x incompatibility and because
+# they are not used by the current codebase.
 
 # Smart Home Integrations
 google-auth==2.25.2
@@ -45,7 +44,6 @@ google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 phue==1.1
 spotipy==2.23.0
-cec==0.2.7
 
 # Utilities
 requests==2.31.0
