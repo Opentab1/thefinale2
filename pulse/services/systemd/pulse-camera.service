@@ -1,0 +1,16 @@
+[Unit]
+Description=Pulse camera people counting
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse/services/sensors
+ExecStart=/opt/pulse/.venv/bin/python /opt/pulse/services/sensors/camera_people.py
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/pulse/camera.log
+StandardError=append:/var/log/pulse/camera.err
+
+[Install]
+WantedBy=pulse-sensors.target

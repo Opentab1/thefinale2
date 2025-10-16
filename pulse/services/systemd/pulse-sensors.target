@@ -1,0 +1,7 @@
+[Unit]
+Description=Pulse sensors aggregate target
+Wants=pulse-health-monitor.service pulse-bme280.service pulse-camera.service pulse-mic.service pulse-light.service pulse-pan-tilt.service
+After=network.target
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Pulse mic song detection
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse/services/sensors
+ExecStart=/opt/pulse/.venv/bin/python /opt/pulse/services/sensors/mic_song_detect.py
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/pulse/mic.log
+StandardError=append:/var/log/pulse/mic.err
+
+[Install]
+WantedBy=pulse-sensors.target
