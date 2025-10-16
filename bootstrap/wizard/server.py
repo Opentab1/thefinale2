@@ -10,11 +10,14 @@ import yaml
 import subprocess
 from pathlib import Path
 from flask import Flask, render_template_string, request, jsonify
+from flask_cors import CORS
 from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+# Allow kiosk (served from localhost:9977) to query status without CORS issues
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 CONFIG_PATH = "/opt/pulse/config/config.yaml"
 ENV_PATH = "/opt/pulse/.env"
@@ -448,6 +451,25 @@ WIZARD_HTML = """
 </body>
 </html>
 """
+
+@app.route('/api/wizard/status')
+def wizard_status():
+    """Report wizard completion status and marker presence"""
+    try:
+        cfg = load_config()
+    except Exception:
+        cfg = { 'wizard': { 'completed': False } }
+
+    try:
+        flag_exists = Path(WIZARD_FLAG_PATH).exists()
+    except Exception:
+        flag_exists = False
+
+    return jsonify({
+        "completed": bool(cfg.get('wizard', {}).get('completed', False)),
+        "flag_exists": flag_exists,
+        "config_path": CONFIG_PATH
+    })
 
 @app.route('/')
 def index():

@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { Users, Music, Volume2, Thermometer, Droplet, Sun, Cloud } from 'lucide-react'
 
 export default function LiveOverview({ sensorData }) {
@@ -11,11 +11,21 @@ export default function LiveOverview({ sensorData }) {
     current_song = {}
   } = sensorData
 
+  const [snapshotUrl, setSnapshotUrl] = useState('')
+
+  useEffect(() => {
+    const makeUrl = () => `/api/camera/snapshot?ts=${Date.now()}`
+    // Preload once immediately
+    setSnapshotUrl(makeUrl())
+    const id = setInterval(() => setSnapshotUrl(makeUrl()), 2000)
+    return () => clearInterval(id)
+  }, [])
+
   return (
     <div className="space-y-6">
       <h2 className="text-3xl font-bold">Live Overview</h2>
       
-      {/* Main Metrics */}
+      {/* Main Metrics + Live Camera */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <MetricCard
           icon={<Users className="w-8 h-8" />}
@@ -65,6 +75,23 @@ export default function LiveOverview({ sensorData }) {
           <div className="space-y-1">
             <p className="font-medium">{current_song?.title || 'No song detected'}</p>
             <p className="text-sm text-gray-400">{current_song?.artist || ''}</p>
+          </div>
+        </div>
+
+        <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
+          <h3 className="text-lg font-semibold mb-3">Live Camera</h3>
+          <div className="aspect-video w-full bg-black/40 rounded-lg overflow-hidden flex items-center justify-center">
+            {snapshotUrl ? (
+              <img
+                src={snapshotUrl}
+                alt="Live camera"
+                className="w-full h-full object-cover"
+                onError={(e) => { e.currentTarget.style.display = 'none' }}
+                onLoad={(e) => { e.currentTarget.style.display = 'block' }}
+              />
+            ) : (
+              <span className="text-gray-400 text-sm">No camera snapshot available</span>
+            )}
           </div>
         </div>
       </div>

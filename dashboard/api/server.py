@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, send_from_directory
+from flask import send_file
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from threading import Thread
@@ -81,7 +82,37 @@ def get_current_sensors():
         if hub_instance:
             data = hub_instance._collect_sensor_data()
         else:
-            data = {}
+            # Fallback: derive current snapshot from database
+            data = {
+                "occupancy": db.get_current_occupancy(),
+                "temperature_f": None,
+                "humidity": None,
+                "light_level": None,
+                "noise_db": None,
+                "current_song": None,
+            }
+
+            env = db.get_latest_environment()
+            if env:
+                data.update({
+                    "temperature_f": env.get("temperature"),
+                    "humidity": env.get("humidity"),
+                    "light_level": env.get("light_level"),
+                    "noise_db": env.get("noise_level"),
+                })
+
+            # Last played song from music_log (if any)
+            try:
+                with db.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT track_name, artist FROM music_log ORDER BY timestamp DESC LIMIT 1")
+                    row = cur.fetchone()
+                    if row:
+                        data["current_song"] = {"title": row[0], "artist": row[1]}
+                    else:
+                        data["current_song"] = {"title": None, "artist": None}
+            except Exception:
+                data["current_song"] = {"title": None, "artist": None}
         
         return jsonify(data)
     except Exception as e:
@@ -156,6 +187,20 @@ def get_health():
     except Exception as e:
         logger.error(f"Error getting health: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/camera/snapshot')
+def camera_snapshot():
+    """Serve the latest camera snapshot if available"""
+    try:
+        snapshot_path = Path('/opt/pulse/data/latest_camera.jpg')
+        if snapshot_path.exists() and snapshot_path.stat().st_size > 0:
+            # Set cache control headers to avoid stale images
+            return send_file(str(snapshot_path), mimetype='image/jpeg', max_age=0)
+        return ("No snapshot", 404)
+    except Exception as e:
+        logger.error(f"Error serving snapshot: {e}")
+        return ("Error", 500)
 
 
 # ===== Control API Routes =====
