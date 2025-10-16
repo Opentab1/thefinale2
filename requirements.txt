@@ -1,6 +1,7 @@
 # Pulse 1.0 - Python Dependencies
 
 # Core Framework
+# Use versions with Python 3.13 wheels/support
 flask==3.0.0
 flask-cors==4.0.0
 flask-socketio==5.3.5
@@ -13,6 +14,7 @@ python-dotenv==1.0.0
 sqlalchemy==2.0.23
 
 # Hardware & Sensors
+# Prefer system packages for RPi.GPIO/PyAudio on Raspberry Pi OS; keep here for dev envs
 RPi.GPIO==0.7.1
 smbus2==0.4.3
 picamera2==0.3.17
@@ -21,11 +23,13 @@ board==1.0
 adafruit-circuitpython-bme280==2.6.23
 
 # Computer Vision & AI
+# opencv-python 4.8.1.78 ships manylinux aarch64 wheels compatible with cp313
 opencv-python==4.8.1.78
-# Pillow 10.x fails to build on Python 3.13 (no wheels, metadata error)
-# Pin to 11.x which supports Python 3.13 and provides prebuilt wheels on aarch64
+# Pillow 11.x supports Python 3.13 and has aarch64 wheels
 pillow>=11.0.0,<12
-numpy==1.24.3
+# numpy 1.24.x does not provide cp313 wheels; use a version with 3.13 wheels
+numpy==2.1.1
+# Keep tflite-runtime separate when possible; use installer to install from apt/pip if available
 tflite-runtime==2.14.0
 
 # Audio Processing
