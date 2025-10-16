@@ -54,6 +54,7 @@ apt-get install -y \
     libopenblas-dev \
     libportaudio2 \
     portaudio19-dev \
+    libcap-dev \
     i2c-tools \
     chromium \
     unclutter \
