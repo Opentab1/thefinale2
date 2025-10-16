@@ -59,6 +59,16 @@ apt-get install -y \
     unclutter \
     cec-utils \
     sqlite3 \
+    libjpeg-dev \
+    zlib1g-dev \
+    libtiff5-dev \
+    libopenjp2-7-dev \
+    libfreetype6-dev \
+    libwebp-dev \
+    libgl1 \
+    libglib2.0-0 \
+    python3-dev \
+    python3-rpi.gpio \
     2>&1 | tee -a /tmp/pulse_install.log
 
 # Enable I2C
@@ -96,8 +106,9 @@ chown -R ${USER}:${USER} "$INSTALL_DIR"
 echo -e "${YELLOW}[5/10] Setting up Python virtual environment...${NC}"
 cd "$INSTALL_DIR"
 sudo -u ${USER} python3 -m venv venv
-sudo -u ${USER} venv/bin/pip install --upgrade pip
-sudo -u ${USER} venv/bin/pip install -r requirements.txt
+sudo -u ${USER} venv/bin/pip install --upgrade pip setuptools wheel
+PIP_EXTRA_INDEX_URL=https://www.piwheels.org/simple \
+    sudo -u ${USER} venv/bin/pip install --no-cache-dir --prefer-binary -r requirements.txt
 
 echo -e "${YELLOW}[6/10] Installing Node.js dashboard...${NC}"
 cd "$INSTALL_DIR/dashboard/ui"
