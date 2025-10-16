@@ -95,6 +95,12 @@ WIZARD_HTML = """
             width: 24px;
             height: 24px;
             border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 16px;
+            color: white;
         }
         .status-ok { background: #4caf50; }
         .status-missing { background: #f44336; }
@@ -320,6 +326,32 @@ WIZARD_HTML = """
                 .then(r => r.json())
                 .then(data => {
                     // Update hardware status display
+                    const hardwareMapping = {
+                        'camera': 'Camera',
+                        'mic': 'Microphone',
+                        'bme280': 'BME280 Sensor',
+                        'light_sensor': 'Light Sensor',
+                        'pan_tilt': 'Pan-Tilt HAT',
+                        'ai_hat': 'AI HAT'
+                    };
+                    
+                    const hardwareStatus = document.getElementById('hardwareStatus');
+                    hardwareStatus.innerHTML = '';
+                    
+                    for (const [key, label] of Object.entries(hardwareMapping)) {
+                        const isConnected = data[key] === true;
+                        const itemDiv = document.createElement('div');
+                        itemDiv.className = `hardware-item ${isConnected ? 'ok' : 'missing'}`;
+                        
+                        const statusIcon = document.createElement('div');
+                        statusIcon.className = `status-icon ${isConnected ? 'status-ok' : 'status-missing'}`;
+                        statusIcon.textContent = isConnected ? '✓' : '✗';
+                        
+                        itemDiv.innerHTML = `<span>${label}</span>`;
+                        itemDiv.appendChild(statusIcon);
+                        hardwareStatus.appendChild(itemDiv);
+                    }
+                    
                     currentStep++;
                     showStep(currentStep);
                 });
