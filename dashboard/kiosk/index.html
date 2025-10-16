@@ -59,6 +59,8 @@
   <script>
     const wizardUrl = 'http://localhost:9090/';
     const dashboardUrl = 'http://localhost:8080/';
+    const params = new URLSearchParams(location.search);
+    const preferred = params.get('preferred'); // 'wizard' | 'dashboard' | null
     const statusText = document.getElementById('statusText');
     const wizardPill = document.getElementById('wizardPill');
     const dashPill = document.getElementById('dashPill');
@@ -88,7 +90,10 @@
       checkAlive(wizardUrl,
         () => {
           wizardPill.textContent = 'Wizard: ready';
-          redirect(wizardUrl);
+          // Only auto-redirect to wizard if preferred is wizard or dashboard not yet ready
+          if (!preferred || preferred === 'wizard') {
+            redirect(wizardUrl);
+          }
         },
         () => {
           wizardPill.textContent = 'Wizard: starting…';
@@ -99,7 +104,10 @@
         () => {
           dashPill.textContent = 'Dashboard: ready';
           setTimeout(() => {
-            if (!/ready$/.test(wizardPill.textContent)) redirect(dashboardUrl);
+            // Prefer dashboard when requested or when wizard isn't ready
+            if ((preferred === 'dashboard') || !/ready$/.test(wizardPill.textContent)) {
+              redirect(dashboardUrl);
+            }
           }, 500);
         },
         () => {

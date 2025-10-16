@@ -274,6 +274,20 @@ class PulseHub:
         if self.audio_monitor:
             data["noise_db"] = self.audio_monitor.get_current_db()
             data["current_song"] = self.audio_monitor.get_current_song()
+
+        # Fallback: if no song detected via mic, use music controller's current track
+        if (not data.get("current_song") or data["current_song"].get("title") in (None, "Unknown")) and self.music_controller:
+            try:
+                track = self.music_controller.get_current_track() or {}
+                if track.get("title") or track.get("name"):
+                    data["current_song"] = {
+                        "title": track.get("title") or track.get("name"),
+                        "artist": track.get("artist") or track.get("artists", ''),
+                        "confidence": 1.0,
+                        "timestamp": datetime.now().isoformat()
+                    }
+            except Exception:
+                pass
         
         return data
     

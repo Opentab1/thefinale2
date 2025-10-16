@@ -1,7 +1,15 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { Users, Music, Volume2, Thermometer, Droplet, Sun, Cloud } from 'lucide-react'
 
 export default function LiveOverview({ sensorData }) {
+  const [snapshotUrl, setSnapshotUrl] = useState(null)
+  useEffect(() => {
+    // Build a cache-busted snapshot URL to refresh periodically
+    const makeUrl = () => `/api/camera/snapshot.jpg?ts=${Date.now()}`
+    setSnapshotUrl(makeUrl())
+    const interval = setInterval(() => setSnapshotUrl(makeUrl()), 3000)
+    return () => clearInterval(interval)
+  }, [])
   const {
     occupancy = 0,
     temperature_f = 0,
@@ -65,6 +73,26 @@ export default function LiveOverview({ sensorData }) {
           <div className="space-y-1">
             <p className="font-medium">{current_song?.title || 'No song detected'}</p>
             <p className="text-sm text-gray-400">{current_song?.artist || ''}</p>
+          </div>
+        </div>
+
+        {/* Live Camera */}
+        <div className="bg-gray-800 rounded-xl p-0 border border-gray-700 overflow-hidden">
+          <div className="px-6 pt-5 pb-3">
+            <h3 className="text-lg font-semibold">Live Camera</h3>
+          </div>
+          <div className="bg-black flex items-center justify-center">
+            {snapshotUrl ? (
+              <img
+                src={snapshotUrl}
+                alt="Live camera"
+                className="w-full h-64 object-contain bg-black"
+                onError={(e) => { e.currentTarget.style.display = 'none' }}
+                onLoad={(e) => { e.currentTarget.style.display = 'block' }}
+              />
+            ) : (
+              <div className="h-64 flex items-center justify-center text-gray-500">No camera</div>
+            )}
           </div>
         </div>
       </div>
