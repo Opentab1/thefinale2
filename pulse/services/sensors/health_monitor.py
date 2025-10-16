@@ -9,11 +9,20 @@ STATUS_FILE = Path(__file__).resolve().parents[2] / 'config' / 'hardware_status.
 
 async def read_status():
     if not STATUS_FILE.exists():
-        return {}
+        return {"last_check": None, "modules": {}}
     try:
-        return json.loads(STATUS_FILE.read_text())
+        data = json.loads(STATUS_FILE.read_text())
+        if not isinstance(data, dict):
+            return {"last_check": None, "modules": {}}
+        # Migrate legacy flat schema into modules map on-the-fly
+        if "modules" not in data or not isinstance(data.get("modules"), dict):
+            return {
+                "last_check": data.get("last_check") or data.get("last_checked"),
+                "modules": {}
+            }
+        return data
     except Exception:
-        return {}
+        return {"last_check": None, "modules": {}}
 
 
 async def run_detection():
