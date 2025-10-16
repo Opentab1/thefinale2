@@ -17,7 +17,7 @@ main() {
 
   echo '[*] Updating apt and installing dependencies...'
   apt-get update -y
-  apt-get install -y git python3-full python3-venv python3-pip nodejs npm ffmpeg v4l2-utils pulseaudio alsa-utils libatlas-base-dev openjdk-17-jre-headless grafana cec-utils curl unzip
+  apt-get install -y git python3-full python3-venv python3-pip python3-dev build-essential pkg-config nodejs npm ffmpeg v4l2-utils pulseaudio alsa-utils libopenblas-dev libportaudio2 portaudio19-dev libsndfile1 openjdk-17-jre-headless grafana cec-utils curl unzip
 
   echo '[*] Checking for TensorFlow Lite runtime via apt...'
   if apt-cache policy python3-tflite-runtime | grep -q Candidate; then
@@ -41,7 +41,7 @@ main() {
   fi
   "$PY_BIN" -m venv /.venv
   source /.venv/bin/activate
-  pip install --upgrade pip
+  pip install --upgrade pip setuptools wheel
   if [[ -f /requirements.txt ]]; then
     pip install -r /requirements.txt
   fi
