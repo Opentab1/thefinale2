@@ -18,6 +18,7 @@ app = Flask(__name__)
 
 CONFIG_PATH = "/opt/pulse/config/config.yaml"
 ENV_PATH = "/opt/pulse/.env"
+WIZARD_FLAG_PATH = "/opt/pulse/config/.wizard_complete"
 
 WIZARD_HTML = """
 <!DOCTYPE html>
@@ -94,6 +95,13 @@ WIZARD_HTML = """
             width: 24px;
             height: 24px;
             border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-weight: 700;
+            font-size: 16px;
+            line-height: 1;
         }
         .status-ok { background: #4caf50; }
         .status-missing { background: #f44336; }
@@ -182,14 +190,14 @@ WIZARD_HTML = """
             <!-- Step 2: Hardware Check -->
             <div class="step" data-step="2">
                 <h2>Hardware Detection</h2>
-                <p>Checking connected hardware modules...</p>
+                <p id="hardwareCheckMessage">Checking connected hardware modules...</p>
                 <div class="hardware-status" id="hardwareStatus">
-                    <div class="hardware-item"><span>Camera</span><div class="status-icon"></div></div>
-                    <div class="hardware-item"><span>Microphone</span><div class="status-icon"></div></div>
-                    <div class="hardware-item"><span>BME280 Sensor</span><div class="status-icon"></div></div>
-                    <div class="hardware-item"><span>Light Sensor</span><div class="status-icon"></div></div>
-                    <div class="hardware-item"><span>Pan-Tilt HAT</span><div class="status-icon"></div></div>
-                    <div class="hardware-item"><span>AI HAT</span><div class="status-icon"></div></div>
+                    <div class="hardware-item" id="hw-camera"><span>Camera</span><div class="status-icon" id="icon-camera"></div></div>
+                    <div class="hardware-item" id="hw-mic"><span>Microphone</span><div class="status-icon" id="icon-mic"></div></div>
+                    <div class="hardware-item" id="hw-bme280"><span>BME280 Sensor</span><div class="status-icon" id="icon-bme280"></div></div>
+                    <div class="hardware-item" id="hw-light_sensor"><span>Light Sensor</span><div class="status-icon" id="icon-light_sensor"></div></div>
+                    <div class="hardware-item" id="hw-pan_tilt"><span>Pan-Tilt HAT</span><div class="status-icon" id="icon-pan_tilt"></div></div>
+                    <div class="hardware-item" id="hw-ai_hat"><span>AI HAT</span><div class="status-icon" id="icon-ai_hat"></div></div>
                 </div>
                 <p style="margin-top: 20px; color: #666;">
                     ℹ️ Missing modules will be automatically disabled. The system will work with available hardware.
@@ -276,6 +284,7 @@ WIZARD_HTML = """
     <script>
         let currentStep = 1;
         const totalSteps = 5;
+        let hardwareChecked = false;
         
         function updateProgress() {
             const progress = (currentStep / totalSteps) * 100;
@@ -292,13 +301,24 @@ WIZARD_HTML = """
             if (step === totalSteps) {
                 document.querySelector('.buttons').style.display = 'none';
             }
+
+            // Trigger hardware check when entering step 2 so user can see results
+            if (step === 2) {
+                checkHardware();
+            }
             
             updateProgress();
+
+            // Automatically run hardware check when entering step 2
+            if (step === 2 && !hardwareChecked) {
+                checkHardware();
+            }
         }
         
         function nextStep() {
-            if (currentStep === 2) {
-                checkHardware();
+            if (currentStep === 2 && !hardwareChecked) {
+                // Wait for hardware check to complete before proceeding
+                return;
             } else if (currentStep === totalSteps - 1) {
                 completeSetup();
             } else {
@@ -314,13 +334,70 @@ WIZARD_HTML = """
             }
         }
         
+        function setHardwareRow(key, ok) {
+            const row = document.getElementById(`hw-${key}`);
+            const icon = document.getElementById(`icon-${key}`);
+            if (!row || !icon) return;
+            row.classList.remove('ok', 'missing');
+            icon.classList.remove('status-ok', 'status-missing');
+            if (ok) {
+                row.classList.add('ok');
+                icon.classList.add('status-ok');
+                icon.textContent = '✓';
+            } else {
+                row.classList.add('missing');
+                icon.classList.add('status-missing');
+                icon.textContent = '✗';
+            }
+        }
+
+        function normalizeHardwareData(data) {
+            if (data && typeof data === 'object' && data.modules && typeof data.modules === 'object') {
+                const m = data.modules;
+                return {
+                    camera: !!(m.camera && m.camera.present),
+                    mic: !!(m.mic && m.mic.present),
+                    bme280: !!(m.bme280 && m.bme280.present),
+                    light_sensor: !!(m.light_sensor && m.light_sensor.present),
+                    pan_tilt: !!(m.pan_tilt && m.pan_tilt.present),
+                    ai_hat: !!(m.ai_hat && m.ai_hat.present),
+                };
+            }
+            return {
+                camera: !!(data && data.camera),
+                mic: !!(data && data.mic),
+                bme280: !!(data && data.bme280),
+                light_sensor: !!(data && data.light_sensor),
+                pan_tilt: !!(data && data.pan_tilt),
+                ai_hat: !!(data && data.ai_hat),
+            };
+        }
+
+
         function checkHardware() {
+            // Indicate in-Progress
+            const msg = document.getElementById('hardwareCheckMessage');
+            if (msg) msg.textContent = 'Checking connected hardware modules...';
+
             fetch('/api/wizard/hardware-check')
                 .then(r => r.json())
                 .then(data => {
-                    // Update hardware status display
-                    currentStep++;
-                    showStep(currentStep);
+                    const results = normalizeHardwareData(data);
+                    // Update hardware status display with green check / red X
+                    setHardwareRow('camera', !!results.camera);
+                    setHardwareRow('mic', !!results.mic);
+                    setHardwareRow('bme280', !!results.bme280);
+                    setHardwareRow('light_sensor', !!results.light_sensor);
+                    setHardwareRow('pan_tilt', !!results.pan_tilt);
+                    setHardwareRow('ai_hat', !!results.ai_hat);
+                    hardwareChecked = true;
+                    if (msg) msg.textContent = 'Hardware check complete. Review statuses below.';
+                })
+                .catch(() => {
+                    // On error, mark all as missing
+                    ['camera','mic','bme280','light_sensor','pan_tilt','ai_hat'].forEach(k => setHardwareRow(k, false));
+                    hardwareChecked = true;
+                    if (msg) msg.textContent = 'Could not check hardware automatically. Review defaults below.';
                 });
         }
         
@@ -434,13 +511,23 @@ def complete_setup():
         
         save_config(config)
 
-        # Mark wizard as completed so services start after reboot
+        # Mark wizard as completed so first-boot service will not run again
         try:
-            flag_path = Path("/opt/pulse/config/.wizard_complete")
-            flag_path.parent.mkdir(parents=True, exist_ok=True)
-            flag_path.write_text("done")
-        except Exception as e:
-            logger.error(f"Error writing wizard completion flag: {e}")
+            Path(WIZARD_FLAG_PATH).parent.mkdir(parents=True, exist_ok=True)
+            Path(WIZARD_FLAG_PATH).touch(exist_ok=True)
+        except Exception:
+            pass
+
+        # Try to disable the first-boot wizard and enable core services
+        # These commands may require elevated privileges; ignore failures gracefully
+        try:
+            os.system('systemctl disable --now pulse-firstboot.service >/dev/null 2>&1')
+        except Exception:
+            pass
+        try:
+            os.system('systemctl enable --now pulse-hub.service pulse-dashboard.service pulse-health.service >/dev/null 2>&1')
+        except Exception:
+            pass
         
         # Generate encryption key if not exists
         if not os.path.exists(ENV_PATH):
