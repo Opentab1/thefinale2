@@ -42,10 +42,20 @@ After reboot, **wait 30-60 seconds** for the system to start services.
 
 The setup wizard will automatically open in your browser at `http://localhost:9090`.
 
+**If you see a white screen with only a cursor:**
+- **Quick fix:** Press `ESC`, then navigate to `http://localhost:9090` in the browser
+- **Alternative:** Press `Ctrl+Alt+F2`, login as `pi`, run:
+  ```bash
+  pkill chromium
+  export DISPLAY=:0
+  /opt/pulse/dashboard/kiosk/start.sh
+  ```
+- See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed recovery steps
+
 **If the wizard doesn't appear:**
 - Wait a bit longer (services take time to start on first boot)
 - Manually open Chromium browser and go to `http://localhost:9090`
-- See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed recovery steps
+- Check if wizard service is running: `sudo systemctl status pulse-firstboot.service`
 
 **Fill in the wizard:**
 1. **Venue name** (e.g., "Joe's Bar")

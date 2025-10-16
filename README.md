@@ -107,6 +107,8 @@ After reboot, the setup wizard automatically launches at `http://localhost:9090`
 4. **Automation Limits** – Set safe ranges for automatic adjustments
 5. **Complete** – System reboots and launches dashboard
 
+**Note:** If you see a white screen after reboot, press `ESC` and navigate to `http://localhost:9090`. See [WHITE_SCREEN_FIX.md](WHITE_SCREEN_FIX.md) for details. This has been fixed in the latest version.
+
 ### 4. Access Your Dashboard
 
 After final reboot, the dashboard automatically opens in kiosk mode at `http://localhost:8080`
@@ -286,22 +288,11 @@ ENCRYPTION_KEY=generated_automatically
 
 ## 🩺 Troubleshooting
 
-### Check System Status
-
-```bash
-# View all services
-sudo systemctl status pulse-*
-
-# Check logs
-tail -f /var/log/pulse/hub.log
-tail -f /var/log/pulse/dashboard.log
-
-# Test hardware
-cd /opt/pulse
-./venv/bin/python3 -c "from services.sensors.health_monitor import *; ..."
-```
-
 ### Common Issues
+
+**White screen after installation**
+- Press `ESC` and go to `http://localhost:9090`
+- See [WHITE_SCREEN_FIX.md](WHITE_SCREEN_FIX.md) for detailed recovery steps
 
 **Dashboard won't load**
 ```bash
@@ -322,6 +313,21 @@ vcgencmd get_camera
 2. Check network connectivity
 3. Review API quotas/limits
 
+### Check System Status
+
+```bash
+# View all services
+sudo systemctl status pulse-*
+
+# Check logs
+tail -f /var/log/pulse/hub.log
+tail -f /var/log/pulse/dashboard.log
+
+# Test hardware
+cd /opt/pulse
+./venv/bin/python3 -c "from services.sensors.health_monitor import *; ..."
+```
+
 ### Reset to Factory Settings
 
 ```bash
@@ -329,6 +335,8 @@ cd /opt/pulse
 rm config/.wizard_complete
 sudo reboot
 ```
+
+**For detailed troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)**
 
 ---
 
