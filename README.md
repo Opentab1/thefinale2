@@ -6,11 +6,7 @@ Pulse 1.0 is a complete operating system for physical venues, designed to run on
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Raspberry%20Pi%205-red.svg)](https://www.raspberrypi.com/products/raspberry-pi-5/)
-<<<<<<< HEAD
-[![Python](https://img.shields.io/badge/Python-3.11–3.13-green.svg)](https://www.python.org/)
-=======
 [![Python](https://img.shields.io/badge/Python-3.11%E2%80%933.13-green.svg)](https://www.python.org/)
->>>>>>> origin/cursor/fix-pulse-installation-dependency-error-f3f2
 
 ---
 
