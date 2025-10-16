@@ -98,9 +98,10 @@ WIZARD_HTML = """
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            color: #fff;
             font-weight: 700;
             font-size: 16px;
-            color: white;
+            line-height: 1;
         }
         .status-ok { background: #4caf50; }
         .status-missing { background: #f44336; }
@@ -189,7 +190,7 @@ WIZARD_HTML = """
             <!-- Step 2: Hardware Check -->
             <div class="step" data-step="2">
                 <h2>Hardware Detection</h2>
-                <p>Checking connected hardware modules...</p>
+                <p id="hardwareCheckMessage">Checking connected hardware modules...</p>
                 <div class="hardware-status" id="hardwareStatus">
                     <div class="hardware-item" id="hw-camera"><span>Camera</span><div class="status-icon" id="icon-camera"></div></div>
                     <div class="hardware-item" id="hw-mic"><span>Microphone</span><div class="status-icon" id="icon-mic"></div></div>
@@ -300,6 +301,11 @@ WIZARD_HTML = """
             if (step === totalSteps) {
                 document.querySelector('.buttons').style.display = 'none';
             }
+
+            // Trigger hardware check when entering step 2 so user can see results
+            if (step === 2) {
+                checkHardware();
+            }
             
             updateProgress();
 
@@ -367,7 +373,12 @@ WIZARD_HTML = """
             };
         }
 
+
         function checkHardware() {
+            // Indicate in-Progress
+            const msg = document.getElementById('hardwareCheckMessage');
+            if (msg) msg.textContent = 'Checking connected hardware modules...';
+
             fetch('/api/wizard/hardware-check')
                 .then(r => r.json())
                 .then(data => {
@@ -380,11 +391,13 @@ WIZARD_HTML = """
                     setHardwareRow('pan_tilt', !!results.pan_tilt);
                     setHardwareRow('ai_hat', !!results.ai_hat);
                     hardwareChecked = true;
+                    if (msg) msg.textContent = 'Hardware check complete. Review statuses below.';
                 })
                 .catch(() => {
                     // On error, mark all as missing
                     ['camera','mic','bme280','light_sensor','pan_tilt','ai_hat'].forEach(k => setHardwareRow(k, false));
                     hardwareChecked = true;
+                    if (msg) msg.textContent = 'Could not check hardware automatically. Review defaults below.';
                 });
         }
         
