@@ -95,6 +95,11 @@ WIZARD_HTML = """
             width: 24px;
             height: 24px;
             border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            color: white;
         }
         .status-ok { background: #4caf50; }
         .status-missing { background: #f44336; }
@@ -185,12 +190,12 @@ WIZARD_HTML = """
                 <h2>Hardware Detection</h2>
                 <p>Checking connected hardware modules...</p>
                 <div class="hardware-status" id="hardwareStatus">
-                    <div class="hardware-item"><span>Camera</span><div class="status-icon"></div></div>
-                    <div class="hardware-item"><span>Microphone</span><div class="status-icon"></div></div>
-                    <div class="hardware-item"><span>BME280 Sensor</span><div class="status-icon"></div></div>
-                    <div class="hardware-item"><span>Light Sensor</span><div class="status-icon"></div></div>
-                    <div class="hardware-item"><span>Pan-Tilt HAT</span><div class="status-icon"></div></div>
-                    <div class="hardware-item"><span>AI HAT</span><div class="status-icon"></div></div>
+                    <div class="hardware-item" id="hw-camera"><span>Camera</span><div class="status-icon" id="icon-camera"></div></div>
+                    <div class="hardware-item" id="hw-mic"><span>Microphone</span><div class="status-icon" id="icon-mic"></div></div>
+                    <div class="hardware-item" id="hw-bme280"><span>BME280 Sensor</span><div class="status-icon" id="icon-bme280"></div></div>
+                    <div class="hardware-item" id="hw-light_sensor"><span>Light Sensor</span><div class="status-icon" id="icon-light_sensor"></div></div>
+                    <div class="hardware-item" id="hw-pan_tilt"><span>Pan-Tilt HAT</span><div class="status-icon" id="icon-pan_tilt"></div></div>
+                    <div class="hardware-item" id="hw-ai_hat"><span>AI HAT</span><div class="status-icon" id="icon-ai_hat"></div></div>
                 </div>
                 <p style="margin-top: 20px; color: #666;">
                     ℹ️ Missing modules will be automatically disabled. The system will work with available hardware.
@@ -277,6 +282,7 @@ WIZARD_HTML = """
     <script>
         let currentStep = 1;
         const totalSteps = 5;
+        let hardwareChecked = false;
         
         function updateProgress() {
             const progress = (currentStep / totalSteps) * 100;
@@ -295,11 +301,17 @@ WIZARD_HTML = """
             }
             
             updateProgress();
+
+            // Automatically run hardware check when entering step 2
+            if (step === 2 && !hardwareChecked) {
+                checkHardware();
+            }
         }
         
         function nextStep() {
-            if (currentStep === 2) {
-                checkHardware();
+            if (currentStep === 2 && !hardwareChecked) {
+                // Wait for hardware check to complete before proceeding
+                return;
             } else if (currentStep === totalSteps - 1) {
                 completeSetup();
             } else {
@@ -315,13 +327,63 @@ WIZARD_HTML = """
             }
         }
         
+        function setHardwareRow(key, ok) {
+            const row = document.getElementById(`hw-${key}`);
+            const icon = document.getElementById(`icon-${key}`);
+            if (!row || !icon) return;
+            row.classList.remove('ok', 'missing');
+            icon.classList.remove('status-ok', 'status-missing');
+            if (ok) {
+                row.classList.add('ok');
+                icon.classList.add('status-ok');
+                icon.textContent = '✓';
+            } else {
+                row.classList.add('missing');
+                icon.classList.add('status-missing');
+                icon.textContent = '✗';
+            }
+        }
+
+        function normalizeHardwareData(data) {
+            if (data && typeof data === 'object' && data.modules && typeof data.modules === 'object') {
+                const m = data.modules;
+                return {
+                    camera: !!(m.camera && m.camera.present),
+                    mic: !!(m.mic && m.mic.present),
+                    bme280: !!(m.bme280 && m.bme280.present),
+                    light_sensor: !!(m.light_sensor && m.light_sensor.present),
+                    pan_tilt: !!(m.pan_tilt && m.pan_tilt.present),
+                    ai_hat: !!(m.ai_hat && m.ai_hat.present),
+                };
+            }
+            return {
+                camera: !!(data && data.camera),
+                mic: !!(data && data.mic),
+                bme280: !!(data && data.bme280),
+                light_sensor: !!(data && data.light_sensor),
+                pan_tilt: !!(data && data.pan_tilt),
+                ai_hat: !!(data && data.ai_hat),
+            };
+        }
+
         function checkHardware() {
             fetch('/api/wizard/hardware-check')
                 .then(r => r.json())
                 .then(data => {
-                    // Update hardware status display
-                    currentStep++;
-                    showStep(currentStep);
+                    const results = normalizeHardwareData(data);
+                    // Update hardware status display with green check / red X
+                    setHardwareRow('camera', !!results.camera);
+                    setHardwareRow('mic', !!results.mic);
+                    setHardwareRow('bme280', !!results.bme280);
+                    setHardwareRow('light_sensor', !!results.light_sensor);
+                    setHardwareRow('pan_tilt', !!results.pan_tilt);
+                    setHardwareRow('ai_hat', !!results.ai_hat);
+                    hardwareChecked = true;
+                })
+                .catch(() => {
+                    // On error, mark all as missing
+                    ['camera','mic','bme280','light_sensor','pan_tilt','ai_hat'].forEach(k => setHardwareRow(k, false));
+                    hardwareChecked = true;
                 });
         }
         
