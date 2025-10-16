@@ -19,8 +19,12 @@ main() {
   apt-get update -y
   apt-get install -y git python3-full python3-venv python3-pip nodejs npm ffmpeg v4l2-utils pulseaudio alsa-utils libatlas-base-dev openjdk-17-jre-headless grafana cec-utils curl unzip
 
-  echo '[*] Installing tflite-runtime (arm64)...'
-  pip3 install --break-system-packages --no-cache-dir tflite-runtime || true
+  echo '[*] Checking for TensorFlow Lite runtime via apt...'
+  if apt-cache policy python3-tflite-runtime | grep -q Candidate; then
+    apt-get install -y python3-tflite-runtime || true
+  else
+    echo '[!] Skipping tflite-runtime: no apt package available on this OS'
+  fi
 
   mkdir -p  
   if [[ ! -d /.git ]]; then
@@ -30,7 +34,12 @@ main() {
   fi
 
   echo '[*] Creating virtualenv and installing Python requirements...'
-  python3 -m venv /.venv
+  # Prefer Python 3.11 if present for broader wheel support
+  PY_BIN="python3"
+  if command -v python3.11 >/dev/null 2>&1; then
+    PY_BIN="python3.11"
+  fi
+  "$PY_BIN" -m venv /.venv
   source /.venv/bin/activate
   pip install --upgrade pip
   if [[ -f /requirements.txt ]]; then

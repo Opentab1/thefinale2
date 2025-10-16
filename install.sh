@@ -95,10 +95,32 @@ chown -R ${USER}:${USER} "$INSTALL_DIR"
 
 echo -e "${YELLOW}[5/10] Setting up Python virtual environment...${NC}"
 cd "$INSTALL_DIR"
-sudo -u ${USER} python3 -m venv venv
+PY_BIN="python3"
+# Prefer Python 3.11 on Raspberry Pi due to wider wheel support (e.g., tflite-runtime)
+if command -v python3.11 >/dev/null 2>&1; then
+    PY_BIN="python3.11"
+else
+    # Try to install python3.11 if available in repo
+    if apt-cache policy python3.11 | grep -q Candidate; then
+        echo "Installing python3.11 for compatibility..."
+        apt-get install -y python3.11 python3.11-venv || true
+        if command -v python3.11 >/dev/null 2>&1; then
+            PY_BIN="python3.11"
+        fi
+    fi
+fi
+
+sudo -u ${USER} ${PY_BIN} -m venv venv
 sudo -u ${USER} venv/bin/pip install --upgrade pip
-# Install build dependencies first for Python 3.13 compatibility
+# Install build dependencies first
 sudo -u ${USER} venv/bin/pip install setuptools wheel
+
+# Attempt to install OS-provided tflite runtime when available (Python <3.12)
+if apt-cache policy python3-tflite-runtime | grep -q Candidate; then
+    echo "Installing python3-tflite-runtime from apt..."
+    apt-get install -y python3-tflite-runtime || true
+fi
+
 sudo -u ${USER} venv/bin/pip install -r requirements.txt
 
 echo -e "${YELLOW}[6/10] Installing Node.js dashboard...${NC}"
