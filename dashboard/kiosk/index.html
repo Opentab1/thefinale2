@@ -63,6 +63,9 @@
     const wizardPill = document.getElementById('wizardPill');
     const dashPill = document.getElementById('dashPill');
 
+    let wizardKnown = false;
+    let wizardComplete = false;
+
     function checkAlive(url, onOk, onFail) {
       const img = new Image();
       const t = Date.now();
@@ -82,36 +85,66 @@
       setTimeout(() => window.open(dashboardUrl, '_self'), 800);
     }
 
+    function checkWizardStatus(next) {
+      // Ask the wizard directly if setup is complete. If complete, prefer dashboard.
+      fetch(wizardUrl + 'api/wizard/status', { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(d => {
+          wizardKnown = true;
+          wizardComplete = !!(d.completed || d.flag_exists);
+          if (wizardComplete) wizardPill.textContent = 'Wizard: complete';
+        })
+        .catch(() => {/* ignore */})
+        .finally(() => next());
+    }
+
     let tries = 0;
     function tick() {
       tries++;
-      checkAlive(wizardUrl,
-        () => {
-          wizardPill.textContent = 'Wizard: ready';
-          redirect(wizardUrl);
-        },
-        () => {
-          wizardPill.textContent = 'Wizard: starting…';
-        }
-      );
 
-      checkAlive(dashboardUrl,
-        () => {
-          dashPill.textContent = 'Dashboard: ready';
-          setTimeout(() => {
-            if (!/ready$/.test(wizardPill.textContent)) redirect(dashboardUrl);
-          }, 500);
-        },
-        () => {
-          dashPill.textContent = 'Dashboard: starting…';
-        }
-      );
+      checkWizardStatus(() => {
+        if (wizardKnown && wizardComplete) {
+          // Skip checking wizard service; go straight to dashboard when ready
+          checkAlive(dashboardUrl,
+            () => {
+              dashPill.textContent = 'Dashboard: ready';
+              redirect(dashboardUrl);
+            },
+            () => {
+              dashPill.textContent = 'Dashboard: starting…';
+            }
+          );
+        } else {
+          // Normal behavior: prefer wizard if it's ready, otherwise dashboard
+          checkAlive(wizardUrl,
+            () => {
+              wizardPill.textContent = 'Wizard: ready';
+              redirect(wizardUrl);
+            },
+            () => {
+              wizardPill.textContent = 'Wizard: starting…';
+            }
+          );
 
-      if (tries < 120) {
-        setTimeout(tick, 2000);
-      } else {
-        statusText.textContent = 'Still waiting… you can reboot or try directly.';
-      }
+          checkAlive(dashboardUrl,
+            () => {
+              dashPill.textContent = 'Dashboard: ready';
+              setTimeout(() => {
+                if (!/ready$/.test(wizardPill.textContent)) redirect(dashboardUrl);
+              }, 500);
+            },
+            () => {
+              dashPill.textContent = 'Dashboard: starting…';
+            }
+          );
+        }
+
+        if (tries < 120) {
+          setTimeout(tick, 2000);
+        } else {
+          statusText.textContent = 'Still waiting… you can reboot or try directly.';
+        }
+      });
     }
 
     tick();
