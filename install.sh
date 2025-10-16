@@ -97,6 +97,8 @@ echo -e "${YELLOW}[5/10] Setting up Python virtual environment...${NC}"
 cd "$INSTALL_DIR"
 sudo -u ${USER} python3 -m venv venv
 sudo -u ${USER} venv/bin/pip install --upgrade pip
+# Install build dependencies first for Python 3.13 compatibility
+sudo -u ${USER} venv/bin/pip install setuptools wheel
 sudo -u ${USER} venv/bin/pip install -r requirements.txt
 
 echo -e "${YELLOW}[6/10] Installing Node.js dashboard...${NC}"
