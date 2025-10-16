@@ -48,12 +48,17 @@ def has_ai_hat() -> bool:
 
 
 def main():
+    # Write new unified schema with modules map; keep last_checked for backward compat
     status = {
-        'camera': has_camera(),
-        'mic': has_mic(),
-        'bme280': has_bme280(),
-        'light_sensor': False,  # optional, treated as absent unless configured
-        'ai_hat': has_ai_hat(),
+        'last_check': None,
+        'last_checked': None,
+        'modules': {
+            'camera': {'present': has_camera()},
+            'mic': {'present': has_mic()},
+            'bme280': {'present': has_bme280()},
+            'light_sensor': {'present': False},  # optional
+            'ai_hat': {'present': has_ai_hat()},
+        }
     }
     STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(STATUS_FILE, 'w') as f:

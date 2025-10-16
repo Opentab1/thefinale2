@@ -17,10 +17,15 @@ class HealthMonitor:
     def __init__(self, config_path: str = "/opt/pulse/config/hardware_status.json"):
         self.config_path = config_path
         self.status = self._load_status()
-        # Ensure required top-level keys exist even if config file was legacy
+        # Ensure status has the expected schema, migrate legacy flat files if needed
         if not isinstance(self.status, dict):
             self.status = {"last_check": None, "modules": {}}
-        self.status.setdefault("modules", {})
+        if "modules" not in self.status or not isinstance(self.status.get("modules"), dict):
+            legacy = self.status if isinstance(self.status, dict) else {}
+            self.status = {
+                "last_check": legacy.get("last_check") or legacy.get("last_checked"),
+                "modules": {}
+            }
         self.test_functions: Dict[str, Callable] = {}
         
     def _normalize_status(self, data: Dict) -> Dict:
@@ -110,8 +115,9 @@ class HealthMonitor:
     def register_test(self, module_name: str, test_func: Callable):
         """Register a hardware test function"""
         self.test_functions[module_name] = test_func
-        # Guard against legacy/missing structure
-        self.status.setdefault("modules", {})
+        # Defensive: ensure the 'modules' container exists even if status file was legacy
+        if "modules" not in self.status or not isinstance(self.status.get("modules"), dict):
+            self.status["modules"] = {}
         if module_name not in self.status["modules"]:
             self.status["modules"][module_name] = {
                 "status": "unknown",
