@@ -1,0 +1,21 @@
+[Unit]
+Description=Pulse Health Monitor
+After=network.target pulse-hub.service
+Requires=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse
+Environment="PYTHONPATH=/opt/pulse"
+ExecStart=/opt/pulse/venv/bin/python3 -c "from services.sensors.health_monitor import *; monitor = HealthMonitor(); [monitor.register_test(n, globals()[f'test_{n}']) for n in ['camera', 'microphone', 'bme280', 'pan_tilt', 'ai_hat', 'light_sensor']]; monitor.run_continuous_monitoring()"
+Restart=always
+RestartSec=60
+TimeoutStartSec=30
+
+# Logging
+StandardOutput=append:/var/log/pulse/health.log
+StandardError=append:/var/log/pulse/health-error.log
+
+[Install]
+WantedBy=multi-user.target

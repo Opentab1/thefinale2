@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+logs/
+/var/log/pulse/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dashboard/ui/build/
+dashboard/ui/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pulse specific
+config/.wizard_complete
+config/hardware_status.json
+data/
+models/*.caffemodel
+models/*.pb
+music/
+
+# Secrets
+*.key
+*.pem
+*.crt
+.spotify_cache

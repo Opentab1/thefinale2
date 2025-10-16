@@ -1,0 +1,26 @@
+[Unit]
+Description=Pulse Hub - Main Orchestration Service
+After=network.target
+Requires=network.target
+ConditionPathExists=/opt/pulse/config/.wizard_complete
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse
+Environment="PYTHONPATH=/opt/pulse"
+ExecStart=/opt/pulse/venv/bin/python3 /opt/pulse/services/hub/main.py
+Restart=always
+RestartSec=10
+TimeoutStartSec=30
+
+# Logging
+StandardOutput=append:/var/log/pulse/hub.log
+StandardError=append:/var/log/pulse/hub-error.log
+
+# Resource limits
+MemoryLimit=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
