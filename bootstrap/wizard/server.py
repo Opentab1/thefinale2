@@ -1,0 +1,456 @@
+"""
+Pulse 1.0 - First Boot Setup Wizard
+Interactive configuration wizard that runs on first boot
+"""
+
+import logging
+import os
+import sys
+import yaml
+import subprocess
+from pathlib import Path
+from flask import Flask, render_template_string, request, jsonify
+from cryptography.fernet import Fernet
+
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+
+CONFIG_PATH = "/opt/pulse/config/config.yaml"
+ENV_PATH = "/opt/pulse/.env"
+
+WIZARD_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pulse 1.0 Setup Wizard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 800px;
+            width: 100%;
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+        .header h1 { font-size: 2.5em; margin-bottom: 10px; }
+        .header p { opacity: 0.9; }
+        .content { padding: 40px; }
+        .step { display: none; }
+        .step.active { display: block; }
+        .form-group { margin-bottom: 25px; }
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #333;
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .hardware-status {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .hardware-item {
+            padding: 15px;
+            border-radius: 8px;
+            background: #f5f5f5;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .hardware-item.ok { background: #e8f5e9; }
+        .hardware-item.missing { background: #ffebee; }
+        .status-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+        }
+        .status-ok { background: #4caf50; }
+        .status-missing { background: #f44336; }
+        .buttons {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 30px;
+        }
+        button {
+            padding: 14px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
+        .btn-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+        .btn-secondary:hover { background: #d0d0d0; }
+        .progress-bar {
+            height: 4px;
+            background: #e0e0e0;
+            margin-bottom: 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+        }
+        .success-message {
+            text-align: center;
+            padding: 40px;
+        }
+        .success-icon {
+            width: 80px;
+            height: 80px;
+            background: #4caf50;
+            border-radius: 50%;
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="progress-bar">
+            <div class="progress-fill" id="progress"></div>
+        </div>
+        
+        <div class="header">
+            <h1>🎵 Pulse 1.0</h1>
+            <p>Welcome! Let's set up your venue automation system.</p>
+        </div>
+        
+        <div class="content">
+            <!-- Step 1: Venue Setup -->
+            <div class="step active" data-step="1">
+                <h2>Venue Setup</h2>
+                <div class="form-group">
+                    <label>Venue Name</label>
+                    <input type="text" id="venueName" placeholder="My Awesome Venue" value="Pulse Venue">
+                </div>
+                <div class="form-group">
+                    <label>Timezone</label>
+                    <select id="timezone">
+                        <option value="America/Chicago">Central Time (Chicago)</option>
+                        <option value="America/New_York">Eastern Time (New York)</option>
+                        <option value="America/Los_Angeles">Pacific Time (Los Angeles)</option>
+                        <option value="America/Denver">Mountain Time (Denver)</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Step 2: Hardware Check -->
+            <div class="step" data-step="2">
+                <h2>Hardware Detection</h2>
+                <p>Checking connected hardware modules...</p>
+                <div class="hardware-status" id="hardwareStatus">
+                    <div class="hardware-item"><span>Camera</span><div class="status-icon"></div></div>
+                    <div class="hardware-item"><span>Microphone</span><div class="status-icon"></div></div>
+                    <div class="hardware-item"><span>BME280 Sensor</span><div class="status-icon"></div></div>
+                    <div class="hardware-item"><span>Light Sensor</span><div class="status-icon"></div></div>
+                    <div class="hardware-item"><span>Pan-Tilt HAT</span><div class="status-icon"></div></div>
+                    <div class="hardware-item"><span>AI HAT</span><div class="status-icon"></div></div>
+                </div>
+                <p style="margin-top: 20px; color: #666;">
+                    ℹ️ Missing modules will be automatically disabled. The system will work with available hardware.
+                </p>
+            </div>
+            
+            <!-- Step 3: Smart Integrations -->
+            <div class="step" data-step="3">
+                <h2>Smart Integrations</h2>
+                <p style="margin-bottom: 20px;">Configure your smart home integrations (optional - can be done later)</p>
+                
+                <div class="form-group">
+                    <label>Enable Nest/Google HVAC</label>
+                    <select id="hvacEnabled">
+                        <option value="false">Skip for now</option>
+                        <option value="true">Enable</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>Enable Philips Hue Lighting</label>
+                    <select id="lightingEnabled">
+                        <option value="false">Skip for now</option>
+                        <option value="true">Enable</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>Enable Spotify Music</label>
+                    <select id="musicEnabled">
+                        <option value="false">Skip for now</option>
+                        <option value="true">Enable</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Step 4: Automation Limits -->
+            <div class="step" data-step="4">
+                <h2>Automation Limits</h2>
+                <p style="margin-bottom: 20px;">Set safe limits for automated adjustments</p>
+                
+                <div class="form-group">
+                    <label>HVAC Temperature Range (°F)</label>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <input type="number" id="hvacMin" placeholder="Min" value="67">
+                        <input type="number" id="hvacMax" placeholder="Max" value="75">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>Lighting Brightness Range (%)</label>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <input type="number" id="lightMin" placeholder="Min" value="20">
+                        <input type="number" id="lightMax" placeholder="Max" value="85">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>Music Volume Range (%)</label>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <input type="number" id="volumeMin" placeholder="Min" value="25">
+                        <input type="number" id="volumeMax" placeholder="Max" value="70">
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Step 5: Complete -->
+            <div class="step" data-step="5">
+                <div class="success-message">
+                    <div class="success-icon">✓</div>
+                    <h2>Setup Complete!</h2>
+                    <p style="margin: 20px 0;">Pulse is now configured and ready to run your venue.</p>
+                    <p style="color: #666;">The system will reboot in a few seconds...</p>
+                </div>
+            </div>
+            
+            <div class="buttons">
+                <button class="btn-secondary" id="prevBtn" onclick="prevStep()" style="display: none;">Previous</button>
+                <button class="btn-primary" id="nextBtn" onclick="nextStep()">Next</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentStep = 1;
+        const totalSteps = 5;
+        
+        function updateProgress() {
+            const progress = (currentStep / totalSteps) * 100;
+            document.getElementById('progress').style.width = progress + '%';
+        }
+        
+        function showStep(step) {
+            document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
+            document.querySelector(`[data-step="${step}"]`).classList.add('active');
+            
+            document.getElementById('prevBtn').style.display = step > 1 ? 'block' : 'none';
+            document.getElementById('nextBtn').textContent = step === totalSteps - 1 ? 'Complete Setup' : 'Next';
+            
+            if (step === totalSteps) {
+                document.querySelector('.buttons').style.display = 'none';
+            }
+            
+            updateProgress();
+        }
+        
+        function nextStep() {
+            if (currentStep === 2) {
+                checkHardware();
+            } else if (currentStep === totalSteps - 1) {
+                completeSetup();
+            } else {
+                currentStep++;
+                showStep(currentStep);
+            }
+        }
+        
+        function prevStep() {
+            if (currentStep > 1) {
+                currentStep--;
+                showStep(currentStep);
+            }
+        }
+        
+        function checkHardware() {
+            fetch('/api/wizard/hardware-check')
+                .then(r => r.json())
+                .then(data => {
+                    // Update hardware status display
+                    currentStep++;
+                    showStep(currentStep);
+                });
+        }
+        
+        function completeSetup() {
+            const config = {
+                venue: {
+                    name: document.getElementById('venueName').value,
+                    timezone: document.getElementById('timezone').value
+                },
+                integrations: {
+                    hvac_enabled: document.getElementById('hvacEnabled').value === 'true',
+                    lighting_enabled: document.getElementById('lightingEnabled').value === 'true',
+                    music_enabled: document.getElementById('musicEnabled').value === 'true'
+                },
+                policies: {
+                    hvac: {
+                        min_f: parseInt(document.getElementById('hvacMin').value),
+                        max_f: parseInt(document.getElementById('hvacMax').value)
+                    },
+                    lighting: {
+                        min_pct: parseInt(document.getElementById('lightMin').value),
+                        max_pct: parseInt(document.getElementById('lightMax').value)
+                    },
+                    music: {
+                        volume_min: parseInt(document.getElementById('volumeMin').value),
+                        volume_max: parseInt(document.getElementById('volumeMax').value)
+                    }
+                }
+            };
+            
+            fetch('/api/wizard/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            })
+            .then(r => r.json())
+            .then(data => {
+                currentStep++;
+                showStep(currentStep);
+                setTimeout(() => {
+                    window.location.href = '/reboot';
+                }, 3000);
+            });
+        }
+        
+        updateProgress();
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    """Serve wizard interface"""
+    return render_template_string(WIZARD_HTML)
+
+
+@app.route('/api/wizard/hardware-check')
+def hardware_check():
+    """Check hardware availability"""
+    # This would actually test hardware
+    return jsonify({
+        "camera": True,
+        "mic": True,
+        "bme280": False,
+        "light_sensor": True,
+        "pan_tilt": False,
+        "ai_hat": False
+    })
+
+
+@app.route('/api/wizard/complete', methods=['POST'])
+def complete_setup():
+    """Complete setup and save configuration"""
+    try:
+        data = request.json
+        
+        # Update config.yaml
+        config = load_config()
+        config['venue']['name'] = data['venue']['name']
+        config['venue']['timezone'] = data['venue']['timezone']
+        
+        config['smart_integrations']['hvac']['enabled'] = data['integrations']['hvac_enabled']
+        config['smart_integrations']['lighting']['enabled'] = data['integrations']['lighting_enabled']
+        config['smart_integrations']['music']['enabled'] = data['integrations']['music_enabled']
+        
+        config['policies']['hvac']['min_f'] = data['policies']['hvac']['min_f']
+        config['policies']['hvac']['max_f'] = data['policies']['hvac']['max_f']
+        config['policies']['lighting']['min_pct'] = data['policies']['lighting']['min_pct']
+        config['policies']['lighting']['max_pct'] = data['policies']['lighting']['max_pct']
+        config['policies']['music']['volume_min'] = data['policies']['music']['volume_min']
+        config['policies']['music']['volume_max'] = data['policies']['music']['volume_max']
+        
+        config['wizard']['completed'] = True
+        
+        save_config(config)
+        
+        # Generate encryption key if not exists
+        if not os.path.exists(ENV_PATH):
+            key = Fernet.generate_key()
+            with open(ENV_PATH, 'w') as f:
+                f.write(f"SECRET_KEY={key.decode()}\n")
+                f.write(f"ENCRYPTION_KEY={key.decode()}\n")
+        
+        return jsonify({"success": True})
+    
+    except Exception as e:
+        logger.error(f"Error completing setup: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/reboot')
+def reboot():
+    """Reboot the system"""
+    subprocess.Popen(['sudo', 'reboot'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return "Rebooting..."
+
+
+def load_config():
+    """Load configuration"""
+    with open(CONFIG_PATH, 'r') as f:
+        return yaml.safe_load(f)
+
+
+def save_config(config):
+    """Save configuration"""
+    with open(CONFIG_PATH, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    app.run(host='0.0.0.0', port=9090, debug=False)

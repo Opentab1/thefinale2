@@ -1,0 +1,46 @@
+# Pulse 1.0 - Python Dependencies
+
+# Core Framework
+flask==3.0.0
+flask-cors==4.0.0
+flask-socketio==5.3.5
+python-socketio==5.10.0
+eventlet==0.33.3
+pyyaml==6.0.1
+python-dotenv==1.0.0
+
+# Database
+sqlalchemy==2.0.23
+
+# Hardware & Sensors
+RPi.GPIO==0.7.1
+smbus2==0.4.3
+picamera2==0.3.17
+pyaudio==0.2.14
+board==1.0
+adafruit-circuitpython-bme280==2.6.23
+
+# Computer Vision & AI
+opencv-python==4.8.1.78
+pillow==10.1.0
+numpy==1.24.3
+tflite-runtime==2.14.0
+
+# Audio Processing
+librosa==0.10.1
+soundfile==0.12.1
+pydub==0.25.1
+
+# Smart Home Integrations
+google-auth==2.25.2
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+phue==1.1
+spotipy==2.23.0
+cec==0.2.7
+
+# Utilities
+requests==2.31.0
+schedule==1.2.0
+cryptography==41.0.7
+psutil==5.9.6
