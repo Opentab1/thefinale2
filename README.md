@@ -83,8 +83,8 @@ curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh
 ```
 
 **Notes:**
-- **Raspberry Pi OS Bookworm**: The installer uses `chromium` and `libopenblas-dev` (replacing the older `chromium-browser` and `libatlas-base-dev`)
-- **Python 3.13 Support**: Fully compatible with Python 3.13 (setuptools and compatible package versions included)
+- **Raspberry Pi OS Bookworm**: The installer uses `chromium` and `libopenblas-dev` (replacing the older `chromium-browser` and `libatlas-base-dev`).
+- **Python 3.13 Support**: Fully compatible with Python 3.13. We removed `tflite-runtime` (no wheels for Py3.13/aarch64) and updated `numpy`, `opencv-python`, and `librosa` to compatible versions. The AI camera runs via OpenCV DNN or HAT when available.
 
 The installer will:
 - ✓ Install all dependencies
