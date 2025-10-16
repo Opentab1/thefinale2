@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🎵 Pulse 1.0 – AI-Driven Venue Operating System
 
 > **Turn your bar, restaurant, or event space into an autonomous, self-optimizing venue.**
@@ -456,3 +457,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 <p align="center">
   Made with 🎵 Pulse
 </p>
+=======
+# Pulse 1.0 (Alpha)
+
+Local-first, self-healing venue OS for Raspberry Pi 5.
+
+- One-line install
+- Autostart on boot (kiosk dashboard)
+- Sensors + controls with graceful degradation
+
+See `install.sh` for bootstrap. This is a scaffold; features are WIP.
+>>>>>>> origin/main

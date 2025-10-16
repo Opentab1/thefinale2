@@ -1,0 +1,18 @@
+[Unit]
+Description=Pulse first boot setup wizard
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/opt/pulse/.setup_done
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse/bootstrap/wizard
+ExecStart=/opt/pulse/.venv/bin/python /opt/pulse/bootstrap/wizard/server.py
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/pulse/firstboot.log
+StandardError=append:/var/log/pulse/firstboot.err
+
+[Install]
+WantedBy=multi-user.target

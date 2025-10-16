@@ -1,0 +1,8 @@
+{
+  "camera": null,
+  "mic": null,
+  "bme280": null,
+  "light_sensor": null,
+  "ai_hat": null,
+  "last_checked": null
+}

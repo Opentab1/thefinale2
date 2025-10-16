@@ -1,0 +1,16 @@
+[Unit]
+Description=Pulse light level sensor
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse/services/sensors
+ExecStart=/opt/pulse/.venv/bin/python /opt/pulse/services/sensors/light_level.py
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/pulse/light.log
+StandardError=append:/var/log/pulse/light.err
+
+[Install]
+WantedBy=pulse-sensors.target
