@@ -417,6 +417,14 @@ def complete_setup():
         config['wizard']['completed'] = True
         
         save_config(config)
+
+        # Mark wizard as completed so services start after reboot
+        try:
+            flag_path = Path("/opt/pulse/config/.wizard_complete")
+            flag_path.parent.mkdir(parents=True, exist_ok=True)
+            flag_path.write_text("done")
+        except Exception as e:
+            logger.error(f"Error writing wizard completion flag: {e}")
         
         # Generate encryption key if not exists
         if not os.path.exists(ENV_PATH):
