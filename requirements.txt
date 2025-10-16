@@ -1,5 +1,9 @@
 # Pulse 1.0 - Python Dependencies
 
+# Build Dependencies (must be installed first for Python 3.13)
+setuptools>=65.0.0
+wheel>=0.38.0
+
 # Core Framework
 flask==3.0.0
 flask-cors==4.0.0
@@ -15,9 +19,8 @@ sqlalchemy==2.0.23
 # Hardware & Sensors
 RPi.GPIO==0.7.1
 smbus2==0.4.3
-picamera2==0.3.17
 pyaudio==0.2.14
-board==1.0
+Adafruit-Blinka>=8.0.0
 adafruit-circuitpython-bme280==2.6.23
 
 # Computer Vision & AI
@@ -27,7 +30,8 @@ numpy==1.24.3
 tflite-runtime==2.14.0
 
 # Audio Processing
-librosa==0.10.1
+# Use librosa >= 0.10.2 for compatibility with NumPy 2.x
+librosa>=0.10.2
 soundfile==0.12.1
 pydub==0.25.1
 
@@ -37,7 +41,8 @@ google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 phue==1.1
 spotipy==2.23.0
-cec==0.2.7
+# cec==0.2.7 - REMOVED: Incompatible with libcec 7.0+
+# CEC functionality provided by cec-client CLI tool (installed via cec-utils apt package)
 
 # Utilities
 requests==2.31.0
