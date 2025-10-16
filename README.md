@@ -6,7 +6,7 @@ Pulse 1.0 is a complete operating system for physical venues, designed to run on
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Raspberry%20Pi%205-red.svg)](https://www.raspberrypi.com/products/raspberry-pi-5/)
-[![Python](https://img.shields.io/badge/Python-3.11%E2%80%933.13-green.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11%20|%203.13-green.svg)](https://www.python.org/)
 
 ---
 
@@ -82,10 +82,9 @@ Pulse 1.0 is a complete operating system for physical venues, designed to run on
 curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
 ```
 
-Notes:
-- Raspberry Pi OS Bookworm: the installer uses `chromium` and `libopenblas-dev` (replacing the older `chromium-browser` and `libatlas-base-dev`).
-- Python compatibility: installer supports Python 3.11–3.13 on aarch64 and upgrades `pip`, `setuptools`, and `wheel` to ensure binary wheels are used.
-- If you previously saw a pip error like `BackendUnavailable: Cannot import 'setuptools.build_meta'` or builds for `numpy` on Python 3.13, this has been resolved by pinning wheels compatible with Python 3.13 and upgrading build tooling during install.
+**Notes:**
+- **Raspberry Pi OS Bookworm**: The installer uses `chromium` and `libopenblas-dev` (replacing the older `chromium-browser` and `libatlas-base-dev`).
+- **Python 3.13 Support**: Fully compatible with Python 3.13. We removed `tflite-runtime` (no wheels for Py3.13/aarch64) and updated `numpy`, `opencv-python`, and `librosa` to compatible versions. The AI camera runs via OpenCV DNN or HAT when available.
 
 The installer will:
 - ✓ Install all dependencies
@@ -404,7 +403,6 @@ cd thefinale2
 # Set up Python environment
 python3 -m venv venv
 source venv/bin/activate
-pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 
 # Set up dashboard
