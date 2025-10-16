@@ -19,23 +19,20 @@ sqlalchemy==2.0.23
 # Hardware & Sensors
 RPi.GPIO==0.7.1
 smbus2==0.4.3
-picamera2==0.3.17
 pyaudio==0.2.14
-board==1.0
+Adafruit-Blinka>=8.0.0
 adafruit-circuitpython-bme280==2.6.23
 
 # Computer Vision & AI
-opencv-python==4.8.1.78
-# Pillow 10.x fails to build on Python 3.13 (no wheels, metadata error)
-# Pin to 11.x which supports Python 3.13 and provides prebuilt wheels on aarch64
+opencv-python>=4.10.0.84
+# Pillow 11.x supports Python 3.13 and provides prebuilt wheels on aarch64
 pillow>=11.0.0,<12
-# numpy 1.24.3 doesn't have wheels for Python 3.13 - use 1.26+ which supports 3.13
-numpy>=1.26.0,<2.0.0
-# tflite-runtime removed: no Python 3.13 wheels available yet
-# Will be re-added when Python 3.13 support is available
+# NumPy 2.x is required for Python 3.13 wheels
+numpy>=2.0.0,<3.0.0
 
 # Audio Processing
-librosa==0.10.1
+# librosa 0.10.2+ supports NumPy 2.x
+librosa>=0.10.2.post1,<0.11
 soundfile==0.12.1
 pydub==0.25.1
 

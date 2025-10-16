@@ -1,221 +1,89 @@
-#!/bin/bash
-# Pulse 1.0 - One-Line Installation Script
-# For Raspberry Pi 5 with Raspberry Pi OS (64-bit)
+#!/usr/bin/env bash
+set -euo pipefail
 
-set -e
-set -o pipefail
+REPO_DIR=/opt/pulse
+LOG_DIR=/var/log/pulse
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-echo -e "${BLUE}"
-echo "╔═══════════════════════════════════════╗"
-echo "║      Pulse 1.0 Installation          ║"
-echo "║  Autonomous Venue Operating System    ║"
-echo "╚═══════════════════════════════════════╝"
-echo -e "${NC}"
-
-# Check if running on Raspberry Pi
-if ! grep -q "Raspberry Pi" /proc/cpuinfo; then
-    echo -e "${RED}Error: This installer requires a Raspberry Pi${NC}"
+main() {
+  if [[ 1000 -ne 0 ]]; then
+    echo 'Please run with sudo' >&2
     exit 1
-fi
+  fi
 
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Error: Please run with sudo${NC}"
-    exit 1
-fi
+  echo '[*] Detecting Raspberry Pi 5...'
+  if ! grep -qi 'Raspberry Pi 5' /proc/device-tree/model 2>/dev/null; then
+    echo '[!] This installer is intended for Raspberry Pi 5. Continuing anyway...'
+  fi
 
-INSTALL_DIR="/opt/pulse"
-LOG_DIR="/var/log/pulse"
-USER="pi"
+  echo '[*] Updating apt and installing dependencies...'
+  apt-get update -y
+  apt-get install -y git python3-full python3-venv python3-pip python3-dev build-essential pkg-config nodejs npm ffmpeg v4l2-utils pulseaudio alsa-utils libopenblas-dev libportaudio2 portaudio19-dev libsndfile1 openjdk-17-jre-headless grafana cec-utils curl unzip
 
-echo -e "${YELLOW}[1/10] Updating system packages...${NC}"
-apt-get update -qq
-apt-get upgrade -y -qq
+  # tflite-runtime is not available for Python 3.13 on aarch64; skip
+  :
 
-echo -e "${YELLOW}[2/10] Installing dependencies...${NC}"
-# Base and build dependencies (ensure wheels/sdists build on Python 3.13, aarch64)
-apt-get install -y \
-    git \
-    python3-full \
-    python3-pip \
-    python3-venv \
-    python3-dev \
-    build-essential \
-    pkg-config \
-    nodejs \
-    npm \
-    ffmpeg \
-    v4l-utils \
-    pulseaudio \
-    alsa-utils \
-    libopenblas-dev \
-    libportaudio2 \
-    portaudio19-dev \
-    i2c-tools \
-    chromium \
-    unclutter \
-    cec-utils \
-    libcec-dev \
-    libcap-dev \
-    libsndfile1 \
-    libgl1 \
-    libglib2.0-0 \
-    sqlite3 \
-    2>&1 | tee -a /tmp/pulse_install.log
+  mkdir -p  
+  if [[ ! -d /.git ]]; then
+    echo '[*] Cloning Pulse repository...'
+    git clone https://github.com/ORG/REPO.git  || true
+    chown -R pi:pi 
+  fi
 
-# Enable I2C
-echo -e "${YELLOW}[3/10] Configuring hardware interfaces...${NC}"
-if ! grep -q "^dtparam=i2c_arm=on" /boot/config.txt; then
-    echo "dtparam=i2c_arm=on" >> /boot/config.txt
-fi
+  echo '[*] Creating virtualenv and installing Python requirements...'
+  python3 -m venv /.venv
+  source /.venv/bin/activate
+  pip install --upgrade pip setuptools wheel
+  if [[ -f /requirements.txt ]]; then
+    pip install -r /requirements.txt
+  fi
 
-# Enable camera
-if ! grep -q "^camera_auto_detect=1" /boot/config.txt; then
-    echo "camera_auto_detect=1" >> /boot/config.txt
-fi
+  echo '[*] Installing dashboard UI dependencies...'
+  if [[ -f /dashboard/ui/package.json ]]; then
+    pushd /dashboard/ui >/dev/null
+    npm install
+    npm run build || true
+    popd >/dev/null
+  fi
 
-# Add user to necessary groups
-usermod -a -G i2c,video,audio,dialout ${USER}
+  echo '[*] Installing dashboard API dependencies...'
+  if [[ -f /dashboard/api/package.json ]]; then
+    pushd /dashboard/api >/dev/null
+    npm install
+    popd >/dev/null
+  fi
 
-echo -e "${YELLOW}[4/10] Cloning Pulse repository...${NC}"
-if [ -d "$INSTALL_DIR" ]; then
-    echo "Directory exists, removing..."
-    rm -rf "$INSTALL_DIR"
-fi
+  echo '[*] Installing systemd services...'
+  mkdir -p /etc/systemd/system
+  cp -f /services/systemd/*.service /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl enable pulse-firstboot.service || true
+  systemctl enable pulse-hub.service || true
+  systemctl enable pulse-dashboard.service || true
+  systemctl enable pulse-sensors.target || true
 
-mkdir -p "$INSTALL_DIR"
-# If this script is run from a local checkout (with expected files), use it; otherwise clone from GitHub
-if [ -f "./requirements.txt" ] && [ -d "./services/systemd" ] && [ -d "./dashboard/ui" ]; then
-    echo "Using local source to install."
-    cp -a . "$INSTALL_DIR/"
-else
-    echo "Cloning repository from GitHub..."
-    git clone https://github.com/Opentab1/thefinale2.git "$INSTALL_DIR"
-fi
-
-chown -R ${USER}:${USER} "$INSTALL_DIR"
-
-echo -e "${YELLOW}[5/10] Setting up Python virtual environment...${NC}"
-cd "$INSTALL_DIR"
-sudo -u ${USER} python3 -m venv venv
-sudo -u ${USER} venv/bin/pip install --upgrade pip
-# Install build dependencies first for Python 3.13 compatibility
-sudo -u ${USER} venv/bin/pip install setuptools wheel
-sudo -u ${USER} venv/bin/pip install -r requirements.txt
-
-echo -e "${YELLOW}[6/10] Installing Node.js dashboard...${NC}"
-cd "$INSTALL_DIR/dashboard/ui"
-sudo -u ${USER} npm install
-sudo -u ${USER} npm run build
-
-echo -e "${YELLOW}[7/10] Creating directories and setting permissions...${NC}"
-mkdir -p "$LOG_DIR"
-mkdir -p "$INSTALL_DIR/data"
-mkdir -p "$INSTALL_DIR/models"
-mkdir -p "$INSTALL_DIR/music"
-
-chown -R ${USER}:${USER} "$LOG_DIR"
-chown -R ${USER}:${USER} "$INSTALL_DIR"
-
-# Set executable permissions
-chmod +x "$INSTALL_DIR/dashboard/kiosk/start.sh"
-chmod +x "$INSTALL_DIR/install.sh"
-
-echo -e "${YELLOW}[8/10] Installing systemd services...${NC}"
-cp "$INSTALL_DIR/services/systemd"/*.service /etc/systemd/system/
-systemctl daemon-reload
-
-# Enable services
-systemctl enable pulse-firstboot.service
-systemctl enable pulse-hub.service
-systemctl enable pulse-dashboard.service
-systemctl enable pulse-health.service
-
-echo -e "${YELLOW}[9/10] Configuring auto-login and kiosk mode...${NC}"
-
-# Configure auto-login
-mkdir -p /etc/systemd/system/getty@tty1.service.d
-cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf << EOF
+  echo '[*] Configuring auto-login and kiosk mode...'
+  mkdir -p /etc/systemd/system/getty@tty1.service.d
+  cat >/etc/systemd/system/getty@tty1.service.d/override.conf <<'EOF'
 [Service]
 ExecStart=
-ExecStart=-/sbin/agetty --autologin ${USER} --noclear %I \$TERM
+ExecStart=-/sbin/agetty --autologin pi --noclear %I dumb
 EOF
 
-# Configure autostart
-mkdir -p /home/${USER}/.config/autostart
-# Ensure LXDE session config directory exists before appending
-mkdir -p /home/${USER}/.config/lxsession/LXDE-pi
-cat > /home/${USER}/.config/autostart/pulse-dashboard.desktop << EOF
-[Desktop Entry]
-Type=Application
-Name=Pulse Dashboard
-Exec=/opt/pulse/dashboard/kiosk/start.sh
-X-GNOME-Autostart-enabled=true
-EOF
-
-chown -R ${USER}:${USER} /home/${USER}/.config
-
-# Disable screen sleep
-cat >> /home/${USER}/.config/lxsession/LXDE-pi/autostart << EOF
+  mkdir -p /home/pi/.config/lxsession/LXDE-pi
+  cat >/home/pi/.config/lxsession/LXDE-pi/autostart <<'EOF'
 @xset s off
 @xset -dpms
 @xset s noblank
+@/opt/pulse/dashboard/kiosk/start.sh
 EOF
+  chown -R pi:pi /home/pi/.config
 
-echo -e "${YELLOW}[10/10] Running hardware detection...${NC}"
+  echo '[*] Running hardware detection...'
+  python3 /services/sensors/hardware_detect.py > /hardware_report.txt 2>&1 || true
 
-# Run hardware detection
-cd "$INSTALL_DIR"
-sudo -u ${USER} venv/bin/python3 << 'PYEOF'
-import sys
-sys.path.insert(0, '/opt/pulse')
+  echo '[*] Installation complete. Rebooting in 5 seconds...'
+  sleep 5
+  reboot
+}
 
-from services.sensors.health_monitor import *
-import json
-
-monitor = HealthMonitor()
-monitor.register_test("camera", test_camera)
-monitor.register_test("mic", test_microphone)
-monitor.register_test("bme280", test_bme280)
-monitor.register_test("pan_tilt", test_pan_tilt)
-monitor.register_test("ai_hat", test_ai_hat)
-monitor.register_test("light_sensor", test_light_sensor)
-
-results = monitor.test_all_modules()
-
-print("\n" + "="*50)
-print("Hardware Detection Results:")
-print("="*50)
-for module, status in results.items():
-    symbol = "✓" if status else "✗"
-    print(f"{symbol} {module}: {'OK' if status else 'Not Found'}")
-print("="*50)
-
-# Save report
-with open('/var/log/pulse/hardware_report.txt', 'w') as f:
-    json.dump(results, f, indent=2)
-PYEOF
-
-echo -e "${GREEN}"
-echo "╔═══════════════════════════════════════╗"
-echo "║   Installation Complete!              ║"
-echo "╚═══════════════════════════════════════╝"
-echo -e "${NC}"
-
-echo -e "${BLUE}Next Steps:${NC}"
-echo "1. Review hardware detection: cat /var/log/pulse/hardware_report.txt"
-echo "2. System will reboot and launch setup wizard"
-echo "3. Complete wizard at http://localhost:9090"
-echo "4. Dashboard will auto-launch at http://localhost:8080"
-echo ""
-echo -e "${YELLOW}Rebooting in 10 seconds... (Ctrl+C to cancel)${NC}"
-sleep 10
-
-reboot
+main printf"%s""#!/usr/bin/envbashset-euopipefailREPO_DIR=/opt/pulseLOG_DIR=/var/log/pulsemain(){if[[$EUID-ne0]];thenecho'Pleaserunwithsudo'>&2exit1fiecho'[*]DetectingRaspberryPi5...'if!grep-qi'RaspberryPi5'/proc/device-tree/model2>/dev/null;thenecho'[!]ThisinstallerisintendedforRaspberryPi5.Continuinganyway...'fiecho'[*]Updatingaptandinstallingdependencies...'apt-getupdate-yapt-getinstall-ygitpython3-fullpython3-venvpython3-pipnodejsnpmffmpegv4l2-utilspulseaudioalsa-utilslibatlas-base-devopenjdk-17-jre-headlessgrafanacec-utilscurlunzipecho'[*]Installingtflite-runtime(arm64)...'pip3install--break-system-packages--no-cache-dirtflite-runtime||truemkdir-p"$REPO_DIR""$LOG_DIR"if[[!-d"$REPO_DIR/.git"]];thenecho'[*]CloningPulserepository...'gitclonehttps://github.com/ORG/REPO.git"$REPO_DIR"||truechown-Rpi:pi"$REPO_DIR"fiecho'[*]CreatingvirtualenvandinstallingPythonrequirements...'python3-mvenv"$REPO_DIR/.venv"source"$REPO_DIR/.venv/bin/activate"pipinstall--upgradepipif[[-f"$REPO_DIR/requirements.txt"]];thenpipinstall-r"$REPO_DIR/requirements.txt"fiecho'[*]InstallingdashboardUIdependencies...'if[[-f"$REPO_DIR/dashboard/ui/package.json"]];thenpushd"$REPO_DIR/dashboard/ui">/dev/nullnpminstallnpmrunbuild||truepopd>/dev/nullfiecho'[*]InstallingdashboardAPIdependencies...'if[[-f"$REPO_DIR/dashboard/api/package.json"]];thenpushd"$REPO_DIR/dashboard/api">/dev/nullnpminstallpopd>/dev/nullfiecho'[*]Installingsystemdservices...'mkdir-p/etc/systemd/systemcp-f"$REPO_DIR/services/systemd/"*.service/etc/systemd/system/systemctldaemon-reloadsystemctlenablepulse-firstboot.service||truesystemctlenablepulse-hub.service||truesystemctlenablepulse-dashboard.service||truesystemctlenablepulse-sensors.target||trueecho'[*]Configuringauto-loginandkioskmode...'mkdir-p/etc/systemd/system/getty@tty1.service.dcat>/etc/systemd/system/getty@tty1.service.d/override.conf<<'EOF'[Service]ExecStart=ExecStart=-/sbin/agetty--autologinpi--noclear%I$TERMEOFmkdir-p/home/pi/.config/lxsession/LXDE-picat>/home/pi/.config/lxsession/LXDE-pi/autostart<<'EOF'@xsetsoff@xset-dpms@xsetsnoblank@/opt/pulse/dashboard/kiosk/start.shEOFchown-Rpi:pi/home/pi/.configecho'[*]Runninghardwaredetection...'python3"$REPO_DIR/services/sensors/hardware_detect.py">"$LOG_DIR/hardware_report.txt"2>&1||trueecho'[*]Installationcomplete.Rebootingin5seconds...'sleep5reboot}main"$@"">/workspace/pulse/install.sh&&chmod+x/workspace/pulse/install.sh
