@@ -40,6 +40,7 @@ apt-get update -qq
 apt-get upgrade -y -qq
 
 echo -e "${YELLOW}[2/10] Installing dependencies...${NC}"
+# Base and build dependencies (ensure wheels/sdists build on Python 3.13, aarch64)
 apt-get install -y \
     git \
     python3-full \
@@ -57,10 +58,17 @@ apt-get install -y \
     libopenblas-dev \
     libportaudio2 \
     portaudio19-dev \
+    libsndfile1 \
     i2c-tools \
+    python3-libgpiod \
     chromium \
     unclutter \
     cec-utils \
+    libcec-dev \
+    libcap-dev \
+    libsndfile1 \
+    libgl1 \
+    libglib2.0-0 \
     sqlite3 \
     2>&1 | tee -a /tmp/pulse_install.log
 
@@ -126,10 +134,10 @@ cp "$INSTALL_DIR/services/systemd"/*.service /etc/systemd/system/
 systemctl daemon-reload
 
 # Enable services
-systemctl enable pulse-firstboot.service
-systemctl enable pulse-hub.service
-systemctl enable pulse-dashboard.service
-systemctl enable pulse-health.service
+systemctl enable pulse-firstboot.service || true
+systemctl enable pulse-hub.service || true
+systemctl enable pulse-dashboard.service || true
+systemctl enable pulse-health.service || true
 
 echo -e "${YELLOW}[9/10] Configuring auto-login and kiosk mode...${NC}"
 
@@ -138,7 +146,7 @@ mkdir -p /etc/systemd/system/getty@tty1.service.d
 cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf << EOF
 [Service]
 ExecStart=
-ExecStart=-/sbin/agetty --autologin ${USER} --noclear %I \$TERM
+ExecStart=-/sbin/agetty --autologin ${USER} --noclear %I $TERM
 EOF
 
 # Configure autostart

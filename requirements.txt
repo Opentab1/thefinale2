@@ -1,5 +1,9 @@
 # Pulse 1.0 - Python Dependencies
 
+# Build Dependencies (must be installed first for Python 3.13)
+setuptools>=65.0.0
+wheel>=0.38.0
+
 # Core Framework
 flask==3.0.0
 flask-cors==4.0.0
@@ -15,9 +19,8 @@ sqlalchemy==2.0.23
 # Hardware & Sensors
 RPi.GPIO==0.7.1
 smbus2==0.4.3
-picamera2==0.3.17
 pyaudio==0.2.14
-board==1.0
+Adafruit-Blinka>=8.0.0
 adafruit-circuitpython-bme280==2.6.23
 
 # Computer Vision & AI
@@ -29,7 +32,8 @@ pillow>=11.0.0,<12
 numpy>=2.2.0,<3
 
 # Audio Processing
-librosa==0.10.1
+# librosa 0.10.2+ supports NumPy 2.x
+librosa>=0.10.2.post1,<0.11
 soundfile==0.12.1
 pydub==0.25.1
 
@@ -39,8 +43,8 @@ google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 phue==1.1
 spotipy==2.23.0
-# Note: HDMI-CEC control is handled via the system package `cec-utils` and the `cec-client`
-# CLI; no Python package required here.
+# HDMI-CEC control is provided by cec-client (via cec-utils); no Python package required.
+# The deprecated Python package cec==0.2.7 is incompatible with libcec 7+ and intentionally omitted.
 
 # Utilities
 requests==2.31.0
