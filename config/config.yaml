@@ -1,0 +1,29 @@
+venue:
+  name: "Demo Venue"
+  timezone: "America/Chicago"
+
+zones:
+  - name: "Main Floor"
+  - name: "Patio"
+
+modules:
+  camera: true
+  mic: true
+  bme280: true
+  light_sensor: true
+  ai_hat: true
+
+smart_integrations:
+  hvac: {enabled: true, provider: "nest"}
+  lighting: {enabled: true, provider: "hue"}
+  tv: {enabled: true, provider: "cec"}
+  music: {enabled: true, provider: "spotify"}
+
+policies:
+  hvac: {min_f: 67, max_f: 71}
+  lighting: {min_pct: 20, max_pct: 85}
+  music: {volume_min: 25, volume_max: 70}
+
+recovery:
+  auto_disable_failed_modules: true
+  retry_interval_seconds: 60
