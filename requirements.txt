@@ -45,7 +45,8 @@ google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 phue==1.1
 spotipy==2.23.0
-cec==0.2.7
+# Removed python-cec package which fails to build against libcec 7 and Python 3.13.
+# We rely on the cec-client CLI via cec-utils (installed by install.sh).
 
 # Utilities
 requests==2.31.0

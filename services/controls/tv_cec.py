@@ -16,10 +16,11 @@ class CECTVController:
         self._scan_devices()
     
     def _scan_devices(self):
-        """Scan for CEC devices"""
+        """Scan for CEC devices using cec-client CLI"""
         try:
+            # Use shell pipeline to send the 'scan' command to cec-client
             result = subprocess.run(
-                ["echo", "scan", "|", "cec-client", "-s", "-d", "1"],
+                "echo 'scan' | cec-client -s -d 1",
                 shell=True,
                 capture_output=True,
                 text=True,
