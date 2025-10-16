@@ -24,6 +24,8 @@ Copy and paste this single command:
 curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
 ```
 
+If you previously experienced an install error on Python 3.13 (e.g., `BackendUnavailable: Cannot import 'setuptools.build_meta'`), re-run the command above; the installer now upgrades build tooling and pins dependencies to Python 3.13-compatible wheels.
+
 ⏱️ **Installation takes ~15-20 minutes**
 
 What it does:

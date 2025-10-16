@@ -45,6 +45,9 @@ apt-get install -y \
     python3-full \
     python3-pip \
     python3-venv \
+    python3-dev \
+    build-essential \
+    pkg-config \
     nodejs \
     npm \
     ffmpeg \
@@ -96,7 +99,8 @@ chown -R ${USER}:${USER} "$INSTALL_DIR"
 echo -e "${YELLOW}[5/10] Setting up Python virtual environment...${NC}"
 cd "$INSTALL_DIR"
 sudo -u ${USER} python3 -m venv venv
-sudo -u ${USER} venv/bin/pip install --upgrade pip
+# Ensure modern build tooling to avoid legacy build backend errors
+sudo -u ${USER} venv/bin/pip install --upgrade pip setuptools wheel build
 sudo -u ${USER} venv/bin/pip install -r requirements.txt
 
 echo -e "${YELLOW}[6/10] Installing Node.js dashboard...${NC}"
