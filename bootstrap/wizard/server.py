@@ -558,8 +558,8 @@ def complete_setup():
                 f.write(f"SECRET_KEY={key.decode()}\n")
                 f.write(f"ENCRYPTION_KEY={key.decode()}\n")
         
-        # Create wizard completion marker file
-        marker_file = config_dir / ".wizard_complete"
+        # Create wizard completion marker file (canonical location)
+        marker_file = Path(WIZARD_FLAG_PATH)
         marker_file.touch()
         logger.info(f"Created wizard completion marker at {marker_file}")
         
