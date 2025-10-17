@@ -12,6 +12,12 @@ from datetime import datetime
 import wave
 import os
 import tempfile
+import io
+import time
+import requests
+import hmac
+import hashlib
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +32,13 @@ class AudioMonitor:
         self.current_db = 0.0
         self.peak_db = 0.0
         self.current_song = None
+        self._last_song_detect_ts = 0.0
+        self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '10'))
+        self._song_detect_provider = os.getenv('SONG_DETECT_PROVIDER', 'shazam').strip().lower()
+        self._audd_api_token = os.getenv('AUDD_API_TOKEN', '').strip()
+        self._acr_host = os.getenv('ACR_HOST', '').strip()
+        self._acr_key = os.getenv('ACR_ACCESS_KEY', '').strip()
+        self._acr_secret = os.getenv('ACR_ACCESS_SECRET', '').strip()
         
         # Audio interface
         self.audio = pyaudio.PyAudio()
@@ -83,23 +96,123 @@ class AudioMonitor:
             return 0.0
     
     def detect_song(self, audio_data: np.ndarray) -> dict:
-        """
-        Detect song from audio data
-        In production, this would use ACRCloud, Shazam API, or similar
-        """
-        # Placeholder for song detection
-        # Would integrate with:
-        # - ACRCloud API
-        # - Shazam API
-        # - AudD API
-        # - Local audio fingerprinting
-        
-        return {
-            "detected": False,
-            "title": None,
-            "artist": None,
-            "confidence": 0.0
+        """Detect song from audio data via configured provider."""
+        try:
+            if self._song_detect_provider == 'shazam':
+                return self._detect_song_shazam(audio_data)
+            if self._song_detect_provider == 'audd' and self._audd_api_token:
+                return self._detect_song_audd(audio_data)
+            if self._song_detect_provider == 'acrcloud' and self._acr_host and self._acr_key and self._acr_secret:
+                return self._detect_song_acrcloud(audio_data)
+            # TODO: add 'acrcloud' support when credentials are provided
+        except Exception as e:
+            logger.error(f"Song detection failed: {e}")
+        return {"detected": False, "title": None, "artist": None, "confidence": 0.0}
+
+    def _detect_song_shazam(self, audio_data: np.ndarray) -> dict:
+        """Detect song using ShazamIO (no key required)."""
+        try:
+            from shazamio import Shazam
+            # Write WAV to temp file (ShazamIO expects a path)
+            with io.BytesIO() as buf:
+                with wave.open(buf, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(self.sample_rate)
+                    wf.writeframes(audio_data.tobytes())
+                wav_bytes = buf.getvalue()
+
+            import tempfile, os as _os
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tf:
+                tf.write(wav_bytes)
+                tmp_path = tf.name
+
+            try:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                result = loop.run_until_complete(Shazam().recognize(tmp_path))
+                loop.close()
+            finally:
+                try:
+                    _os.remove(tmp_path)
+                except Exception:
+                    pass
+
+            if result and 'track' in result:
+                track = result['track']
+                title = track.get('title')
+                artist = track.get('subtitle')
+                if title or artist:
+                    return { 'detected': True, 'title': title, 'artist': artist, 'confidence': 1.0 }
+        except Exception as e:
+            logger.error(f"Shazam detection failed: {e}")
+        return { 'detected': False, 'title': None, 'artist': None, 'confidence': 0.0 }
+
+    def _detect_song_acrcloud(self, audio_data: np.ndarray) -> dict:
+        """Detect song using ACRCloud identify API."""
+        endpoint = f"/v1/identify"
+        url = f"http://{self._acr_host}{endpoint}"
+        http_method = "POST"
+        data_type = "audio"
+        signature_version = "1"
+        timestamp = str(int(time.time()))
+
+        # Prepare sample bytes as WAV
+        with io.BytesIO() as buf:
+            with wave.open(buf, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(self.sample_rate)
+                wf.writeframes(audio_data.tobytes())
+            sample_bytes = buf.getvalue()
+
+        string_to_sign = "\n".join([http_method, endpoint, self._acr_key, data_type, signature_version, timestamp])
+        sign = base64.b64encode(hmac.new(self._acr_secret.encode('utf-8'), string_to_sign.encode('utf-8'), digestmod=hashlib.sha1).digest()).decode('utf-8')
+
+        files = {
+            'sample': ('sample.wav', sample_bytes, 'audio/wav')
         }
+        data = {
+            'access_key': self._acr_key,
+            'data_type': data_type,
+            'signature_version': signature_version,
+            'signature': sign,
+            'timestamp': timestamp,
+        }
+        resp = requests.post(url, data=data, files=files, timeout=15)
+        js = resp.json()
+        if js.get('status', {}).get('code') == 0 and js.get('metadata', {}).get('music'):
+            m = js['metadata']['music'][0]
+            title = m.get('title')
+            artist = None
+            if isinstance(m.get('artists'), list) and m['artists']:
+                artist = m['artists'][0].get('name')
+            return { 'detected': True, 'title': title, 'artist': artist, 'confidence': 1.0 }
+        return { 'detected': False, 'title': None, 'artist': None, 'confidence': 0.0 }
+
+    def _detect_song_audd(self, audio_data: np.ndarray) -> dict:
+        """Detect song using AudD API by sending ~10 seconds of audio."""
+        # Encode PCM int16 numpy array to WAV bytes in-memory
+        with io.BytesIO() as buf:
+            with wave.open(buf, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)  # 16-bit
+                wf.setframerate(self.sample_rate)
+                wf.writeframes(audio_data.tobytes())
+            wav_bytes = buf.getvalue()
+
+        files = { 'file': ('audio.wav', wav_bytes, 'audio/wav') }
+        data = { 'api_token': self._audd_api_token, 'return': 'timecode,deezer,apple_music,spotify' }
+        resp = requests.post('https://api.audd.io/', data=data, files=files, timeout=15)
+        js = resp.json()
+        if js.get('status') == 'success' and js.get('result'):
+            r = js['result']
+            title = r.get('title')
+            artist = r.get('artist')
+            confidence = float(r.get('score') or 1.0)
+            return { 'detected': True, 'title': title, 'artist': artist, 'confidence': confidence }
+        return { 'detected': False, 'title': None, 'artist': None, 'confidence': 0.0 }
     
     def analyze_audio_spectrum(self, audio_data: np.ndarray) -> dict:
         """Analyze audio frequency spectrum"""
@@ -165,9 +278,9 @@ class AudioMonitor:
             
             logger.info("Audio stream opened")
             
-            # Buffer for song detection (collect ~5 seconds)
+            # Buffer for song detection (collect ~10 seconds)
             song_buffer = []
-            buffer_duration = 5  # seconds
+            buffer_duration = max(10, int(self._song_detect_interval))
             buffer_chunks = int(buffer_duration * self.sample_rate / self.chunk_size)
             
             while self.running and not self.stop_event.is_set():
@@ -186,22 +299,35 @@ class AudioMonitor:
                     if len(song_buffer) > buffer_chunks:
                         song_buffer.pop(0)
                     
-                    # Attempt song detection every N chunks
-                    if len(song_buffer) >= buffer_chunks:
+                    # Attempt song detection every configured interval
+                    now = time.time()
+                    if (now - self._last_song_detect_ts) >= self._song_detect_interval:
+                        # Keep last N seconds of audio; concatenate and detect
+                        if len(song_buffer) > buffer_chunks:
+                            song_buffer = song_buffer[-buffer_chunks:]
+                        combined_audio = np.concatenate(song_buffer) if song_buffer else np.zeros(self.chunk_size, dtype=np.int16)
+                        if combined_audio.size >= self.sample_rate * 3:  # at least 3 seconds
+                            song_info = self.detect_song(combined_audio)
+                            if song_info.get("detected"):
+                                self.current_song = {
+                                    "title": song_info.get("title"),
+                                    "artist": song_info.get("artist"),
+                                    "confidence": song_info.get("confidence", 0.0),
+                                    "timestamp": datetime.now().isoformat()
+                                }
+                                logger.info(f"Detected song: {self.current_song['title']} - {self.current_song['artist']}")
+                            self._last_song_detect_ts = now
                         combined_audio = np.concatenate(song_buffer)
                         song_info = self.detect_song(combined_audio)
-                        
-                        if song_info["detected"]:
+                        if song_info.get("detected"):
                             self.current_song = {
-                                "title": song_info["title"],
-                                "artist": song_info["artist"],
-                                "confidence": song_info["confidence"],
+                                "title": song_info.get("title"),
+                                "artist": song_info.get("artist"),
+                                "confidence": song_info.get("confidence", 0.0),
                                 "timestamp": datetime.now().isoformat()
                             }
-                            logger.info(f"Detected song: {song_info['title']} - {song_info['artist']}")
-                        
-                        # Clear buffer after detection attempt
-                        song_buffer = []
+                            logger.info(f"Detected song: {self.current_song['title']} - {self.current_song['artist']}")
+                        self._last_song_detect_ts = now
                     
                     # Analyze spectrum
                     spectrum = self.analyze_audio_spectrum(audio_data)
