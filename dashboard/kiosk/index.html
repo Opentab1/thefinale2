@@ -69,12 +69,10 @@
     let wizardComplete = false;
 
     function checkAlive(url, onOk, onFail) {
-      const img = new Image();
-      const t = Date.now();
-      img.onload = () => onOk();
-      img.onerror = () => onFail();
-      img.src = url + (url.endsWith('/') ? '' : '/') + '?probe=' + t;
-      setTimeout(() => { try { img.src = ''; } catch (e) {} }, 2500);
+      // Use fetch to a known JSON endpoint; images against '/' can falsely fail
+      fetch(url, { cache: 'no-store' })
+        .then(r => r.ok ? onOk() : onFail())
+        .catch(() => onFail());
     }
 
     function redirect(url) {
@@ -106,7 +104,7 @@
       checkWizardStatus(() => {
         if (wizardKnown && wizardComplete) {
           // Wizard complete: prefer dashboard
-          checkAlive(dashboardUrl,
+          checkAlive(dashboardUrl + 'api/status',
             () => {
               dashPill.textContent = 'Dashboard: ready';
               redirect(dashboardUrl);
@@ -117,7 +115,7 @@
           );
         } else {
           // During setup: prefer wizard if ready; otherwise dashboard
-          checkAlive(wizardUrl,
+          checkAlive(wizardUrl + 'api/wizard/status',
             () => {
               wizardPill.textContent = 'Wizard: ready';
               if (!preferred || preferred === 'wizard') redirect(wizardUrl);
@@ -126,7 +124,7 @@
               wizardPill.textContent = 'Wizard: starting…';
             }
           );
-          checkAlive(dashboardUrl,
+          checkAlive(dashboardUrl + 'api/status',
             () => {
               dashPill.textContent = 'Dashboard: ready';
               setTimeout(() => {

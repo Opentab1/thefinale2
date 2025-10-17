@@ -49,8 +49,11 @@ def set_hub_instance(hub):
 
 @app.route('/')
 def index():
-    """Serve React app"""
-    return send_from_directory(app.static_folder, 'index.html')
+    """Serve React app. If UI is not built yet, return a simple readiness page."""
+    index_path = Path(app.static_folder) / 'index.html'
+    if index_path.exists():
+        return send_from_directory(app.static_folder, 'index.html')
+    return jsonify({"status": "ok", "ui": "not-built"})
 
 @app.route('/api/status')
 def get_status():
