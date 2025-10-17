@@ -1,9 +1,15 @@
 """
 Pulse 1.0 - Light Level Sensor
-Uses camera as light sensor (lux proxy)
+Uses camera-derived brightness as a lux proxy.
+
+To avoid camera device conflicts with the people counter, this sensor reads
+the latest snapshot written by the people counter by default. Set the
+environment variable PULSE_LIGHT_SOURCE=camera to have it open the camera
+directly instead (not recommended if people counter is running).
 """
 
 import logging
+import os
 import cv2
 import numpy as np
 from threading import Thread, Event
@@ -13,12 +19,13 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 class LightSensor:
-    def __init__(self):
+    def __init__(self, snapshot_path: str = "/opt/pulse/data/latest_camera.jpg"):
         self.running = False
         self.stop_event = Event()
         self.light_level = 0.0
         self.brightness_history = []
         self.max_history = 100
+        self.snapshot_path = snapshot_path
     
     def calculate_brightness(self, frame: np.ndarray) -> float:
         """
@@ -86,7 +93,11 @@ class LightSensor:
         return recommendations.get(condition, "")
     
     def start_monitoring(self, camera_index: int = 0, interval: int = 30):
-        """Start continuous light monitoring"""
+        """Start continuous light monitoring.
+
+        When PULSE_LIGHT_SOURCE != 'camera', reads brightness from
+        the latest snapshot file to avoid camera contention.
+        """
         if self.running:
             logger.warning("Monitor already running")
             return
@@ -104,9 +115,34 @@ class LightSensor:
         """Main monitoring loop"""
         camera = None
         use_picamera = False
+        source = os.getenv('PULSE_LIGHT_SOURCE', 'snapshot').strip().lower()
         
         try:
-            # Try picamera2 first
+            if source != 'camera':
+                # Snapshot mode: read brightness from saved JPEGs
+                while self.running and not self.stop_event.is_set():
+                    try:
+                        if os.path.exists(self.snapshot_path):
+                            frame = cv2.imread(self.snapshot_path)
+                            if frame is not None:
+                                lux = self.calculate_brightness(frame)
+                                self.light_level = lux
+                                self.brightness_history.append(lux)
+                                if len(self.brightness_history) > self.max_history:
+                                    self.brightness_history.pop(0)
+                                analysis = self.analyze_lighting_conditions(lux)
+                                logger.debug(f"Light level: {lux:.1f} lux ({analysis['description']}) [snapshot]")
+                        else:
+                            logger.debug("Snapshot not found yet; waiting for people counter to write one")
+
+                        self.stop_event.wait(interval)
+                    except Exception as e:
+                        logger.error(f"Error in snapshot monitoring loop: {e}")
+                        self.stop_event.wait(interval)
+                logger.info("Light monitoring stopped (snapshot mode)")
+                return
+
+            # Try picamera2 first (camera mode)
             try:
                 from picamera2 import Picamera2
                 camera = Picamera2()
