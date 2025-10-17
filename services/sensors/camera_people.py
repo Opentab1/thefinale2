@@ -23,7 +23,7 @@ class PeopleCounter:
         self.entry_count = 0
         self.exit_count = 0
         self._last_snapshot_ts = 0.0
-        self._snapshot_interval_seconds = 2.0
+        self._snapshot_interval_seconds = 1.0
         self._snapshot_path = "/opt/pulse/data/latest_camera.jpg"
 
         # Initialize detector
@@ -235,7 +235,7 @@ class PeopleCounter:
                     
                     # Process every Nth frame to reduce CPU load
                     frame_count += 1
-                    if frame_count % 5 != 0:
+                    if frame_count % 3 != 0:
                         continue
                     
                     # Detect people
