@@ -81,8 +81,9 @@
     }
 
     function openUrls() {
-      window.open(wizardUrl, '_self');
-      setTimeout(() => window.open(dashboardUrl, '_self'), 800);
+      // Open in separate tabs so the fallback page remains accessible
+      window.open(wizardUrl, '_blank');
+      setTimeout(() => window.open(dashboardUrl, '_blank'), 800);
     }
 
     function checkWizardStatus(next) {
