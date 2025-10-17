@@ -214,7 +214,11 @@ class PulseHub:
             self.bme280.start_reading(interval=30)
         
         if self.light_sensor:
-            self.light_sensor.start_monitoring(interval=10)
+            try:
+                interval = int(os.getenv('LIGHT_UPDATE_INTERVAL_SEC', '180'))
+            except Exception:
+                interval = 180
+            self.light_sensor.start_monitoring(interval=interval)
         
         # Start main loop
         thread = Thread(target=self._main_loop)

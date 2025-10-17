@@ -34,6 +34,12 @@ class AudioMonitor:
         self.current_song = None
         self._last_song_detect_ts = 0.0
         self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '10'))
+        # dB update cadence (seconds)
+        try:
+            self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '60'))
+        except Exception:
+            self._db_interval = 60.0
+        self._last_db_ts = 0.0
         self._song_detect_provider = os.getenv('SONG_DETECT_PROVIDER', 'shazam').strip().lower()
         self._audd_api_token = os.getenv('AUDD_API_TOKEN', '').strip()
         self._acr_host = os.getenv('ACR_HOST', '').strip()
@@ -322,10 +328,13 @@ class AudioMonitor:
                     if audio_data.size == 0:
                         continue
                     
-                    # Calculate dB level
-                    db = self.calculate_db(audio_data)
-                    self.current_db = db
-                    self.peak_db = max(self.peak_db, db)
+                    # Calculate dB level on configured cadence
+                    now_db = time.time()
+                    if (now_db - self._last_db_ts) >= self._db_interval:
+                        db = self.calculate_db(audio_data)
+                        self.current_db = db
+                        self.peak_db = max(self.peak_db, db)
+                        self._last_db_ts = now_db
                     
                     # Add to song detection buffer
                     song_buffer.append(audio_data)
@@ -350,17 +359,7 @@ class AudioMonitor:
                                 }
                                 logger.info(f"Detected song: {self.current_song['title']} - {self.current_song['artist']}")
                             self._last_song_detect_ts = now
-                        combined_audio = np.concatenate(song_buffer)
-                        song_info = self.detect_song(combined_audio)
-                        if song_info.get("detected"):
-                            self.current_song = {
-                                "title": song_info.get("title"),
-                                "artist": song_info.get("artist"),
-                                "confidence": song_info.get("confidence", 0.0),
-                                "timestamp": datetime.now().isoformat()
-                            }
-                            logger.info(f"Detected song: {self.current_song['title']} - {self.current_song['artist']}")
-                        self._last_song_detect_ts = now
+                        
                     
                     # Analyze spectrum
                     spectrum = self.analyze_audio_spectrum(audio_data)
