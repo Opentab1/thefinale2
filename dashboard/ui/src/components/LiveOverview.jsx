@@ -85,12 +85,10 @@ export default function LiveOverview({ sensorData }) {
                 src={snapshotUrl}
                 alt="Live camera"
                 className="w-full h-full object-cover"
-                className="w-full h-full object-cover"
                 onError={(e) => { e.currentTarget.style.display = 'none' }}
                 onLoad={(e) => { e.currentTarget.style.display = 'block' }}
               />
             ) : (
-              <span className="text-gray-400 text-sm">No camera snapshot available</span>
               <span className="text-gray-400 text-sm">No camera snapshot available</span>
             )}
           </div>
