@@ -51,9 +51,8 @@ else
   OZONE_FLAG="--ozone-platform=x11"
 fi
 
-# Common Chromium flags for kiosk stability
+# Common Chromium flags for kiosk stability (no fullscreen kiosk to allow normal tabs)
 COMMON_FLAGS=(
-  --kiosk
   --noerrdialogs
   --disable-infobars
   --no-first-run
@@ -77,4 +76,5 @@ fi
 # Build target URL with preference hint for the fallback page script
 TARGET_URL="http://localhost:${FALLBACK_PORT}/index.html?preferred=${PREFERRED}"
 
-exec "$CHROMIUM_BIN" "${COMMON_FLAGS[@]}" "$OZONE_FLAG" --app="$TARGET_URL"
+# Launch in a normal browser tab (not app/kiosk) so the user can navigate away
+exec "$CHROMIUM_BIN" "${COMMON_FLAGS[@]}" "$OZONE_FLAG" "$TARGET_URL"

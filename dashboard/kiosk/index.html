@@ -69,20 +69,36 @@
     let wizardComplete = false;
 
     function checkAlive(url, onOk, onFail) {
-      // Use fetch to a known JSON endpoint; images against '/' can falsely fail
-      fetch(url, { cache: 'no-store' })
-        .then(r => r.ok ? onOk() : onFail())
-        .catch(() => onFail());
+      // Prefer fetch; fall back to Image probe if CORS/network blocks
+      fetch(url, { cache: 'no-store', mode: 'no-cors' })
+        .then(() => onOk())
+        .catch(() => {
+          const img = new Image();
+          const t = Date.now();
+          img.onload = () => onOk();
+          img.onerror = () => onFail();
+          img.src = (url.endsWith('/') ? url : url + '/') + '?probe=' + t;
+          setTimeout(() => { try { img.src = ''; } catch (e) {} }, 2500);
+        });
     }
 
-    function redirect(url) {
+    let openedWizard = false;
+    let openedDashboard = false;
+    function redirect(url, kind) {
       statusText.textContent = 'Opening ' + url + '…';
-      window.location.replace(url);
+      if (kind === 'wizard' && !openedWizard) {
+        openedWizard = true;
+        window.open(url, '_blank');
+      } else if (kind === 'dashboard' && !openedDashboard) {
+        openedDashboard = true;
+        window.open(url, '_blank');
+      }
     }
 
     function openUrls() {
-      window.open(wizardUrl, '_self');
-      setTimeout(() => window.open(dashboardUrl, '_self'), 800);
+      // Open in separate tabs so the fallback page remains accessible
+      window.open(wizardUrl, '_blank');
+      setTimeout(() => window.open(dashboardUrl, '_blank'), 800);
     }
 
     function checkWizardStatus(next) {
@@ -99,6 +115,8 @@
     }
 
     let tries = 0;
+    let dashOkCount = 0;
+    let wizOkCount = 0;
     function tick() {
       tries++;
       checkWizardStatus(() => {
@@ -107,10 +125,18 @@
           checkAlive(dashboardUrl + 'api/status',
             () => {
               dashPill.textContent = 'Dashboard: ready';
-              redirect(dashboardUrl);
+              dashOkCount++;
+              if (dashOkCount >= 2 && !openedDashboard) {
+                // Double-confirm by probing root index as well
+                checkAlive(dashboardUrl,
+                  () => redirect(dashboardUrl, 'dashboard'),
+                  () => {/* wait next tick */}
+                );
+              }
             },
             () => {
               dashPill.textContent = 'Dashboard: starting…';
+              dashOkCount = 0;
             }
           );
         } else {
@@ -118,18 +144,26 @@
           checkAlive(wizardUrl + 'api/wizard/status',
             () => {
               wizardPill.textContent = 'Wizard: ready';
-              if (!preferred || preferred === 'wizard') redirect(wizardUrl);
+              wizOkCount++;
+              if ((!preferred || preferred === 'wizard') && wizOkCount >= 2 && !openedWizard) {
+                redirect(wizardUrl, 'wizard');
+              }
             },
             () => {
               wizardPill.textContent = 'Wizard: starting…';
+              wizOkCount = 0;
             }
           );
           checkAlive(dashboardUrl + 'api/status',
             () => {
               dashPill.textContent = 'Dashboard: ready';
               setTimeout(() => {
-                if ((preferred === 'dashboard') || !/ready$/.test(wizardPill.textContent)) {
-                  redirect(dashboardUrl);
+                if (((preferred === 'dashboard') || !/ready$/.test(wizardPill.textContent)) && !openedDashboard) {
+                  // Second probe to root before opening
+                  checkAlive(dashboardUrl,
+                    () => redirect(dashboardUrl, 'dashboard'),
+                    () => {/* skip */}
+                  );
                 }
               }, 500);
             },
@@ -142,7 +176,10 @@
         if (tries < 120) {
           setTimeout(tick, 2000);
         } else {
-          statusText.textContent = 'Still waiting… you can reboot or try directly.';
+          statusText.textContent = 'Still waiting… opening fallback tabs.';
+          // As a last resort, open both tabs to let the user pick
+          if (!openedWizard) window.open(wizardUrl, '_blank');
+          if (!openedDashboard) window.open(dashboardUrl, '_blank');
         }
       });
     }
