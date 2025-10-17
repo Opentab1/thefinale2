@@ -55,11 +55,19 @@ class PeopleCounter:
             raise
     
     def _init_ai_hat_detector(self):
-        """Initialize AI HAT accelerated detector"""
-        # Placeholder for actual AI HAT integration
-        # Would use hailo-tappas or similar
-        logger.info("AI HAT detector initialized")
-        self.detector = "ai_hat"
+        """Initialize AI HAT accelerated detector if hardware present.
+
+        Falls back by raising if no supported accelerator is found.
+        """
+        try:
+            if not (os.path.exists('/dev/hailo0') or os.path.exists('/dev/apex_0')):
+                raise RuntimeError("AI HAT device not found")
+            # Placeholder for actual AI HAT integration
+            logger.info("AI HAT detector initialized")
+            self.detector = "ai_hat"
+        except Exception as e:
+            # Propagate to allow CPU fallback in _init_detector
+            raise e
     
     def _init_cpu_detector(self):
         """Initialize CPU-based detector using OpenCV DNN"""
@@ -197,7 +205,11 @@ class PeopleCounter:
             try:
                 from picamera2 import Picamera2
                 camera = Picamera2()
-                config = camera.create_still_configuration()
+                # Use video configuration for continuous capture
+                try:
+                    config = camera.create_video_configuration(main={"size": (640, 480), "format": "RGB888"})
+                except Exception:
+                    config = camera.create_still_configuration()
                 camera.configure(config)
                 camera.start()
                 use_picamera = True
@@ -223,7 +235,7 @@ class PeopleCounter:
                     
                     # Process every Nth frame to reduce CPU load
                     frame_count += 1
-                    if frame_count % 10 != 0:
+                    if frame_count % 5 != 0:
                         continue
                     
                     # Detect people

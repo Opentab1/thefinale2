@@ -214,7 +214,7 @@ class PulseHub:
             self.bme280.start_reading(interval=30)
         
         if self.light_sensor:
-            self.light_sensor.start_monitoring(interval=30)
+            self.light_sensor.start_monitoring(interval=10)
         
         # Start main loop
         thread = Thread(target=self._main_loop)
