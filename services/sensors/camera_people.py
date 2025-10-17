@@ -10,6 +10,7 @@ from threading import Thread, Event
 from datetime import datetime
 from typing import Optional, Tuple
 import os
+from .person_tracker_adapter import PersonTracker
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,9 @@ class PeopleCounter:
         # Initialize detector
         self.detector = None
         self._init_detector()
+
+        # Initialize tracker (adapted from party_box)
+        self.tracker = PersonTracker(confidence_threshold=self.confidence_threshold, min_detection_frames=5)
 
         # Ensure snapshot directory exists
         try:
@@ -91,21 +95,30 @@ class PeopleCounter:
             # Fallback to simple background subtraction
             self.detector = cv2.createBackgroundSubtractorMOG2()
     
-    def detect_people(self, frame: np.ndarray) -> Tuple[int, list]:
-        """Detect people in frame and return count with bounding boxes"""
+    def detect_people(self, frame: np.ndarray) -> Tuple[int, list, list]:
+        """Detect people in frame and return (count, boxes, detections)."""
         try:
             if isinstance(self.detector, cv2.HOGDescriptor):
-                return self._detect_hog(frame)
+                count, boxes = self._detect_hog(frame)
+                detections = [{'box': tuple(b), 'confidence': 0.6} for b in boxes]
+                return count, boxes, detections
             elif isinstance(self.detector, cv2.dnn_Net):
-                return self._detect_dnn(frame)
+                count, boxes = self._detect_dnn(frame)
+                # Confidence not returned per-box here; assign threshold
+                detections = [{'box': tuple(b), 'confidence': 0.6} for b in boxes]
+                return count, boxes, detections
             elif self.detector == "ai_hat":
-                return self._detect_ai_hat(frame)
+                count, boxes = self._detect_ai_hat(frame)
+                detections = [{'box': tuple(b), 'confidence': 0.8} for b in boxes]
+                return count, boxes, detections
             else:
                 # Background subtraction fallback
-                return self._detect_motion(frame)
+                count, boxes = self._detect_motion(frame)
+                detections = [{'box': tuple(b), 'confidence': 0.5} for b in boxes]
+                return count, boxes, detections
         except Exception as e:
             logger.error(f"Detection error: {e}")
-            return 0, []
+            return 0, [], []
     
     def _detect_hog(self, frame: np.ndarray) -> Tuple[int, list]:
         """Detect using HOG descriptor"""
@@ -238,18 +251,16 @@ class PeopleCounter:
                     if frame_count % 3 != 0:
                         continue
                     
-                    # Detect people
-                    count, boxes = self.detect_people(frame)
-                    
-                    # Update count (simple approach - actual implementation would track individuals)
+                    # Detect people + track across frames
+                    raw_count, boxes, detections = self.detect_people(frame)
+
+                    # Update tracker for more stable counts and entries/exits
+                    _, stats = self.tracker.process_detections(detections, frame)
                     prev_count = self.current_count
-                    self.current_count = count
-                    
-                    # Estimate entry/exit (simplified)
-                    if count > prev_count:
-                        self.entry_count += (count - prev_count)
-                    elif count < prev_count:
-                        self.exit_count += (prev_count - count)
+                    self.current_count = int(stats.get('current', raw_count))
+                    # Entry/exit from tracker
+                    self.entry_count = int(stats.get('entries', self.entry_count))
+                    self.exit_count = int(stats.get('exits', self.exit_count))
                     
                     logger.debug(f"Count: {count}, Entry: {self.entry_count}, Exit: {self.exit_count}")
 
