@@ -215,12 +215,28 @@ def camera_snapshot():
             resp.headers['Cache-Control'] = 'no-store'
             return resp
 
-        # 2) Try to capture a live frame
+        # 2) Try to capture a live frame via PiCamera2 first, then V4L2
+        ok, frame = False, None
         try:
-            import cv2
-            cap = cv2.VideoCapture(0)
-            ok, frame = cap.read()
-            cap.release()
+            try:
+                from picamera2 import Picamera2
+                cam = Picamera2()
+                try:
+                    cfg = cam.create_video_configuration(main={"size": (640, 480), "format": "RGB888"})
+                except Exception:
+                    cfg = cam.create_still_configuration()
+                cam.configure(cfg)
+                cam.start()
+                arr = cam.capture_array()
+                cam.stop()
+                import cv2
+                frame = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                ok = True
+            except Exception:
+                import cv2
+                cap = cv2.VideoCapture(0)
+                ok, frame = cap.read()
+                cap.release()
         except Exception:
             ok, frame = False, None
 
