@@ -5,6 +5,7 @@ Song detection and decibel level monitoring
 
 import logging
 import pyaudio
+import sounddevice as sd
 import numpy as np
 from threading import Thread, Event
 from datetime import datetime
@@ -33,17 +34,26 @@ class AudioMonitor:
     def _validate_device(self):
         """Validate audio device availability"""
         try:
-            device_count = self.audio.get_device_count()
-            
             if self.device_index is None:
-                # Find default input device
+                # Prefer ALSA default first via sounddevice
+                try:
+                    sd_default = sd.default.device
+                    if isinstance(sd_default, (list, tuple)) and sd_default[0] is not None:
+                        self.device_index = int(sd_default[0])
+                        logger.info(f"Using sounddevice default input index: {self.device_index}")
+                except Exception:
+                    pass
+
+            if self.device_index is None:
+                # Discover first PyAudio input device
+                device_count = self.audio.get_device_count()
                 for i in range(device_count):
                     device_info = self.audio.get_device_info_by_index(i)
-                    if device_info['maxInputChannels'] > 0:
+                    if device_info.get('maxInputChannels', 0) > 0:
                         self.device_index = i
-                        logger.info(f"Using audio device: {device_info['name']}")
+                        logger.info(f"Using audio device: {device_info.get('name')}")
                         break
-            
+
             if self.device_index is None:
                 raise Exception("No input audio device found")
             
