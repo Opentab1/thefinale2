@@ -132,6 +132,8 @@ class LightSensor:
                                     self.brightness_history.pop(0)
                                 analysis = self.analyze_lighting_conditions(lux)
                                 logger.debug(f"Light level: {lux:.1f} lux ({analysis['description']}) [snapshot]")
+                            else:
+                                logger.debug("Snapshot unreadable; waiting for next")
                         else:
                             logger.debug("Snapshot not found yet; waiting for people counter to write one")
 

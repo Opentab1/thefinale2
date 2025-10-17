@@ -45,26 +45,57 @@ class AudioMonitor:
         self._validate_device()
     
     def _validate_device(self):
-        """Validate audio device availability"""
+        """Validate and pick the best audio input device automatically.
+
+        Preference order:
+        1) ALSA default reported by sounddevice
+        2) PyAudio device whose name contains any of: 'USB', 'Mic', 'PnP', 'Microphone'
+        3) First PyAudio device with input channels > 0
+        """
         try:
+            # 1) ALSA default via sounddevice
             if self.device_index is None:
-                # Prefer ALSA default first via sounddevice
                 try:
                     sd_default = sd.default.device
-                    if isinstance(sd_default, (list, tuple)) and sd_default[0] is not None:
-                        self.device_index = int(sd_default[0])
+                    if isinstance(sd_default, (list, tuple)):
+                        sd_in = sd_default[0]
+                    else:
+                        sd_in = sd_default
+                    if sd_in is not None and int(sd_in) >= 0:
+                        self.device_index = int(sd_in)
                         logger.info(f"Using sounddevice default input index: {self.device_index}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"sounddevice default selection failed: {e}")
 
+            # 2) PyAudio search by name
+            preferred_substrings = ["USB", "Mic", "PnP", "Microphone"]
+            chosen_by_name = None
+            device_count = self.audio.get_device_count()
+            for i in range(device_count):
+                try:
+                    di = self.audio.get_device_info_by_index(i)
+                except Exception:
+                    continue
+                if di.get('maxInputChannels', 0) > 0:
+                    name = str(di.get('name', ''))
+                    if any(s.lower() in name.lower() for s in preferred_substrings):
+                        chosen_by_name = i
+                        logger.info(f"Preferring input device by name: {name} (index {i})")
+                        break
+
+            if self.device_index is None and chosen_by_name is not None:
+                self.device_index = chosen_by_name
+
+            # 3) First available input device
             if self.device_index is None:
-                # Discover first PyAudio input device
-                device_count = self.audio.get_device_count()
                 for i in range(device_count):
-                    device_info = self.audio.get_device_info_by_index(i)
-                    if device_info.get('maxInputChannels', 0) > 0:
+                    try:
+                        di = self.audio.get_device_info_by_index(i)
+                    except Exception:
+                        continue
+                    if di.get('maxInputChannels', 0) > 0:
                         self.device_index = i
-                        logger.info(f"Using audio device: {device_info.get('name')}")
+                        logger.info(f"Using first available input device: {di.get('name')} (index {i})")
                         break
 
             if self.device_index is None:
@@ -288,6 +319,8 @@ class AudioMonitor:
                     # Read audio data
                     audio_bytes = stream.read(self.chunk_size, exception_on_overflow=False)
                     audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
+                    if audio_data.size == 0:
+                        continue
                     
                     # Calculate dB level
                     db = self.calculate_db(audio_data)
