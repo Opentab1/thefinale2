@@ -28,8 +28,16 @@ app = Flask(__name__, static_folder='../ui/build', static_url_path='')
 CORS(app)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'pulse-development-key')
 
-# Initialize SocketIO
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# Initialize SocketIO with robust async fallback
+def _choose_async_mode() -> str:
+    preferred = os.getenv('PULSE_SIO_MODE', '').strip().lower()
+    if preferred in {'eventlet', 'gevent', 'threading'}:
+        return preferred
+    # Default to threading for maximum compatibility on fresh images
+    # (eventlet/gevent can be enabled later via PULSE_SIO_MODE)
+    return 'threading'
+
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_choose_async_mode())
 
 # Initialize database and health monitor
 db = PulseDB()
@@ -539,9 +547,14 @@ def start_broadcast_thread():
 
 
 def run_server(host='0.0.0.0', port=8080, debug=False):
-    """Run the dashboard server"""
+    """Run the dashboard server with safe fallbacks."""
     start_broadcast_thread()
-    socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
+    try:
+        socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
+    except Exception as e:
+        logger.error(f"SocketIO server failed ({e}); falling back to Flask built-in server")
+        # Minimal fallback to keep HTTP API reachable
+        app.run(host=host, port=port, debug=False)
 
 
 # ===== Camera helper (optional init placeholder) =====
