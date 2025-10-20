@@ -267,4 +267,8 @@ echo ""
 echo -e "${YELLOW}Rebooting in 10 seconds... (Ctrl+C to cancel)${NC}"
 sleep 10
 
+# Start wizard now so kiosk can reach it even before reboot
+echo "Starting setup wizard service..."
+systemctl restart pulse-firstboot.service || true
+
 reboot

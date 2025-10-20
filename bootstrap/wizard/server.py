@@ -647,4 +647,12 @@ def save_config(config):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    app.run(host='0.0.0.0', port=9090, debug=False)
+    # Robust startup: retry bind if port is not immediately free
+    import time as _t
+    for _i in range(5):
+        try:
+            app.run(host='0.0.0.0', port=9090, debug=False)
+            break
+        except OSError as _e:
+            logging.warning(f"Wizard server bind failed (attempt {_i+1}/5): {_e}")
+            _t.sleep(2)
