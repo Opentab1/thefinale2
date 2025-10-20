@@ -5,6 +5,7 @@ interface LiveData {
   temperature: number;
   humidity: number;
   decibels: number;
+  light_level?: number;
   song: {
     title: string;
     artist: string;
@@ -24,6 +25,7 @@ export default function LiveOverview() {
     temperature: 72,
     humidity: 45,
     decibels: 0,
+    light_level: 0,
     song: { title: 'No song detected', artist: '', detected: false },
     integrations: { nest_connected: false, hue_connected: false, spotify_connected: false },
     camera_active: false
@@ -76,7 +78,7 @@ export default function LiveOverview() {
       </div>
 
       {/* Top Stats Grid */}
-      <div className="grid md:grid-cols-4 gap-4">
+      <div className="grid md:grid-cols-5 gap-4">
         <StatCard
           title="People In Venue"
           value={data.people_count}
@@ -104,6 +106,13 @@ export default function LiveOverview() {
           unit="dB"
           icon="🔊"
           color={data.decibels > 85 ? 'red' : 'green'}
+        />
+        <StatCard
+          title="Light Level"
+          value={Math.round(Number(data.light_level || 0))}
+          unit=" lux"
+          icon="💡"
+          color="cyan"
         />
       </div>
 
