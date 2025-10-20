@@ -18,9 +18,14 @@ Pulse 1.0 is a complete operating system for physical venues, designed to run on
 - **Music Management**: Dynamic volume and playlist adjustment based on ambient noise and crowd energy
 - **TV Control**: Scheduled content with event awareness
 
-### 📊 **Real-Time Sensing**
-- **People Counting**: Computer vision-based occupancy tracking with entry/exit detection
-- **Audio Monitoring**: Song detection and decibel level measurement
+### 📊 **Real-Time Sensing** ⭐ NEW: Fully Functional AI!
+- **People Counting**: Production-ready computer vision with entry/exit detection (integrated from party_box)
+  - Multiple detection models: HOG, MobileNet SSD, YOLOv3, Hailo AI
+  - Advanced tracking with velocity prediction
+  - Accurate entry/exit counting
+- **Audio Monitoring**: Background song detection via ShazamIO (integrated from party_box)
+  - Automatic music recognition
+  - Decibel level measurement
 - **Environmental Sensors**: Temperature, humidity, pressure, and light level monitoring
 - **Comfort Index**: Real-time calculation of venue comfort based on multiple factors
 
