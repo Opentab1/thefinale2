@@ -72,8 +72,8 @@ class AudioMonitor:
         self.peak_db = 0.0
         self.current_song = None
 
-        # Song detection configuration from environment (default: 10s)
-        self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '10'))
+        # Song detection configuration from environment (default: 30s)
+        self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '30'))
         self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '5'))
         self._last_db_ts = 0.0
 
