@@ -19,7 +19,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from services.storage.db import PulseDB
 from services.sensors.health_monitor import HealthMonitor
-from services.sensors.camera_people import PeopleCounter
+# Avoid importing heavy OpenCV-dependent modules at import time to keep API up even
+# when camera dependencies are missing. Camera sensor runs in the Hub service.
+try:
+    from services.sensors.camera_people import PeopleCounter  # noqa: F401
+except Exception:
+    PeopleCounter = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
