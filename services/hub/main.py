@@ -257,6 +257,9 @@ class PulseHub:
         data = {
             "timestamp": datetime.now().isoformat(),
             "occupancy": 0,
+            "entries": 0,
+            "exits": 0,
+            "traffic": None,
             "temperature_f": None,
             "humidity": None,
             "light_level": None,
@@ -265,8 +268,16 @@ class PulseHub:
         }
         
         if self.people_counter:
+            # Current occupancy
             data["occupancy"] = self.people_counter.get_current_count()
-            # Optionally persist entry/exit granulars in metadata
+            # Entry/exit granulars
+            try:
+                stats = self.people_counter.get_traffic_stats()
+                data["traffic"] = stats
+                data["entries"] = int(stats.get("entry_count", 0))
+                data["exits"] = int(stats.get("exit_count", 0))
+            except Exception:
+                pass
         
         if self.bme280:
             readings = self.bme280.get_all_readings()
@@ -299,9 +310,14 @@ class PulseHub:
     def _store_sensor_data(self, data: dict):
         """Store sensor data in database"""
         try:
-            # Occupancy
+            # Occupancy + traffic
             if data.get("occupancy") is not None:
-                self.db.log_occupancy("Main Floor", data["occupancy"])
+                self.db.log_occupancy(
+                    "Main Floor",
+                    int(data["occupancy"]),
+                    entry_count=int(data.get("entries", 0)),
+                    exit_count=int(data.get("exits", 0))
+                )
             
             # Environment
             self.db.log_environment(

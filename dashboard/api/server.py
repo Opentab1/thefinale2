@@ -102,6 +102,9 @@ def get_current_sensors():
             # Fallback: derive current snapshot from database
             data = {
                 "occupancy": db.get_current_occupancy(),
+                "entries": 0,
+                "exits": 0,
+                "traffic": None,
                 "temperature_f": None,
                 "humidity": None,
                 "light_level": None,

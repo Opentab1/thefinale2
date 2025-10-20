@@ -11,6 +11,8 @@ export default function LiveOverview({ sensorData }) {
   }, [])
   const {
     occupancy = 0,
+    entries = 0,
+    exits = 0,
     temperature_f = 0,
     humidity = 0,
     light_level = 0,
@@ -32,6 +34,20 @@ export default function LiveOverview({ sensorData }) {
           value={occupancy}
           unit="people"
           color="blue"
+        />
+        <MetricCard
+          icon={<Users className="w-8 h-8" />}
+          title="Entries"
+          value={entries}
+          unit="people"
+          color="green"
+        />
+        <MetricCard
+          icon={<Users className="w-8 h-8" />}
+          title="Exits"
+          value={exits}
+          unit="people"
+          color="red"
         />
         
         <MetricCard
