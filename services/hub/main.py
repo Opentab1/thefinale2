@@ -266,6 +266,13 @@ class PulseHub:
         
         if self.people_counter:
             data["occupancy"] = self.people_counter.get_current_count()
+            # Include entry/exit counters for analytics/visualization
+            try:
+                data["entry_count"] = int(self.people_counter.entry_count)
+                data["exit_count"] = int(self.people_counter.exit_count)
+            except Exception:
+                data["entry_count"] = 0
+                data["exit_count"] = 0
             # Optionally persist entry/exit granulars in metadata
         
         if self.bme280:
@@ -299,9 +306,14 @@ class PulseHub:
     def _store_sensor_data(self, data: dict):
         """Store sensor data in database"""
         try:
-            # Occupancy
+            # Occupancy (with entry/exit tallies)
             if data.get("occupancy") is not None:
-                self.db.log_occupancy("Main Floor", data["occupancy"])
+                self.db.log_occupancy(
+                    "Main Floor",
+                    int(data["occupancy"]),
+                    int(data.get("entry_count") or 0),
+                    int(data.get("exit_count") or 0),
+                )
             
             # Environment
             self.db.log_environment(

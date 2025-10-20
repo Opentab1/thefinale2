@@ -37,7 +37,7 @@ class AudioMonitor:
         self.current_song = None
         
         # Song detection configuration from environment
-        self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '60'))
+        self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '15'))
         self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '5'))
         self._last_db_ts = 0.0
         
@@ -202,6 +202,11 @@ class AudioMonitor:
             
             logger.info("Audio stream opened")
             
+            # Buffer for song detection (for internal detector fallback)
+            song_buffer = []
+            buffer_duration = max(10, int(self._song_detect_interval))
+            buffer_chunks = int(buffer_duration * self.sample_rate / self.chunk_size)
+
             while self.running and not self.stop_event.is_set():
                 try:
                     # Read audio data
@@ -250,12 +255,31 @@ class AudioMonitor:
                     
                     logger.debug(f"dB: {self.current_db:.1f}, Peak: {self.peak_db:.1f}")
 =======
-                    # Get song detection results
+                    # Song detection path: prefer party_box song detector
                     if self.song_detector is not None:
-                        # party_box song detector runs in background
                         song_info = self.song_detector.get_latest_song()
-                        if song_info and song_info.get("title") != "Unknown":
+                        if song_info and song_info.get("title") not in (None, "Unknown"):
                             self.current_song = song_info
+                    else:
+                        # Fallback internal detection: accumulate ~10s then detect
+                        song_buffer.append(audio_data)
+                        if len(song_buffer) > buffer_chunks:
+                            song_buffer.pop(0)
+                        now = time.time()
+                        if (now - getattr(self, '_last_song_detect_ts', 0.0)) >= self._song_detect_interval:
+                            if len(song_buffer) > 0:
+                                combined = np.concatenate(song_buffer)
+                                if combined.size >= self.sample_rate * 8:  # >= 8 seconds improves reliability
+                                    song_info = self.detect_song(combined)
+                                    if song_info.get("detected"):
+                                        self.current_song = {
+                                            "title": song_info.get("title"),
+                                            "artist": song_info.get("artist"),
+                                            "confidence": song_info.get("confidence", 0.0),
+                                            "timestamp": datetime.now().isoformat()
+                                        }
+                                        logger.info(f"Detected song: {self.current_song['title']} - {self.current_song['artist']}")
+                            self._last_song_detect_ts = now
 >>>>>>> origin/main
                     
                 except Exception as e:

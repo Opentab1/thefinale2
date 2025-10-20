@@ -10,6 +10,8 @@ export default function LiveOverview({ sensorData }) {
   }, [])
   const {
     occupancy = 0,
+    entry_count = 0,
+    exit_count = 0,
     temperature_f = 0,
     humidity = 0,
     light_level = 0,
@@ -32,6 +34,23 @@ export default function LiveOverview({ sensorData }) {
           unit="people"
           color="blue"
         />
+
+        <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+          <div className="flex items-center space-x-3 mb-4">
+            <Users className="w-8 h-8 text-blue-500" />
+            <h3 className="text-lg font-semibold">Traffic</h3>
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="text-center">
+              <div className="text-sm text-gray-400">Entries</div>
+              <div className="text-2xl font-bold">{entry_count}</div>
+            </div>
+            <div className="text-center">
+              <div className="text-sm text-gray-400">Exits</div>
+              <div className="text-2xl font-bold">{exit_count}</div>
+            </div>
+          </div>
+        </div>
         
         <MetricCard
           icon={<Thermometer className="w-8 h-8" />}
