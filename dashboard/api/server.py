@@ -211,51 +211,23 @@ def get_health():
 
 @app.route('/api/camera/snapshot')
 def camera_snapshot():
-    """Return a single JPEG frame from the camera or latest saved snapshot.
-    Tries saved snapshot first, then attempts a live capture via OpenCV.
-    Falls back to a 1x1 transparent PNG if unavailable."""
+    """Return the latest snapshot saved by the people counter.
+    
+    IMPORTANT: This endpoint does NOT open the camera directly to avoid
+    conflicts with the people counter which keeps the camera open continuously.
+    The people counter saves snapshots every second to latest_camera.jpg.
+    """
     try:
-        # 1) Try an existing snapshot saved by a background process
+        # Read snapshot file created by people counter
         snapshot_path = Path('/opt/pulse/data/latest_camera.jpg')
+        
         if snapshot_path.exists() and snapshot_path.stat().st_size > 0:
             resp = send_file(str(snapshot_path), mimetype='image/jpeg', max_age=0)
-            # Ensure no caching
             resp.headers['Cache-Control'] = 'no-store'
             return resp
-
-        # 2) Try to capture a live frame via PiCamera2 first, then V4L2
-        ok, frame = False, None
-        try:
-            try:
-                from picamera2 import Picamera2
-                cam = Picamera2()
-                try:
-                    cfg = cam.create_video_configuration(main={"size": (640, 480), "format": "RGB888"})
-                except Exception:
-                    cfg = cam.create_still_configuration()
-                cam.configure(cfg)
-                cam.start()
-                arr = cam.capture_array()
-                cam.stop()
-                import cv2
-                frame = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                ok = True
-            except Exception:
-                import cv2
-                cap = cv2.VideoCapture(0)
-                ok, frame = cap.read()
-                cap.release()
-        except Exception:
-            ok, frame = False, None
-
-        if ok and frame is not None:
-            import cv2
-            ok, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
-            if ok:
-                data = buf.tobytes()
-                return Response(data, mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
-
-        # 3) Fallback: transparent PNG
+        
+        # If snapshot doesn't exist yet, return a placeholder
+        # (People counter will create it within 1-2 seconds of starting)
         transparent_png = (
             b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
             b'\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0bIDATx\xda\x63\x60\x00\x00\x00\x02\x00\x01'
