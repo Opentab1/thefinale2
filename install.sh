@@ -90,7 +90,13 @@ usermod -a -G i2c,video,audio,dialout ${USER}
 
 echo -e "${YELLOW}[4/10] Cloning Pulse repository...${NC}"
 if [ -d "$INSTALL_DIR" ]; then
-    echo "Directory exists, removing..."
+    echo "Directory exists, stopping services first..."
+    systemctl stop pulse.service 2>/dev/null || true
+    systemctl stop pulse-hub.service 2>/dev/null || true
+    systemctl stop pulse-dashboard.service 2>/dev/null || true
+    systemctl stop pulse-health.service 2>/dev/null || true
+    sleep 2
+    echo "Removing old installation..."
     rm -rf "$INSTALL_DIR"
 fi
 
