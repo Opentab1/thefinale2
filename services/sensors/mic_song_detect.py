@@ -5,19 +5,30 @@ Integrated with party_box song detection for production-ready music recognition
 """
 
 import logging
-import pyaudio
-import sounddevice as sd
 import numpy as np
 from threading import Thread, Event
 from datetime import datetime
-import wave
 import os
-import tempfile
-import io
 import time
+
+# Optional backends
+try:  # PyAudio is preferred for broad device support
+    import pyaudio  # type: ignore
+    PYAUDIO_AVAILABLE = True
+except Exception:  # noqa: BLE001 - we want to catch any import failure
+    pyaudio = None  # type: ignore
+    PYAUDIO_AVAILABLE = False
+
+try:  # sounddevice is a portable fallback
+    import sounddevice as sd  # type: ignore
+    SOUNDDEVICE_AVAILABLE = True
+except Exception:
+    sd = None  # type: ignore
+    SOUNDDEVICE_AVAILABLE = False
+
 try:
     # Prefer local party_box-style song detector if available in our workspace
-    from .song_detector import SongDetector  # re-exported/compatible API
+    from .song_detector import SongDetector  # type: ignore  # re-exported/compatible API
 except Exception:
     # Fallback: use internal Shazam-based detection baked in this module
     SongDetector = None  # type: ignore
@@ -31,44 +42,52 @@ class AudioMonitor:
         self.chunk_size = chunk_size
         self.running = False
         self.stop_event = Event()
-        
+
         self.current_db = 0.0
         self.peak_db = 0.0
         self.current_song = None
-        
+
         # Song detection configuration from environment (default: 10s)
         self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '10'))
         self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '5'))
         self._last_db_ts = 0.0
-        
+
         # Initialize song detector if available
         if SongDetector is not None:
             self.song_detector = SongDetector(
                 enabled=True,
                 detection_interval=int(self._song_detect_interval)
             )
-            logger.info("Initialized song detector from party_box")
+            logger.info("Initialized song detector (background)")
         else:
             self.song_detector = None
-            logger.info("Using built-in song detection (Shazam/AudD/ACRCloud) when invoked")
-        
-        # Audio interface
-        self.audio = pyaudio.PyAudio()
+            logger.info("Song detector disabled (dependencies missing)")
+
+        # Audio interfaces (optional)
+        self.pyaudio_instance = None
+        if PYAUDIO_AVAILABLE:
+            try:
+                self.pyaudio_instance = pyaudio.PyAudio()  # type: ignore[arg-type]
+            except Exception as e:
+                logger.warning(f"PyAudio initialization failed: {e}")
+                self.pyaudio_instance = None
+
+        # Validate and pick an input device
         self._validate_device()
     
     def _validate_device(self):
         """Validate and pick the best audio input device automatically.
 
         Preference order:
-        1) ALSA default reported by sounddevice
+        1) ALSA default reported by sounddevice (if available)
         2) PyAudio device whose name contains any of: 'USB', 'Mic', 'PnP', 'Microphone'
-        3) First PyAudio device with input channels > 0
+        3) First available input-capable device from either backend
         """
         try:
             # 1) ALSA default via sounddevice
-            if self.device_index is None:
+            if SOUNDDEVICE_AVAILABLE and self.device_index is None:
                 try:
-                    sd_default = sd.default.device
+                    sd_default = sd.default.device  # type: ignore[attr-defined]
                     if isinstance(sd_default, (list, tuple)):
                         sd_in = sd_default[0]
                     else:
@@ -80,42 +99,55 @@ class AudioMonitor:
                     logger.debug(f"sounddevice default selection failed: {e}")
 
             # 2) PyAudio search by name
-            preferred_substrings = ["USB", "Mic", "PnP", "Microphone"]
-            chosen_by_name = None
-            device_count = self.audio.get_device_count()
-            for i in range(device_count):
+            if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None:
+                preferred_substrings = ["USB", "Mic", "PnP", "Microphone"]
+                chosen_by_name = None
                 try:
-                    di = self.audio.get_device_info_by_index(i)
+                    device_count = self.pyaudio_instance.get_device_count()
                 except Exception:
-                    continue
-                if di.get('maxInputChannels', 0) > 0:
-                    name = str(di.get('name', ''))
-                    if any(s.lower() in name.lower() for s in preferred_substrings):
-                        chosen_by_name = i
-                        logger.info(f"Preferring input device by name: {name} (index {i})")
-                        break
-
-            if self.device_index is None and chosen_by_name is not None:
-                self.device_index = chosen_by_name
-
-            # 3) First available input device
-            if self.device_index is None:
+                    device_count = 0
                 for i in range(device_count):
                     try:
-                        di = self.audio.get_device_info_by_index(i)
+                        di = self.pyaudio_instance.get_device_info_by_index(i)
                     except Exception:
                         continue
                     if di.get('maxInputChannels', 0) > 0:
-                        self.device_index = i
-                        logger.info(f"Using first available input device: {di.get('name')} (index {i})")
-                        break
+                        name = str(di.get('name', ''))
+                        if any(s.lower() in name.lower() for s in preferred_substrings):
+                            chosen_by_name = i
+                            logger.info(f"Preferring input device by name: {name} (index {i})")
+                            break
+                if self.device_index is None and chosen_by_name is not None:
+                    self.device_index = chosen_by_name
+
+                # 3) First available PyAudio input device
+                if self.device_index is None:
+                    for i in range(device_count):
+                        try:
+                            di = self.pyaudio_instance.get_device_info_by_index(i)
+                        except Exception:
+                            continue
+                        if di.get('maxInputChannels', 0) > 0:
+                            self.device_index = i
+                            logger.info(f"Using first available input device: {di.get('name')} (index {i})")
+                            break
+
+            # As last resort, accept sounddevice index 0 if present
+            if self.device_index is None and SOUNDDEVICE_AVAILABLE:
+                try:
+                    devs = sd.query_devices()  # type: ignore[attr-defined]
+                    for idx, di in enumerate(devs):
+                        if int(di.get('max_input_channels', 0)) > 0:
+                            self.device_index = idx
+                            logger.info(f"Using sounddevice input device: {di.get('name')} (index {idx})")
+                            break
+                except Exception as e:
+                    logger.debug(f"sounddevice device scan failed: {e}")
 
             if self.device_index is None:
-                raise Exception("No input audio device found")
-            
+                logger.warning("No input audio device found; audio monitoring will be disabled")
         except Exception as e:
             logger.error(f"Audio device validation failed: {e}")
-            raise
     
     def calculate_db(self, audio_data: np.ndarray) -> float:
         """Calculate decibel level from audio data"""
@@ -188,25 +220,49 @@ class AudioMonitor:
     
     def _monitoring_loop(self):
         """Main monitoring loop with integrated song detection"""
-        stream = None
-        
+        pa_stream = None
+        sd_stream = None
+
         try:
-            stream = self.audio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=self.sample_rate,
-                input=True,
-                input_device_index=self.device_index,
-                frames_per_buffer=self.chunk_size
-            )
-            
-            logger.info("Audio stream opened")
-            
+            if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None:
+                pa_stream = self.pyaudio_instance.open(
+                    format=pyaudio.paInt16,  # type: ignore[attr-defined]
+                    channels=1,
+                    rate=self.sample_rate,
+                    input=True,
+                    input_device_index=self.device_index,
+                    frames_per_buffer=self.chunk_size
+                )
+                logger.info("Audio stream opened (PyAudio)")
+            elif SOUNDDEVICE_AVAILABLE:
+                sd_stream = sd.InputStream(  # type: ignore[call-arg]
+                    samplerate=self.sample_rate,
+                    dtype='int16',
+                    channels=1,
+                    blocksize=self.chunk_size,
+                    device=self.device_index,
+                )
+                sd_stream.start()
+                logger.info("Audio stream opened (sounddevice)")
+            else:
+                logger.warning("No audio backend available; monitoring loop will idle")
+
             while self.running and not self.stop_event.is_set():
                 try:
                     # Read audio data
-                    audio_bytes = stream.read(self.chunk_size, exception_on_overflow=False)
-                    audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
+                    if pa_stream is not None:
+                        audio_bytes = pa_stream.read(self.chunk_size, exception_on_overflow=False)
+                        audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
+                    elif sd_stream is not None:
+                        audio_data, _ = sd_stream.read(self.chunk_size)  # type: ignore[union-attr]
+                        if isinstance(audio_data, np.ndarray) and audio_data.ndim > 1:
+                            audio_data = audio_data[:, 0]
+                        audio_data = audio_data.astype(np.int16, copy=False)
+                    else:
+                        # No backend available
+                        self.stop_event.wait(1.0)
+                        continue
+
                     if audio_data.size == 0:
                         continue
                     
@@ -234,9 +290,18 @@ class AudioMonitor:
             logger.error(f"Fatal error in monitoring loop: {e}")
             self.running = False
         finally:
-            if stream:
-                stream.stop_stream()
-                stream.close()
+            try:
+                if pa_stream:
+                    pa_stream.stop_stream()
+                    pa_stream.close()
+            except Exception:
+                pass
+            try:
+                if sd_stream:
+                    sd_stream.stop()
+                    sd_stream.close()
+            except Exception:
+                pass
     
     def stop_monitoring(self):
         """Stop audio monitoring"""
@@ -284,8 +349,11 @@ class AudioMonitor:
     def cleanup(self):
         """Cleanup resources"""
         self.stop_monitoring()
-        if self.audio:
-            self.audio.terminate()
+        try:
+            if self.pyaudio_instance:
+                self.pyaudio_instance.terminate()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

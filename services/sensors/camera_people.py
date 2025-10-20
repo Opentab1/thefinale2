@@ -13,7 +13,8 @@ from typing import Optional, Tuple
 import os
 from .person_tracker_adapter import PersonTracker
 try:
-    from .person_detector import PersonDetector
+    # Prefer the maintained detector in the detector/ subpackage
+    from .detector.person_detector import PersonDetector
 except Exception:
     PersonDetector = None
 
@@ -37,7 +38,8 @@ class PeopleCounter:
         self.exit_count = 0
         self._last_snapshot_ts = 0.0
         self._snapshot_interval_seconds = 1.0
-        self._snapshot_path = "/opt/pulse/data/latest_camera.jpg"
+        # Snapshot path (writable fallback in dev)
+        self._snapshot_path = os.getenv("PULSE_SNAPSHOT_PATH", "/opt/pulse/data/latest_camera.jpg")
 
         # Determine model type hint
         self.model_type = model_type or "hog"
@@ -54,11 +56,17 @@ class PeopleCounter:
         )
         logger.info("Initialized person tracker")
 
-        # Ensure snapshot directory exists
+        # Ensure snapshot directory exists, fallback to workspace if needed
         try:
             os.makedirs(os.path.dirname(self._snapshot_path), exist_ok=True)
         except Exception:
-            pass
+            # Fallback for dev environments without /opt permissions
+            fallback = os.path.join(os.getcwd(), "data", "latest_camera.jpg")
+            try:
+                os.makedirs(os.path.dirname(fallback), exist_ok=True)
+                self._snapshot_path = fallback
+            except Exception:
+                pass
     
     def _init_detector(self):
         """Initialize person detection model (prefers AI hat > SSD > HOG)."""

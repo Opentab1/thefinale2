@@ -11,9 +11,10 @@ This module provides the base detector class that:
 import os
 import logging
 import time
+import threading
 import numpy as np
 import cv2
-imp# Try to import Hailo detector
+# Try to import Hailo detector
 try:
     from .hailo_detector import HailoPersonDetector, HAILO_AVAILABLE
 except ImportError:
@@ -80,8 +81,16 @@ class PersonDetector:
     def initialize_models(self):
         """Initialize detection models"""
         logging.info("Initializing detection models...")
-        models_dir = "models"
-        os.makedirs(models_dir, exist_ok=True)
+        # Use shared models directory when available, else fallback to local
+        preferred_dir = "/opt/pulse/models"
+        models_dir = preferred_dir
+        try:
+            os.makedirs(models_dir, exist_ok=True)
+        except Exception:
+            # Fallback to a writable local directory in repo
+            models_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "models")
+            models_dir = os.path.abspath(models_dir)
+            os.makedirs(models_dir, exist_ok=True)
         
         # Initialize HOG detector (always as fallback)
         self.models['hog'] = {

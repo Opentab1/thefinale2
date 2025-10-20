@@ -11,9 +11,17 @@ import json
 from typing import Dict, List, Optional, Any
 
 class PulseDB:
-    def __init__(self, db_path: str = "/opt/pulse/data/pulse.db"):
-        self.db_path = db_path
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    def __init__(self, db_path: str = None):
+        # Prefer system path, but fall back to workspace-local when not writable
+        preferred = "/opt/pulse/data/pulse.db"
+        path = db_path or preferred
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        except Exception:
+            local_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data"))
+            os.makedirs(local_dir, exist_ok=True)
+            path = os.path.join(local_dir, "pulse.db")
+        self.db_path = path
         self._init_database()
     
     @contextmanager

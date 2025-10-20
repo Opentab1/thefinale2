@@ -25,7 +25,18 @@ class LightSensor:
         self.light_level = 0.0
         self.brightness_history = []
         self.max_history = 100
-        self.snapshot_path = snapshot_path
+        # Prefer system snapshot path; fall back to local workspace if not writable/exists
+        preferred = snapshot_path
+        if not os.path.exists(os.path.dirname(preferred)):
+            try:
+                os.makedirs(os.path.dirname(preferred), exist_ok=True)
+            except Exception:
+                preferred = os.path.join(os.getcwd(), "data", "latest_camera.jpg")
+                try:
+                    os.makedirs(os.path.dirname(preferred), exist_ok=True)
+                except Exception:
+                    pass
+        self.snapshot_path = preferred
     
     def calculate_brightness(self, frame: np.ndarray) -> float:
         """
