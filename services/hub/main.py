@@ -94,8 +94,13 @@ class PulseHub:
                 self.audio_monitor = AudioMonitor()
                 self.health_monitor.register_test("mic", lambda: True)
                 logger.info("  ✓ Audio monitor initialized successfully")
+            except ImportError as e:
+                logger.error(f"  ✗ Audio monitor dependencies missing: {e}")
+                logger.error("  → Install with: pip install numpy pyaudio sounddevice")
+                self.audio_monitor = None
             except Exception as e:
                 logger.error(f"  ✗ Could not initialize audio monitor: {e}", exc_info=True)
+                self.audio_monitor = None
         else:
             logger.info("  - Disabled in config")
         
@@ -116,8 +121,13 @@ class PulseHub:
                 self.light_sensor = LightSensor()
                 self.health_monitor.register_test("light_sensor", lambda: True)
                 logger.info("  ✓ Light sensor initialized successfully")
+            except ImportError as e:
+                logger.error(f"  ✗ Light sensor dependencies missing: {e}")
+                logger.error("  → Install with: pip install opencv-python numpy")
+                self.light_sensor = None
             except Exception as e:
                 logger.error(f"  ✗ Could not initialize light sensor: {e}", exc_info=True)
+                self.light_sensor = None
         else:
             logger.info("  - Disabled in config")
         

@@ -10,11 +10,24 @@ directly instead (not recommended if people counter is running).
 
 import logging
 import os
-import cv2
-import numpy as np
 from threading import Thread, Event
 from datetime import datetime
 from typing import Optional
+
+# Optional dependencies - gracefully degrade if not available
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    cv2 = None  # type: ignore
+    CV2_AVAILABLE = False
+
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError:
+    np = None  # type: ignore
+    NUMPY_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +38,18 @@ class LightSensor:
         self.light_level = 0.0
         self.brightness_history = []
         self.max_history = 100
+        
+        # Check dependencies
+        if not CV2_AVAILABLE:
+            logger.error("OpenCV (cv2) is not installed - light sensor cannot function")
+            logger.error("Install with: pip install opencv-python")
+            raise ImportError("OpenCV (cv2) is required for LightSensor")
+        
+        if not NUMPY_AVAILABLE:
+            logger.error("NumPy is not installed - light sensor cannot function")
+            logger.error("Install with: pip install numpy")
+            raise ImportError("NumPy is required for LightSensor")
+        
         # Prefer system snapshot path; fall back to local workspace if not writable/exists
         preferred = snapshot_path
         if not os.path.exists(os.path.dirname(preferred)):
@@ -37,6 +62,7 @@ class LightSensor:
                 except Exception:
                     pass
         self.snapshot_path = preferred
+        logger.info(f"Light sensor initialized (snapshot path: {self.snapshot_path})")
     
     def calculate_brightness(self, frame: np.ndarray) -> float:
         """

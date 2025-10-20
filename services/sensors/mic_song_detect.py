@@ -5,11 +5,18 @@ Integrated with party_box song detection for production-ready music recognition
 """
 
 import logging
-import numpy as np
 from threading import Thread, Event
 from datetime import datetime
 import os
 import time
+
+# NumPy is required
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError:
+    np = None  # type: ignore
+    NUMPY_AVAILABLE = False
 
 # Optional backends
 try:  # PyAudio is preferred for broad device support
@@ -37,6 +44,18 @@ logger = logging.getLogger(__name__)
 
 class AudioMonitor:
     def __init__(self, device_index: int = None, sample_rate: int = 44100, chunk_size: int = 2048):
+        # Check for NumPy first
+        if not NUMPY_AVAILABLE:
+            logger.error("NumPy is not installed - audio monitor cannot function")
+            logger.error("Install with: pip install numpy")
+            raise ImportError("NumPy is required for AudioMonitor")
+        
+        # Check for at least one audio backend
+        if not PYAUDIO_AVAILABLE and not SOUNDDEVICE_AVAILABLE:
+            logger.error("No audio backend available (pyaudio or sounddevice)")
+            logger.error("Install with: pip install pyaudio sounddevice")
+            raise ImportError("PyAudio or sounddevice is required for AudioMonitor")
+        
         # Allow overriding device/backend from environment for quick field fixes
         env_dev = os.getenv('PULSE_MIC_DEVICE_INDEX')
         try:
@@ -78,12 +97,14 @@ class AudioMonitor:
         if PYAUDIO_AVAILABLE:
             try:
                 self.pyaudio_instance = pyaudio.PyAudio()  # type: ignore[arg-type]
+                logger.info("PyAudio initialized successfully")
             except Exception as e:
                 logger.warning(f"PyAudio initialization failed: {e}")
                 self.pyaudio_instance = None
 
         # Validate and pick an input device
         self._validate_device()
+        logger.info(f"Audio monitor initialized (device: {self.device_index}, backend: {'PyAudio' if PYAUDIO_AVAILABLE and self.pyaudio_instance else 'sounddevice'})")
     
     def _validate_device(self):
         """Validate and pick the best audio input device automatically.
