@@ -1,5 +1,6 @@
 #!/bin/bash
-set -euo pipefail
+# Pulse System - Universal Startup
+# Works from any location, auto-configures everything
 
 # ==============================================================================
 # PULSE SYSTEM - MAIN STARTUP SCRIPT
@@ -46,46 +47,57 @@ echo -e "${WHITE}Starting Pulse System with Debug Output...${NC}"
 echo ""
 
 # Auto-detect Pulse installation directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo ".")"
 
-# Try to find Pulse installation
+# Always use the script's directory (wherever user cloned/put the repo)
 if [ -d "$SCRIPT_DIR/services" ]; then
     WORKSPACE_DIR="$SCRIPT_DIR"
-elif [ -d "/workspace/services" ]; then
-    WORKSPACE_DIR="/workspace"
-elif [ -d "/opt/pulse/services" ]; then
-    WORKSPACE_DIR="/opt/pulse"
-elif [ -d "$HOME/pulse/services" ]; then
-    WORKSPACE_DIR="$HOME/pulse"
 else
+    # Fallback search
+    for dir in /workspace /opt/pulse "$HOME/pulse" "$HOME/Pulse"; do
+        if [ -d "$dir/services" ]; then
+            WORKSPACE_DIR="$dir"
+            break
+        fi
+    done
+fi
+
+if [ -z "$WORKSPACE_DIR" ] || [ ! -d "$WORKSPACE_DIR/services" ]; then
     echo -e "${RED}Error: Cannot find Pulse installation${NC}"
-    echo "Please run this script from the Pulse directory"
+    echo "Make sure you're running this from the Pulse directory"
     exit 1
 fi
 
-echo -e "${GREEN}Found Pulse at: $WORKSPACE_DIR${NC}"
-cd "$WORKSPACE_DIR"
+cd "$WORKSPACE_DIR" || exit 1
 
-# Determine Python executable
-if [ -f "$WORKSPACE_DIR/venv/bin/python3" ]; then
-    PYTHON="$WORKSPACE_DIR/venv/bin/python3"
-    echo -e "${GREEN}✓ Found virtual environment${NC}"
-elif [ -f "/opt/pulse/venv/bin/python3" ]; then
-    PYTHON="/opt/pulse/venv/bin/python3"
-    echo -e "${GREEN}✓ Found virtual environment at /opt/pulse${NC}"
-else
-    PYTHON="python3"
-    echo -e "${YELLOW}⚠ Using system Python${NC}"
+# Determine Python executable (try multiple locations)
+PYTHON=""
+for py in "$WORKSPACE_DIR/venv/bin/python3" "/opt/pulse/venv/bin/python3" "$(which python3)" "$(which python)"; do
+    if [ -n "$py" ] && [ -x "$py" ] 2>/dev/null; then
+        PYTHON="$py"
+        break
+    fi
+done
+
+if [ -z "$PYTHON" ]; then
+    echo -e "${RED}Error: Python 3 not found${NC}"
+    echo "Please install Python 3: sudo apt-get install python3"
+    exit 1
 fi
 
-echo -e "${CYAN}Python: ${NC}$PYTHON"
+echo -e "${CYAN}Using Python: ${NC}$PYTHON"
 echo ""
 
-# Create necessary directories
+# Create necessary directories (with fallbacks)
 echo -e "${CYAN}Setting up directories...${NC}"
-mkdir -p /var/log/pulse
-mkdir -p /opt/pulse/data
-mkdir -p "$WORKSPACE_DIR/data"
+if ! mkdir -p /var/log/pulse 2>/dev/null; then
+    mkdir -p "$HOME/.pulse/logs"
+    export PULSE_LOG_DIR="$HOME/.pulse/logs"
+fi
+if ! mkdir -p /opt/pulse/data 2>/dev/null; then
+    mkdir -p "$WORKSPACE_DIR/data"
+fi
+mkdir -p "$WORKSPACE_DIR/data" 2>/dev/null || true
 echo -e "${GREEN}✓ Directories ready${NC}"
 echo ""
 
