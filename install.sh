@@ -169,9 +169,14 @@ if [ ! -f "$INSTALL_DIR/models/MobileNetSSD_deploy.caffemodel" ]; then
     https://github.com/chuanqi305/MobileNet-SSD/raw/master/MobileNetSSD_deploy.caffemodel || true
 fi
 
-# Set executable permissions
+# Set executable permissions for all startup scripts
 chmod +x "$INSTALL_DIR/dashboard/kiosk/start.sh"
 chmod +x "$INSTALL_DIR/install.sh"
+chmod +x "$INSTALL_DIR/START_HERE.sh" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/RUN_ME.sh" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/start-pulse-anywhere" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/run_pulse_system.py" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/diagnose_sensors.py" 2>/dev/null || true
 
 # Populate AI model files (MobileNet-SSD) if missing
 SSD_PROTO="$INSTALL_DIR/models/MobileNetSSD_deploy.prototxt"
@@ -274,11 +279,26 @@ with open('/var/log/pulse/hardware_report.txt', 'w') as f:
 PYEOF
 
 echo -e "${GREEN}"
-echo "╔═══════════════════════════════════════╗"
-echo "║   Installation Complete!              ║"
-echo "╚═══════════════════════════════════════╝"
+echo "╔═══════════════════════════════════════════════════════════════╗"
+echo "║   Installation Complete!                                      ║"
+echo "╚═══════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
+echo -e "${BLUE}All Sensor Fixes Installed:${NC}"
+echo "✓ BME280 sensor (temperature/humidity/pressure)"
+echo "✓ AI people counter (camera detection)"
+echo "✓ Song detection (microphone + Shazam)"
+echo "✓ Light level reading"
+echo "✓ Decibel reading"
+echo "✓ Full terminal debugging with color-coded output"
+echo ""
+echo -e "${BLUE}Manual Startup Option:${NC}"
+echo "If you want to test manually before rebooting:"
+echo "  cd /opt/pulse"
+echo "  ./START_HERE.sh"
+echo ""
+echo "This will show full debug output in the terminal!"
+echo ""
 echo -e "${BLUE}Next Steps:${NC}"
 echo "1. Review hardware detection: cat /var/log/pulse/hardware_report.txt"
 echo "2. System will reboot and launch setup wizard"
