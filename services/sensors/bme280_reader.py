@@ -27,10 +27,17 @@ class BME280Reader:
     def _init_sensor(self):
         """Initialize BME280 sensor"""
         try:
+            # Use busio directly to avoid board pin mapping issues
+            import busio
             import board
             import adafruit_bme280.advanced as adafruit_bme280
             
-            i2c = board.I2C()
+            # Create I2C bus using busio (more reliable on Pi 5)
+            try:
+                i2c = busio.I2C(board.SCL, board.SDA)
+            except Exception:
+                # Fallback to board.I2C() if busio fails
+                i2c = board.I2C()
             
             try:
                 self.sensor = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=self.address)
