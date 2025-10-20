@@ -4,6 +4,7 @@ Pulse 1.0 - BME280 Temperature/Humidity/Pressure Sensor
 
 import logging
 import time
+import numpy as np
 from threading import Thread, Event
 from datetime import datetime
 from typing import Optional, Dict

@@ -43,11 +43,15 @@ class AudioMonitor:
         
         # Initialize song detector if available
         if SongDetector is not None:
-            self.song_detector = SongDetector(
-                enabled=True,
-                detection_interval=int(self._song_detect_interval)
-            )
-            logger.info("Initialized song detector from party_box")
+            try:
+                self.song_detector = SongDetector(
+                    enabled=True,
+                    detection_interval=int(self._song_detect_interval)
+                )
+                logger.info("Initialized song detector from party_box")
+            except Exception as e:
+                logger.warning(f"Failed to initialize song detector: {e}")
+                self.song_detector = None
         else:
             self.song_detector = None
             logger.info("Using built-in song detection (Shazam/AudD/ACRCloud) when invoked")
