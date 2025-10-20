@@ -253,8 +253,10 @@ class AudioMonitor:
         """Main monitoring loop with integrated song detection"""
         pa_stream = None
         sd_stream = None
+        stream_opened = False
 
         try:
+            # Try PyAudio first
             if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None:
                 if self.device_index is None:
                     logger.error("No audio input device found; cannot open audio stream")
@@ -269,10 +271,17 @@ class AudioMonitor:
                             input_device_index=self.device_index,
                             frames_per_buffer=self.chunk_size
                         )
+                        stream_opened = True
                         logger.info(f"✓ Audio stream opened successfully (PyAudio, device {self.device_index})")
                     except Exception as e:
                         logger.error(f"Failed to open PyAudio stream: {e}")
-            elif SOUNDDEVICE_AVAILABLE:
+                        logger.error(f"  Error details: {type(e).__name__}: {str(e)}")
+                        # Try sounddevice as fallback if available
+                        if SOUNDDEVICE_AVAILABLE:
+                            logger.info("Attempting fallback to sounddevice...")
+            
+            # Try sounddevice if PyAudio didn't work or isn't available
+            if not stream_opened and SOUNDDEVICE_AVAILABLE:
                 if self.device_index is None:
                     logger.error("No audio input device found; cannot open audio stream")
                     logger.warning("Audio monitoring will be disabled")
@@ -286,11 +295,24 @@ class AudioMonitor:
                             device=self.device_index,
                         )
                         sd_stream.start()
+                        stream_opened = True
                         logger.info(f"✓ Audio stream opened successfully (sounddevice, device {self.device_index})")
                     except Exception as e:
                         logger.error(f"Failed to open sounddevice stream: {e}")
+                        logger.error(f"  Error details: {type(e).__name__}: {str(e)}")
+            
+            if not stream_opened:
+                logger.error("="*80)
+                logger.error("CRITICAL: Could not open any audio stream!")
+                logger.error("Audio monitoring (dB readings) will NOT work.")
+                logger.error("Check:")
+                logger.error("  1. Audio device is connected: arecord -l")
+                logger.error("  2. Device permissions: arecord -d 1 test.wav")
+                logger.error("  3. Dependencies installed: pip install pyaudio sounddevice")
+                logger.error("="*80)
+                # Still run the loop for song detection, but no dB readings
             else:
-                logger.warning("No audio backend available; monitoring loop will idle")
+                logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
 
             while self.running and not self.stop_event.is_set():
                 try:
@@ -304,16 +326,21 @@ class AudioMonitor:
                             audio_data = audio_data[:, 0]
                         audio_data = audio_data.astype(np.int16, copy=False)
                     else:
-                        # No backend available
-                        self.stop_event.wait(1.0)
+                        # No stream available - just check song detection and wait
+                        if self.song_detector is not None:
+                            song_info = self.song_detector.get_latest_song()
+                            if song_info and song_info.get("title") != "Unknown":
+                                self.current_song = song_info
+                                logger.info(f"🎵 Song: {song_info['title']} - {song_info['artist']}")
+                        self.stop_event.wait(5.0)
                         continue
 
                     if audio_data.size == 0:
                         continue
                     
-                    # Calculate dB level on configured cadence
+                    # Calculate dB level more frequently for better responsiveness (every 2 seconds)
                     now_db = time.time()
-                    if (now_db - self._last_db_ts) >= self._db_interval:
+                    if (now_db - self._last_db_ts) >= 2.0:  # Update every 2 seconds
                         db = self.calculate_db(audio_data)
                         self.current_db = db
                         self.peak_db = max(self.peak_db, db)
@@ -324,10 +351,15 @@ class AudioMonitor:
                     if self.song_detector is not None:
                         song_info = self.song_detector.get_latest_song()
                         if song_info and song_info.get("title") != "Unknown":
+                            if not self.current_song or self.current_song.get("title") != song_info.get("title"):
+                                # New song detected!
+                                logger.info(f"🎵 Song detected: {song_info['title']} - {song_info['artist']}")
                             self.current_song = song_info
                     
                 except Exception as e:
                     logger.error(f"Error in monitoring loop: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
             
             logger.info("Audio monitoring stopped")
             
