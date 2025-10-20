@@ -8,7 +8,7 @@ Type=simple
 User=pi
 WorkingDirectory=/opt/pulse
 Environment="PYTHONPATH=/opt/pulse"
-ExecStart=/opt/pulse/venv/bin/python3 /opt/pulse/services/hub/main.py
+ExecStart=/opt/pulse/venv/bin/python3 -u /opt/pulse/services/hub/main.py
 Restart=always
 RestartSec=10
 TimeoutStartSec=30

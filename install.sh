@@ -71,6 +71,7 @@ apt-get install -y \
     libglib2.0-0 \
     sqlite3 \
     python3-rpi.gpio \
+    lxterminal \
     wget \
     2>&1 | tee -a /tmp/pulse_install.log
 
@@ -220,6 +221,15 @@ cat > /home/${USER}/.config/autostart/pulse-dashboard.desktop << EOF
 Type=Application
 Name=Pulse Dashboard
 Exec=/opt/pulse/dashboard/kiosk/start.sh
+X-GNOME-Autostart-enabled=true
+EOF
+
+# Launch a console window that tails Pulse logs for live diagnostics
+cat > /home/${USER}/.config/autostart/pulse-console.desktop << EOF
+[Desktop Entry]
+Type=Application
+Name=Pulse Console
+Exec=lxterminal -t "Pulse Console" -e bash -lc 'tail -F /var/log/pulse/hub.log /var/log/pulse/dashboard.log'
 X-GNOME-Autostart-enabled=true
 EOF
 

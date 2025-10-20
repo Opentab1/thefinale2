@@ -8,7 +8,7 @@ Type=simple
 User=pi
 WorkingDirectory=/opt/pulse/dashboard/api
 Environment="PYTHONPATH=/opt/pulse"
-ExecStart=/opt/pulse/venv/bin/python3 /opt/pulse/dashboard/api/server.py
+ExecStart=/opt/pulse/venv/bin/python3 -u /opt/pulse/dashboard/api/server.py
 Environment="PULSE_SIO_MODE=threading"
 Restart=always
 RestartSec=10
