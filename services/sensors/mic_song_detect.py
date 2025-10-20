@@ -15,7 +15,12 @@ import os
 import tempfile
 import io
 import time
-from .song_detector import SongDetector
+try:
+    # Prefer local party_box-style song detector if available in our workspace
+    from .song_detector import SongDetector  # re-exported/compatible API
+except Exception:
+    # Fallback: use internal Shazam-based detection baked in this module
+    SongDetector = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +41,16 @@ class AudioMonitor:
         self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '5'))
         self._last_db_ts = 0.0
         
-        # Initialize party_box song detector
-        self.song_detector = SongDetector(
-            enabled=True,
-            detection_interval=int(self._song_detect_interval)
-        )
-        logger.info("Initialized song detector from party_box")
+        # Initialize song detector if available
+        if SongDetector is not None:
+            self.song_detector = SongDetector(
+                enabled=True,
+                detection_interval=int(self._song_detect_interval)
+            )
+            logger.info("Initialized song detector from party_box")
+        else:
+            self.song_detector = None
+            logger.info("Using built-in song detection (Shazam/AudD/ACRCloud) when invoked")
         
         # Audio interface
         self.audio = pyaudio.PyAudio()
@@ -210,11 +219,44 @@ class AudioMonitor:
                         self._last_db_ts = now_db
                         logger.debug(f"dB: {db:.1f}, Peak: {self.peak_db:.1f}")
                     
-                    # Get song detection results from party_box detector
-                    # The song detector runs in background, just fetch results
-                    song_info = self.song_detector.get_latest_song()
-                    if song_info and song_info.get("title") != "Unknown":
-                        self.current_song = song_info
+<<<<<<< HEAD
+                    # Add to song detection buffer
+                    song_buffer.append(audio_data)
+                    if len(song_buffer) > buffer_chunks:
+                        song_buffer.pop(0)
+                    
+                    # Attempt song detection every configured interval
+                    now = time.time()
+                    if (now - self._last_song_detect_ts) >= self._song_detect_interval:
+                        # Keep last N seconds of audio; concatenate and detect
+                        if len(song_buffer) > buffer_chunks:
+                            song_buffer = song_buffer[-buffer_chunks:]
+                        combined_audio = np.concatenate(song_buffer) if song_buffer else np.zeros(self.chunk_size, dtype=np.int16)
+                        if combined_audio.size >= self.sample_rate * 3:  # at least 3 seconds
+                            song_info = self.detect_song(combined_audio)
+                            if song_info.get("detected"):
+                                self.current_song = {
+                                    "title": song_info.get("title"),
+                                    "artist": song_info.get("artist"),
+                                    "confidence": song_info.get("confidence", 0.0),
+                                    "timestamp": datetime.now().isoformat()
+                                }
+                                logger.info(f"Detected song: {self.current_song['title']} - {self.current_song['artist']}")
+                            self._last_song_detect_ts = now
+                        
+                    
+                    # Analyze spectrum (optional visualization/stats)
+                    spectrum = self.analyze_audio_spectrum(audio_data)
+                    
+                    logger.debug(f"dB: {self.current_db:.1f}, Peak: {self.peak_db:.1f}")
+=======
+                    # Get song detection results
+                    if self.song_detector is not None:
+                        # party_box song detector runs in background
+                        song_info = self.song_detector.get_latest_song()
+                        if song_info and song_info.get("title") != "Unknown":
+                            self.current_song = song_info
+>>>>>>> origin/main
                     
                 except Exception as e:
                     logger.error(f"Error in monitoring loop: {e}")

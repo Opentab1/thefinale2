@@ -11,8 +11,13 @@ from threading import Thread, Event
 from datetime import datetime
 from typing import Optional, Tuple
 import os
+<<<<<<< HEAD
+from .person_tracker_adapter import PersonTracker
+from .party_person_detector import PersonDetector as PartyPersonDetector
+=======
 from .detector.person_detector import PersonDetector
 from .tracker.person_tracker import PersonTracker
+>>>>>>> origin/main
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +41,13 @@ class PeopleCounter:
         self._snapshot_interval_seconds = 1.0
         self._snapshot_path = "/opt/pulse/data/latest_camera.jpg"
 
-        # Determine model type
-        if use_ai_hat and os.path.exists('/dev/hailo0'):
-            self.model_type = "hailo"
-            logger.info("Using Hailo AI accelerator for people detection")
-        elif model_type:
-            self.model_type = model_type
-        else:
-            self.model_type = "hog"  # Default fallback
+        # Determine model type hint
+        self.model_type = model_type or "hog"
+        self.use_ai_hat = use_ai_hat
+
+        # Initialize detector (PartyBox-derived)
+        self.detector: Optional[PartyPersonDetector] = None
+        self._init_detector()
 
         # Initialize detector with party_box implementation
         self.detector = PersonDetector(
@@ -65,22 +69,59 @@ class PeopleCounter:
         except Exception:
             pass
     
-    def detect_people(self, frame: np.ndarray) -> Tuple[int, list, list]:
-        """
-        Detect people in frame using party_box detector
-        
-        Returns:
-            Tuple of (count, boxes, detections)
+    def _init_detector(self):
+        """Initialize person detection model (prefers AI hat > SSD > HOG)."""
+        try:
+            # Create detector; models live in /opt/pulse/models
+            det = PartyPersonDetector(confidence_threshold=self.confidence_threshold,
+                                      model_type="hog",
+                                      models_dir="/opt/pulse/models")
+
+            # Prefer AI accelerator when present
+            if self.use_ai_hat and (os.path.exists('/dev/hailo0') or os.path.exists('/dev/apex_0')):
+                if det.set_model('hailo'):
+                    logger.info("Using AI HAT accelerated detector")
+                    self.detector = det
+                    return
+
+            # Otherwise try MobileNet-SSD if model files exist
+            if det.set_model('ssd'):
+                logger.info("Using CPU MobileNet-SSD detector")
+            else:
+                logger.info("Using HOG detector (fallback)")
+            self.detector = det
+        except Exception as e:
+            logger.error(f"Failed to initialize detector: {e}")
+            raise
+    
+    def _init_ai_hat_detector(self):
+        """Initialize AI HAT accelerated detector if hardware present.
+
+        Falls back by raising if no supported accelerator is found.
         """
         try:
-            # Use party_box detector
+            if not (os.path.exists('/dev/hailo0') or os.path.exists('/dev/apex_0')):
+                raise RuntimeError("AI HAT device not found")
+            # Placeholder for actual AI HAT integration
+            logger.info("AI HAT detector initialized")
+            # No-op (handled by PartyPersonDetector)
+            self.detector = self.detector or None
+        except Exception as e:
+            # Propagate to allow CPU fallback in _init_detector
+            raise e
+    
+    def _init_cpu_detector(self):
+        """Deprecated: initialization handled by PartyPersonDetector."""
+        pass
+    
+    def detect_people(self, frame: np.ndarray) -> Tuple[int, list, list]:
+        """Detect people in frame and return (count, boxes, detections)."""
+        try:
+            if self.detector is None:
+                return 0, [], []
             detections = self.detector.detect_people(frame)
-            
-            # Extract boxes
-            boxes = [d['box'] for d in detections]
-            count = len(detections)
-            
-            return count, boxes, detections
+            boxes = [list(d['box']) for d in detections]
+            return len(boxes), boxes, detections
         except Exception as e:
             logger.error(f"Detection error: {e}")
             return 0, [], []
@@ -150,7 +191,6 @@ class PeopleCounter:
                     self.current_count = int(stats.get('current', 0))
                     self.entry_count = int(stats.get('entries', 0))
                     self.exit_count = int(stats.get('exits', 0))
-                    
                     logger.debug(f"Current: {self.current_count}, Entries: {self.entry_count}, Exits: {self.exit_count}")
 
                     # Save snapshot for dashboard
