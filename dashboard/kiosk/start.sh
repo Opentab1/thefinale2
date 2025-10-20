@@ -76,5 +76,8 @@ fi
 # Build target URL with preference hint for the fallback page script
 TARGET_URL="http://localhost:${FALLBACK_PORT}/index.html?preferred=${PREFERRED}"
 
-# Launch in a normal browser tab (not app/kiosk) so the user can navigate away
-exec "$CHROMIUM_BIN" "${COMMON_FLAGS[@]}" "$OZONE_FLAG" "$TARGET_URL"
+# Launch in app mode focused on our page, but still allows Alt+Tab to terminal
+exec "$CHROMIUM_BIN" "${COMMON_FLAGS[@]}" "$OZONE_FLAG" \
+  --app="$TARGET_URL" \
+  --window-size=1280,800 \
+  --force-device-scale-factor=1.0

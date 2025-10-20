@@ -16,21 +16,28 @@ import wave
 import tempfile
 import os
 
+"""Background song detection with graceful fallbacks.
+
+On systems without PortAudio/sounddevice, we keep the class loadable and simply
+disable detection while logging a concise reason. This prevents crashes during
+startup and keeps the rest of the system functional.
+"""
+
 # Try to import sound-related libraries
 try:
     import sounddevice as sd
     SOUNDDEVICE_AVAILABLE = True
-except ImportError:
+except Exception as e:
     SOUNDDEVICE_AVAILABLE = False
-    logging.warning("sounddevice library not available. Install with 'pip install sounddevice'")
+    logging.warning(f"sounddevice unavailable: {e}. Song detection disabled.")
 
 # Try to import ShazamIO
 try:
     from shazamio import Shazam
     SHAZAMIO_AVAILABLE = True
-except ImportError:
+except Exception as e:
     SHAZAMIO_AVAILABLE = False
-    logging.warning("ShazamIO library not available. Install with 'pip install shazamio'")
+    logging.warning(f"ShazamIO unavailable: {e}. Song detection disabled.")
 
 class SongDetector:
     """Class for handling background song detection using ShazamIO"""
@@ -42,15 +49,17 @@ class SongDetector:
             enabled: Whether song detection is enabled
             detection_interval: Seconds between detection attempts
         """
-        self.enabled = enabled and SOUNDDEVICE_AVAILABLE and SHAZAMIO_AVAILABLE
+        self.enabled = bool(enabled) and SOUNDDEVICE_AVAILABLE and SHAZAMIO_AVAILABLE
         
         if self.enabled:
             logging.info("Song detection enabled")
         else:
+            reasons = []
             if not SHAZAMIO_AVAILABLE:
-                logging.warning("ShazamIO not available. Song detection disabled.")
+                reasons.append("ShazamIO not available")
             if not SOUNDDEVICE_AVAILABLE:
-                logging.warning("sounddevice not available. Song detection disabled.")
+                reasons.append("sounddevice/PortAudio not available")
+            logging.warning("Song detection disabled: " + ", ".join(reasons) if reasons else "disabled by config")
         
         # Audio parameters
         self.sample_rate = 44100
@@ -98,6 +107,7 @@ class SongDetector:
     def detect_song(self):
         """Record audio and detect song"""
         if not self.enabled:
+            logging.debug("Song detection skipped (disabled)")
             return
             
         try:
