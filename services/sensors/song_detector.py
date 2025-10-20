@@ -16,28 +16,21 @@ import wave
 import tempfile
 import os
 
-"""Background song detection with graceful fallbacks.
-
-On systems without PortAudio/sounddevice, we keep the class loadable and simply
-disable detection while logging a concise reason. This prevents crashes during
-startup and keeps the rest of the system functional.
-"""
-
 # Try to import sound-related libraries
 try:
     import sounddevice as sd
     SOUNDDEVICE_AVAILABLE = True
-except Exception as e:
+except ImportError:
     SOUNDDEVICE_AVAILABLE = False
-    logging.warning(f"sounddevice unavailable: {e}. Song detection disabled.")
+    logging.warning("sounddevice library not available. Install with 'pip install sounddevice'")
 
 # Try to import ShazamIO
 try:
     from shazamio import Shazam
     SHAZAMIO_AVAILABLE = True
-except Exception as e:
+except ImportError:
     SHAZAMIO_AVAILABLE = False
-    logging.warning(f"ShazamIO unavailable: {e}. Song detection disabled.")
+    logging.warning("ShazamIO library not available. Install with 'pip install shazamio'")
 
 class SongDetector:
     """Class for handling background song detection using ShazamIO"""
@@ -47,22 +40,17 @@ class SongDetector:
         
         Args:
             enabled: Whether song detection is enabled
-            detection_interval        self.enabled = bool(enabled) and SOUNDDEVICE_AVAILABLE and SHAZAMIO_AVAILABLE
+            detection_interval: Seconds between detection attempts
+        """
+        self.enabled = enabled and SOUNDDEVICE_AVAILABLE and SHAZAMIO_AVAILABLE
         
         if self.enabled:
-            logging.info("🎵 Song detection enabled")
-            logging.info(f"  - Detection interval: {detection_interval} seconds")
-            logging.info(f"  - Using ShazamIO for recognition")
+            logging.info("Song detection enabled")
         else:
-            reasons = []
             if not SHAZAMIO_AVAILABLE:
-                reasons.append("ShazamIO not installed (pip install shazamio)")
+                logging.warning("ShazamIO not available. Song detection disabled.")
             if not SOUNDDEVICE_AVAILABLE:
-                reasons.append("sounddevice not installed (pip install sounddevice)")
-            if not enabled:
-                reasons.append("disabled by config")
-            logging.warning("🎵 Song detection disabled: " + ", ".join(reasons) if reasons else "unknown reason")
-            logging.warning("Song detector will return 'Unknown' for all queries") " + ", ".join(reasons) if reasons else "disabled by config")
+                logging.warning("sounddevice not available. Song detection disabled.")
         
         # Audio parameters
         self.sample_rate = 44100
@@ -102,10 +90,14 @@ class SongDetector:
             if current_time - self.last_detection_time >= self.detection_interval:
                 logging.info("Starting song recognition...")
                 self.detect_song()
-                self.last_detection_time =    def detect_song(self):
+                self.last_detection_time = current_time
+            
+            # Sleep to avoid consuming CPU
+            time.sleep(5)
+    
+    def detect_song(self):
         """Record audio and detect song"""
         if not self.enabled:
-            logging.debug("Song detection skipped (disabled)")
             return
             
         try:
@@ -114,7 +106,7 @@ class SongDetector:
                 temp_filename = temp_file.name
             
             # Record audio
-            logging.info(f"🎤 Recording {self.duration}s audio clip for song detection...")
+            logging.info(f"Recording {self.duration}s audio clip for song detection...")
             recording = sd.rec(
                 int(self.duration * self.sample_rate),
                 samplerate=self.sample_rate,
@@ -123,14 +115,6 @@ class SongDetector:
             )
             sd.wait()  # Wait for recording to complete
             
-            # Check if we actually recorded something
-            import numpy as np
-            max_val = np.max(np.abs(recording))
-            logging.info(f"  Recording complete (max amplitude: {max_val})")
-            
-            if max_val < 100:  # Very quiet
-                logging.warning("  ⚠ Recording is very quiet - mic might not be working")
-            
             # Save to WAV file
             with wave.open(temp_filename, 'wb') as wf:
                 wf.setnchannels(self.channels)
@@ -138,7 +122,7 @@ class SongDetector:
                 wf.setframerate(self.sample_rate)
                 wf.writeframes(recording.tobytes())
             
-            logging.info(f"  Audio saved to {temp_filename}")
+            logging.info(f"Audio saved to {temp_filename}")
             
             # Process in a separate thread
             processing_thread = threading.Thread(
@@ -146,12 +130,6 @@ class SongDetector:
                 args=(temp_filename,),
                 daemon=True
             )
-            processing_thread.start()
-            
-        except Exception as e:
-            logging.error(f"Error recording audio for song detection: {e}")
-            import traceback
-            logging.error(traceback.format_exc()) )
             processing_thread.start()
             
         except Exception as e:
@@ -165,7 +143,10 @@ class SongDetector:
             asyncio.set_event_loop(loop)
             
             # Run Shazam recognition
-              # Process result
+            result = loop.run_until_complete(self._recognize_song(audio_file))
+            loop.close()
+            
+            # Process result
             if result and 'track' in result:
                 track = result['track']
                 title = track.get('title', 'Unknown')
@@ -175,20 +156,10 @@ class SongDetector:
                     self.latest_song = {
                         "title": title,
                         "artist": artist,
-                        "timestamp": time.time(),
-                        "confidence": 1.0  # Shazam doesn't provide confidence, assume high if matched
+                        "timestamp": time.time()
                     }
                 
-                logging.info(f"✅ Song detected: {title} by {artist}")
-            else:
-                logging.info("❌ No song detected (silence or unrecognized)")
-                with self.lock:
-                    self.latest_song = {
-                        "title": "Unknown",
-                        "artist": "Unknown", 
-                        "timestamp": time.time(),
-                        "confidence": 0.0
-                    }             logging.info(f"Song detected: {title} by {artist}")
+                logging.info(f"Song detected: {title} by {artist}")
             else:
                 logging.info("No song detected")
             
