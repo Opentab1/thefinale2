@@ -7,10 +7,17 @@ ConditionPathExists=!/opt/pulse/config/.wizard_complete
 Type=simple
 User=pi
 WorkingDirectory=/opt/pulse
+Environment="PYTHONPATH=/opt/pulse"
+# Ensure required dirs exist before starting
+ExecStartPre=/bin/mkdir -p /var/log/pulse /opt/pulse/config
 ExecStart=/opt/pulse/venv/bin/python3 /opt/pulse/bootstrap/wizard/server.py
-Restart=on-failure
+Restart=always
 RestartSec=5
 TimeoutStartSec=30
+
+# Logging
+StandardOutput=append:/var/log/pulse/wizard.log
+StandardError=append:/var/log/pulse/wizard-error.log
 
 [Install]
 WantedBy=multi-user.target

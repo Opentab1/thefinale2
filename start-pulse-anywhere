@@ -1,0 +1,49 @@
+#!/bin/bash
+#
+# PULSE - Universal Startup Command
+# Works from anywhere, auto-detects installation location
+#
+
+# Find where this script is located
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+
+# Auto-detect Pulse installation
+PULSE_DIR=""
+
+if [ -f "$SCRIPT_DIR/services/hub/main.py" ]; then
+    PULSE_DIR="$SCRIPT_DIR"
+elif [ -f "/workspace/services/hub/main.py" ]; then
+    PULSE_DIR="/workspace"
+elif [ -f "/opt/pulse/services/hub/main.py" ]; then
+    PULSE_DIR="/opt/pulse"
+elif [ -f "$HOME/pulse/services/hub/main.py" ]; then
+    PULSE_DIR="$HOME/pulse"
+elif [ -f "$HOME/Pulse/services/hub/main.py" ]; then
+    PULSE_DIR="$HOME/Pulse"
+else
+    # Last resort: search for it
+    FOUND=$(find "$HOME" /opt /workspace -name "main.py" -path "*/services/hub/*" 2>/dev/null | head -1)
+    if [ -n "$FOUND" ]; then
+        PULSE_DIR="$(dirname "$(dirname "$(dirname "$FOUND")")")"
+    fi
+fi
+
+if [ -z "$PULSE_DIR" ] || [ ! -f "$PULSE_DIR/services/hub/main.py" ]; then
+    echo "❌ ERROR: Cannot find Pulse installation"
+    echo ""
+    echo "Searched:"
+    echo "  - $SCRIPT_DIR"
+    echo "  - /workspace"
+    echo "  - /opt/pulse"
+    echo "  - $HOME/pulse"
+    echo ""
+    echo "Please install Pulse first or run this command from the Pulse directory"
+    exit 1
+fi
+
+echo "✓ Found Pulse at: $PULSE_DIR"
+
+# Run the startup script
+cd "$PULSE_DIR"
+exec bash "$PULSE_DIR/START_HERE.sh"

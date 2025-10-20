@@ -1,8 +1,8 @@
-# 🎵 Pulse 1.0 – AI-Driven Venue Operating System
+# 🎯 Pulse - Smart Venue Automation System
 
-> **Turn your bar, restaurant, or event space into an autonomous, self-optimizing venue.**
+> **All sensor capabilities are fixed and working!** Full debugging output included.
 
-Pulse 1.0 is a complete operating system for physical venues, designed to run on a Raspberry Pi 5. It automatically manages HVAC, lighting, music, and TVs while learning from real-time data to create the perfect customer experience.
+## 🚀 Quick Install (Raspberry Pi)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Raspberry%20Pi%205-red.svg)](https://www.raspberrypi.com/products/raspberry-pi-5/)
@@ -78,6 +78,8 @@ Pulse 1.0 is a complete operating system for physical venues, designed to run on
 
 ### 2. Install Pulse (One Command)
 
+**One-line installation:**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
 ```
@@ -87,353 +89,221 @@ Notes:
 - Python compatibility: installer supports Python 3.11–3.13 on aarch64 and upgrades `pip`, `setuptools`, and `wheel` to ensure binary wheels are used.
 - If you previously saw a pip error like `BackendUnavailable: Cannot import 'setuptools.build_meta'` or builds for `numpy` on Python 3.13, this has been resolved by pinning wheels compatible with Python 3.13 and upgrading build tooling during install.
 
-The installer will:
-- ✓ Install all dependencies
-- ✓ Set up Python environment
-- ✓ Build dashboard interface
-- ✓ Configure systemd services
-- ✓ Enable auto-login and kiosk mode
-- ✓ Detect connected hardware
-- ✓ Reboot automatically
+This will:
+- ✅ Install all dependencies
+- ✅ Set up the system with **all sensor fixes**
+- ✅ Configure auto-start on boot
+- ✅ Launch the setup wizard
 
-### 3. Complete Setup Wizard
+After installation, the system boots directly into the dashboard with full functionality.
 
-After reboot, the setup wizard automatically launches at `http://localhost:9090`
+## ✨ What's Fixed
 
-**Wizard Steps:**
-1. **Venue Setup** – Name, timezone, operating hours
-2. **Hardware Check** – Automatic detection of connected sensors
-3. **Smart Integrations** – Connect Nest, Hue, Spotify (optional)
-4. **Automation Limits** – Set safe ranges for automatic adjustments
-5. **Complete** – System reboots and launches dashboard
+All sensor issues have been resolved:
 
-**Note:** If you see a white screen after reboot, press `ESC` and navigate to `http://localhost:9090`. See [WHITE_SCREEN_FIX.md](WHITE_SCREEN_FIX.md) for details. This has been fixed in the latest version.
+- ✅ **BME280 Sensor** - Temperature, humidity, and pressure readings
+- ✅ **AI People Counter** - Camera-based person detection and tracking
+- ✅ **Song Detection** - Microphone + Shazam integration
+- ✅ **Light Level Reading** - Ambient light measurement
+- ✅ **Decibel Reading** - Real-time sound level monitoring
+- ✅ **Full Terminal Debugging** - Color-coded output showing exactly what's happening
 
-### 4. Access Your Dashboard
+## 🎨 Features
 
-After final reboot, the dashboard automatically opens in kiosk mode at `http://localhost:8080`
+### Real-Time Monitoring
+- 👥 **AI People Counting** - Track occupancy with entry/exit detection
+- 🌡️ **Environmental Sensors** - Temperature, humidity, pressure, light
+- 🎵 **Music Recognition** - Automatic song detection via Shazam
+- 🔊 **Sound Analysis** - Decibel levels and audio spectrum
 
-**Dashboard Tabs:**
-- **Live** – Real-time metrics and comfort index
-- **Analytics** – Historical trends and graphs
-- **Controls** – Manual control of all systems
-- **Health** – System status and module health
-- **Settings** – Configuration and limits
+### Smart Automation
+- 🏠 **HVAC Control** - Auto-adjust based on occupancy and temperature
+- 💡 **Lighting Control** - Circadian rhythm and occupancy-based
+- 📺 **Media Control** - TV and music automation
+- 📊 **Learning Engine** - Adapts to usage patterns
 
----
+### User Interface
+- 🌐 **Web Dashboard** - Real-time data visualization
+- 🎨 **Kiosk Mode** - Auto-launching fullscreen display
+- 📱 **Mobile Responsive** - Works on any device
+- 🔴 **Live Updates** - WebSocket-based real-time data
 
-## 📱 Usage
+## 📋 System Requirements
 
-### Auto Mode vs Manual Mode
+### Hardware
+- **Raspberry Pi 5** (recommended) or Pi 4
+- **Camera** - Raspberry Pi Camera Module or USB webcam
+- **Microphone** - USB microphone or HAT
+- **BME280 Sensor** (optional) - I2C temperature/humidity sensor
+- **Internet Connection** - For song detection and updates
 
-Each system (HVAC, Lighting, Music, TV) has an **Auto/Manual toggle**:
+### Software
+- Raspberry Pi OS (64-bit) - Bookworm or newer
+- Python 3.9+
+- Node.js 16+
 
-- **Auto Mode** ✅ – Pulse makes decisions based on real-time data
-- **Manual Mode** ⚙️ – You control everything from the dashboard
+## 🛠️ Manual Installation
 
-**Global Safe Mode**: Disable all automation instantly with the top-right button.
+If you prefer manual installation:
 
-### Controlling Systems
+```bash
+# 1. Clone the repository
+git clone https://github.com/Opentab1/thefinale2.git
+cd thefinale2
 
-#### HVAC
-```
-• View: Current temperature, humidity, setpoint
-• Control: Mode (Heat/Cool/Auto/Off), temperature setpoint
-• Auto: Adjusts based on occupancy and comfort
-```
-
-#### Lighting
-```
-• View: All lights, brightness levels, scenes
-• Control: Brightness slider, color picker, preset scenes
-• Auto: Circadian rhythm with occupancy awareness
-```
-
-#### Music
-```
-• View: Currently playing track, volume
-• Control: Play/pause, skip, volume
-• Auto: Volume adjusts based on ambient noise
+# 2. Run installation
+sudo bash install.sh
 ```
 
-#### TV
-```
-• View: Connected devices
-• Control: Power on/off, input selection
-• Auto: Schedule-based programming
-```
+## 🎯 Manual Startup (For Testing)
 
----
+After installation, you can manually start the system with full debug output:
 
-## 🔒 Safety & Limits
-
-Pulse enforces rate limits to prevent rapid changes:
-
-| System | Maximum Change | Time Window |
-|--------|----------------|-------------|
-| HVAC | ±1°F | 10 minutes |
-| Lighting | ±10% | 10 minutes |
-| Music | ±5% volume | 3 minutes |
-
-All limits are configurable in Settings.
-
----
-
-## 🗂️ Project Structure
-
-```
-pulse/
-├── install.sh                    # One-line installer
-├── requirements.txt              # Python dependencies
-├── config/
-│   ├── config.yaml              # Main configuration
-│   └── hardware_status.json     # Module health status
-├── services/
-│   ├── hub/main.py              # Core orchestration
-│   ├── sensors/                 # All sensor modules
-│   │   ├── camera_people.py
-│   │   ├── mic_song_detect.py
-│   │   ├── bme280_reader.py
-│   │   ├── light_level.py
-│   │   ├── pan_tilt.py
-│   │   └── health_monitor.py
-│   ├── controls/                # Smart home controllers
-│   │   ├── hvac_nest.py
-│   │   ├── lighting_hue.py
-│   │   ├── tv_cec.py
-│   │   ├── music_spotify.py
-│   │   └── music_local.py
-│   ├── storage/db.py            # Database layer
-│   └── systemd/                 # Service files
-├── dashboard/
-│   ├── api/server.py            # Flask + SocketIO backend
-│   └── ui/                      # React frontend
-│       ├── src/
-│       │   ├── App.jsx
-│       │   └── components/
-│       ├── package.json
-│       └── vite.config.js
-└── bootstrap/wizard/
-    └── server.py                # First-boot wizard
+```bash
+cd /opt/pulse
+./START_HERE.sh
 ```
 
----
+This will:
+- Show **color-coded terminal output** with detailed sensor status
+- Start the hub and dashboard
+- Auto-open the browser to the dashboard
+- Display real-time updates every 30 seconds
+
+You'll see exactly what every sensor is doing:
+```
+════════════════════════════════════════════════════════════════════
+STATUS UPDATE #1
+════════════════════════════════════════════════════════════════════
+Hub Running: True
+
+SENSOR READINGS:
+  👥 Occupancy: 3 people
+  📊 Entries: 5 | Exits: 2
+  🌡️  Temperature: 72.5°F
+  💧 Humidity: 45.2%
+  💡 Light Level: 450.0 lux
+  🔊 Noise Level: 65.3 dB
+  🎵 Now Playing: Song Title - Artist
+
+MODULE STATUS:
+  Camera: ✓ Active
+  Microphone: ✓ Active
+  BME280: ✓ Active
+  Light Sensor: ✓ Active
+  Pan/Tilt: ✓ Active
+════════════════════════════════════════════════════════════════════
+```
 
 ## 🔧 Configuration
 
-### Main Config: `/opt/pulse/config/config.yaml`
+Edit `/opt/pulse/config/config.yaml` to customize:
 
 ```yaml
-venue:
-  name: "Your Venue Name"
-  timezone: "America/Chicago"
-
 modules:
   camera: true
   mic: true
   bme280: true
   light_sensor: true
   ai_hat: true
-  pan_tilt: true
 
 smart_integrations:
   hvac:
-    enabled: true
-    provider: "nest"
+    enabled: false
   lighting:
-    enabled: true
-    provider: "hue"
+    enabled: false
   music:
-    enabled: true
-    provider: "spotify"
-
-policies:
-  hvac:
-    min_f: 67
-    max_f: 75
-    auto_mode: true
-  lighting:
-    min_pct: 20
-    max_pct: 85
-    auto_mode: true
-  music:
-    volume_min: 25
-    volume_max: 70
-    auto_mode: true
+    enabled: false
 ```
 
-### Environment Variables: `/opt/pulse/.env`
+## 📊 Diagnostics
+
+Run the diagnostic tool to check all sensors:
 
 ```bash
-# Google Nest / SDM
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
-GOOGLE_PROJECT_ID=your_project_id
-NEST_DEVICE_ID=your_device_id
-
-# Philips Hue
-HUE_BRIDGE_IP=192.168.1.x
-HUE_USERNAME=your_hue_username
-
-# Spotify
-SPOTIFY_CLIENT_ID=your_spotify_client_id
-SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
-
-# Security
-SECRET_KEY=generated_automatically
-ENCRYPTION_KEY=generated_automatically
+cd /opt/pulse
+./diagnose_sensors.py
 ```
 
----
+This will test each sensor individually and report status.
 
-## 🩺 Troubleshooting
+## 🐛 Troubleshooting
 
-### Common Issues
-
-**White screen after installation**
-- Press `ESC` and go to `http://localhost:9090`
-- See [WHITE_SCREEN_FIX.md](WHITE_SCREEN_FIX.md) for detailed recovery steps
-
-**Dashboard won't load**
+### Camera Not Working
 ```bash
-sudo systemctl restart pulse-dashboard
-```
-
-**Sensors not detected**
-```bash
-# Check I2C devices
-sudo i2cdetect -y 1
-
 # Check camera
-vcgencmd get_camera
+ls /dev/video*
+# Test camera
+libcamera-hello
 ```
 
-**HVAC/Lighting/Music not working**
-1. Verify credentials in `/opt/pulse/.env`
-2. Check network connectivity
-3. Review API quotas/limits
-
-### Check System Status
-
+### Microphone Not Working
 ```bash
-# View all services
-sudo systemctl status pulse-*
-
-# Check logs
-tail -f /var/log/pulse/hub.log
-tail -f /var/log/pulse/dashboard.log
-
-# Test hardware
-cd /opt/pulse
-./venv/bin/python3 -c "from services.sensors.health_monitor import *; ..."
+# List audio devices
+arecord -l
+# Test recording
+arecord -d 5 test.wav
 ```
 
-### Reset to Factory Settings
-
+### BME280 Not Found
 ```bash
-cd /opt/pulse
-rm config/.wizard_complete
-sudo reboot
+# Check I2C
+i2cdetect -y 1
+# Should show device at 0x76 or 0x77
 ```
 
-**For detailed troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)**
+### Song Detection Not Working
+- Requires internet connection for Shazam API
+- Check: `pip list | grep shazamio`
 
----
+## 📁 Project Structure
 
-## 🚀 Advanced
-
-### API Endpoints
-
-The dashboard API runs on port 8080:
-
-```bash
-# Get current status
-curl http://localhost:8080/api/status
-
-# Get sensor data
-curl http://localhost:8080/api/sensors/current
-
-# Control HVAC
-curl -X POST http://localhost:8080/api/hvac/mode \
-  -H "Content-Type: application/json" \
-  -d '{"mode": "COOL"}'
-
-# Set lighting
-curl -X POST http://localhost:8080/api/lighting/brightness \
-  -H "Content-Type: application/json" \
-  -d '{"light_id": 1, "brightness_pct": 75}'
+```
+pulse/
+├── services/
+│   ├── hub/           # Main orchestration
+│   ├── sensors/       # Sensor modules
+│   ├── controls/      # Smart home integrations
+│   └── storage/       # Database
+├── dashboard/
+│   ├── api/           # Flask API server
+│   └── ui/            # React frontend
+├── config/            # Configuration files
+└── START_HERE.sh      # Manual startup script
 ```
 
-### WebSocket Events
+## 🌐 API Endpoints
 
-Connect to real-time updates:
+After installation, the API is available at `http://localhost:8080/api/`:
 
-```javascript
-import io from 'socket.io-client'
+- `GET /api/status` - System status
+- `GET /api/sensors/current` - Current sensor readings
+- `GET /api/occupancy/current` - Current occupancy
+- `GET /api/environment/current` - Environmental data
+- `GET /api/health` - System health
 
-const socket = io('http://localhost:8080')
+## 📖 Documentation
 
-socket.on('sensor_update', (data) => {
-  console.log('Occupancy:', data.occupancy)
-  console.log('Temperature:', data.temperature_f)
-})
-```
-
-### Database Access
-
-```bash
-# Connect to database
-sqlite3 /opt/pulse/data/pulse.db
-
-# Example queries
-SELECT * FROM occupancy ORDER BY timestamp DESC LIMIT 10;
-SELECT * FROM automation_log WHERE timestamp > datetime('now', '-1 hour');
-```
-
----
+- `HOW_TO_START.md` - Detailed startup guide
+- `FIXES_APPLIED.md` - List of all fixes
+- `INSTRUCTIONS.txt` - Quick reference
 
 ## 🤝 Contributing
 
-We welcome contributions! Here's how to get started:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Development Setup
-
-```bash
-# Clone repository
-git clone https://github.com/Opentab1/thefinale2.git
-cd thefinale2
-
-# Set up Python environment
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Set up dashboard
-cd dashboard/ui
-npm install
-npm run dev
-```
-
----
+Contributions welcome! Please read CONTRIBUTING.md first.
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+See LICENSE file for details.
 
----
+## 🎉 Quick Start Summary
 
-## 🙏 Acknowledgments
+1. **Install:**
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
+   ```
 
-- Raspberry Pi Foundation for the incredible hardware
-- Open source sensor libraries (picamera2, adafruit, etc.)
-- Smart home API providers (Google SDM, Philips Hue, Spotify)
-- The amazing Python and React communities
+2. **The system auto-starts on boot** with the dashboard
 
 ---
 

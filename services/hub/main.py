@@ -70,53 +70,78 @@ class PulseHub:
         modules = self.config.get('modules', {})
         integrations = self.config.get('smart_integrations', {})
         
+        logger.info("="*80)
+        logger.info("INITIALIZING SYSTEM COMPONENTS")
+        logger.info("="*80)
+        
         # Initialize sensors
+        logger.info("\n🎥 Initializing Camera/People Counter...")
         if modules.get('camera'):
             try:
                 use_ai_hat = modules.get('ai_hat', False)
+                logger.info(f"  - AI HAT acceleration: {'Enabled' if use_ai_hat else 'Disabled'}")
                 self.people_counter = PeopleCounter(use_ai_hat=use_ai_hat)
                 self.health_monitor.register_test("camera", lambda: True)
-                logger.info("People counter initialized")
+                logger.info("  ✓ People counter initialized successfully")
             except Exception as e:
-                logger.warning(f"Could not initialize people counter: {e}")
+                logger.error(f"  ✗ Could not initialize people counter: {e}", exc_info=True)
+        else:
+            logger.info("  - Disabled in config")
         
+        logger.info("\n🎤 Initializing Microphone/Audio Monitor...")
         if modules.get('mic'):
             try:
                 self.audio_monitor = AudioMonitor()
                 self.health_monitor.register_test("mic", lambda: True)
-                logger.info("Audio monitor initialized")
+                logger.info("  ✓ Audio monitor initialized successfully")
             except Exception as e:
-                logger.warning(f"Could not initialize audio monitor: {e}")
+                logger.error(f"  ✗ Could not initialize audio monitor: {e}", exc_info=True)
+        else:
+            logger.info("  - Disabled in config")
         
+        logger.info("\n🌡️  Initializing BME280 Sensor...")
         if modules.get('bme280'):
             try:
                 self.bme280 = BME280Reader()
                 self.health_monitor.register_test("bme280", lambda: True)
-                logger.info("BME280 sensor initialized")
+                logger.info("  ✓ BME280 sensor initialized successfully")
             except Exception as e:
-                logger.warning(f"Could not initialize BME280: {e}")
+                logger.error(f"  ✗ Could not initialize BME280: {e}", exc_info=True)
+        else:
+            logger.info("  - Disabled in config")
         
+        logger.info("\n💡 Initializing Light Sensor...")
         if modules.get('light_sensor'):
             try:
                 self.light_sensor = LightSensor()
                 self.health_monitor.register_test("light_sensor", lambda: True)
-                logger.info("Light sensor initialized")
+                logger.info("  ✓ Light sensor initialized successfully")
             except Exception as e:
-                logger.warning(f"Could not initialize light sensor: {e}")
+                logger.error(f"  ✗ Could not initialize light sensor: {e}", exc_info=True)
+        else:
+            logger.info("  - Disabled in config")
         
+        logger.info("\n🔄 Initializing Pan-Tilt Controller...")
         if modules.get('pan_tilt'):
             try:
                 self.pan_tilt = PanTiltController()
                 self.health_monitor.register_test("pan_tilt", lambda: True)
-                logger.info("Pan-tilt controller initialized")
+                logger.info("  ✓ Pan-tilt controller initialized successfully")
             except Exception as e:
-                logger.warning(f"Could not initialize pan-tilt: {e}")
+                logger.error(f"  ✗ Could not initialize pan-tilt: {e}", exc_info=True)
+        else:
+            logger.info("  - Disabled in config")
         
         # Initialize controllers
+        logger.info("\n🏠 Initializing Smart Home Controllers...")
         self._init_hvac(integrations.get('hvac', {}))
         self._init_lighting(integrations.get('lighting', {}))
         self._init_tv(integrations.get('tv', {}))
         self._init_music(integrations.get('music', {}))
+        
+        logger.info("\n" + "="*80)
+        logger.info("COMPONENT INITIALIZATION COMPLETE")
+        logger.info("="*80)
     
     def _init_hvac(self, config: dict):
         """Initialize HVAC controller"""
@@ -200,28 +225,59 @@ class PulseHub:
             logger.warning("Hub already running")
             return
         
+        logger.info("\n" + "="*80)
+        logger.info("STARTING ALL SENSORS AND SERVICES")
+        logger.info("="*80)
+        
         self.running = True
         self.stop_event.clear()
         
         # Start sensors
         if self.people_counter:
-            self.people_counter.start_counting()
+            logger.info("🎥 Starting people counter...")
+            try:
+                self.people_counter.start_counting()
+                logger.info("  ✓ People counter started")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to start people counter: {e}", exc_info=True)
         
         if self.audio_monitor:
-            self.audio_monitor.start_monitoring()
+            logger.info("🎤 Starting audio monitor...")
+            try:
+                self.audio_monitor.start_monitoring()
+                logger.info("  ✓ Audio monitor started")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to start audio monitor: {e}", exc_info=True)
         
         if self.bme280:
-            self.bme280.start_reading(interval=30)
+            logger.info("🌡️  Starting BME280 sensor...")
+            try:
+                self.bme280.start_reading(interval=30)
+                logger.info("  ✓ BME280 sensor started")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to start BME280: {e}", exc_info=True)
         
         if self.light_sensor:
-            self.light_sensor.start_monitoring(interval=30)
+            logger.info("💡 Starting light sensor...")
+            try:
+                interval = int(os.getenv('LIGHT_UPDATE_INTERVAL_SEC', '180'))
+            except Exception:
+                interval = 180
+            try:
+                self.light_sensor.start_monitoring(interval=interval)
+                logger.info(f"  ✓ Light sensor started (interval: {interval}s)")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to start light sensor: {e}", exc_info=True)
         
         # Start main loop
+        logger.info("🔄 Starting main control loop...")
         thread = Thread(target=self._main_loop)
         thread.daemon = True
         thread.start()
         
-        logger.info("Pulse Hub started")
+        logger.info("\n" + "="*80)
+        logger.info("✓ PULSE HUB STARTED SUCCESSFULLY")
+        logger.info("="*80 + "\n")
     
     def _main_loop(self):
         """Main hub loop"""
@@ -253,6 +309,9 @@ class PulseHub:
         data = {
             "timestamp": datetime.now().isoformat(),
             "occupancy": 0,
+            "entries": 0,
+            "exits": 0,
+            "traffic": None,
             "temperature_f": None,
             "humidity": None,
             "light_level": None,
@@ -261,7 +320,16 @@ class PulseHub:
         }
         
         if self.people_counter:
+            # Current occupancy
             data["occupancy"] = self.people_counter.get_current_count()
+            # Entry/exit granulars
+            try:
+                stats = self.people_counter.get_traffic_stats()
+                data["traffic"] = stats
+                data["entries"] = int(stats.get("entry_count", 0))
+                data["exits"] = int(stats.get("exit_count", 0))
+            except Exception:
+                pass
         
         if self.bme280:
             readings = self.bme280.get_all_readings()
@@ -274,15 +342,34 @@ class PulseHub:
         if self.audio_monitor:
             data["noise_db"] = self.audio_monitor.get_current_db()
             data["current_song"] = self.audio_monitor.get_current_song()
+
+        # Fallback: if no song detected via mic, use music controller's current track
+        if (not data.get("current_song") or data["current_song"].get("title") in (None, "Unknown")) and self.music_controller:
+            try:
+                track = self.music_controller.get_current_track() or {}
+                if track.get("title") or track.get("name"):
+                    data["current_song"] = {
+                        "title": track.get("title") or track.get("name"),
+                        "artist": track.get("artist") or track.get("artists", ''),
+                        "confidence": 1.0,
+                        "timestamp": datetime.now().isoformat()
+                    }
+            except Exception:
+                pass
         
         return data
     
     def _store_sensor_data(self, data: dict):
         """Store sensor data in database"""
         try:
-            # Occupancy
+            # Occupancy + traffic
             if data.get("occupancy") is not None:
-                self.db.log_occupancy("Main Floor", data["occupancy"])
+                self.db.log_occupancy(
+                    "Main Floor",
+                    int(data["occupancy"]),
+                    entry_count=int(data.get("entries", 0)),
+                    exit_count=int(data.get("exits", 0))
+                )
             
             # Environment
             self.db.log_environment(
@@ -511,23 +598,64 @@ class PulseHub:
 
 
 if __name__ == "__main__":
+    # Enhanced logging for terminal debugging
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler('/var/log/pulse/hub.log')
+        ]
     )
+    
+    logger.info("="*80)
+    logger.info("PULSE HUB STARTING - DETAILED DEBUG MODE")
+    logger.info("="*80)
     
     hub = PulseHub()
     
     try:
         hub.start()
         
-        # Keep running
+        # Keep running with detailed status updates
+        iteration = 0
         while True:
-            time.sleep(60)
+            time.sleep(30)
+            iteration += 1
             status = hub.get_status()
-            logger.info(f"Status: {status['running']}, "
-                       f"Occupancy: {status['sensors'].get('occupancy', 0)}")
+            
+            logger.info("="*80)
+            logger.info(f"STATUS UPDATE #{iteration}")
+            logger.info("="*80)
+            logger.info(f"Hub Running: {status['running']}")
+            logger.info(f"")
+            logger.info(f"SENSOR READINGS:")
+            logger.info(f"  👥 Occupancy: {status['sensors'].get('occupancy', 0)} people")
+            logger.info(f"  📊 Entries: {status['sensors'].get('entries', 0)} | Exits: {status['sensors'].get('exits', 0)}")
+            logger.info(f"  🌡️  Temperature: {status['sensors'].get('temperature_f', 'N/A')}°F")
+            logger.info(f"  💧 Humidity: {status['sensors'].get('humidity', 'N/A')}%")
+            logger.info(f"  💡 Light Level: {status['sensors'].get('light_level', 'N/A')} lux")
+            logger.info(f"  🔊 Noise Level: {status['sensors'].get('noise_db', 'N/A')} dB")
+            
+            song = status['sensors'].get('current_song', {})
+            if song and song.get('title') not in (None, 'Unknown'):
+                logger.info(f"  🎵 Now Playing: {song.get('title')} - {song.get('artist')}")
+            else:
+                logger.info(f"  🎵 Now Playing: None detected")
+            
+            logger.info(f"")
+            logger.info(f"MODULE STATUS:")
+            modules = status.get('modules', {})
+            logger.info(f"  Camera: {'✓ Active' if modules.get('camera') else '✗ Inactive'}")
+            logger.info(f"  Microphone: {'✓ Active' if modules.get('mic') else '✗ Inactive'}")
+            logger.info(f"  BME280: {'✓ Active' if modules.get('bme280') else '✗ Inactive'}")
+            logger.info(f"  Light Sensor: {'✓ Active' if modules.get('light_sensor') else '✗ Inactive'}")
+            logger.info(f"  Pan/Tilt: {'✓ Active' if modules.get('pan_tilt') else '✗ Inactive'}")
+            
+            logger.info("="*80)
     
     except KeyboardInterrupt:
-        logger.info("\nStopping hub...")
+        logger.info("\n" + "="*80)
+        logger.info("STOPPING HUB - User Interrupt")
+        logger.info("="*80)
         hub.stop()

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pulse Kiosk</title>
+  <style>
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: #0b1020;
+      color: #e8ecff;
+      font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      width: min(760px, 92vw);
+      background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
+      border-radius: 16px;
+      padding: 28px 26px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0.3px; }
+    p { margin: 6px 0 0; color: #a9b4ff; }
+    .status { margin-top: 18px; font-size: 14px; color: #c6ceff; }
+    .row { display: flex; gap: 14px; margin-top: 14px; flex-wrap: wrap; }
+    .pill {
+      padding: 8px 12px; border-radius: 999px; font-size: 13px;
+      background: rgba(255,255,255,0.08); color: #cfe0ff; border: 1px solid rgba(255,255,255,0.12);
+    }
+    .spinner { width: 18px; height: 18px; border: 3px solid rgba(255,255,255,0.18); border-top-color: #7aa2ff; border-radius: 50%; display: inline-block; animation: spin 0.9s linear infinite; vertical-align: -3px; margin-right: 8px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .actions { margin-top: 18px; display: flex; gap: 10px; }
+    button { background: #3b56ff; color: #fff; border: none; border-radius: 10px; padding: 10px 14px; font-weight: 600; cursor: pointer; }
+    button.secondary { background: rgba(255,255,255,0.1); color: #e8ecff; }
+    .fine { font-size: 12px; color: #94a3ff; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Pulse is starting…</h1>
+    <p>We’ll open the Setup Wizard if this is your first boot, otherwise the Dashboard.</p>
+    <div class="status"><span class="spinner"></span><span id="statusText">Waiting for services…</span></div>
+    <div class="row">
+      <div class="pill" id="wizardPill">Wizard: checking</div>
+      <div class="pill" id="dashPill">Dashboard: checking</div>
+    </div>
+    <div class="actions">
+      <button onclick="location.reload()">Refresh</button>
+      <button class="secondary" onclick="openUrls()">Try open directly</button>
+    </div>
+    <div class="fine">If the screen stays here for more than a minute, check Wi‑Fi and power, then reboot.</div>
+  </div>
+
+  <script>
+    const wizardUrl = 'http://localhost:9090/';
+    const dashboardUrl = 'http://localhost:8080/';
+    const params = new URLSearchParams(location.search);
+    const preferred = params.get('preferred'); // 'wizard' | 'dashboard' | null
+    const statusText = document.getElementById('statusText');
+    const wizardPill = document.getElementById('wizardPill');
+    const dashPill = document.getElementById('dashPill');
+
+    let wizardKnown = false;
+    let wizardComplete = false;
+
+    function checkAlive(url, onOk, onFail) {
+      // Prefer fetch; fall back to Image probe if CORS/network blocks
+      fetch(url, { cache: 'no-store', mode: 'no-cors' })
+        .then(() => onOk())
+        .catch(() => {
+          const img = new Image();
+          const t = Date.now();
+          img.onload = () => onOk();
+          img.onerror = () => onFail();
+          img.src = (url.endsWith('/') ? url : url + '/') + '?probe=' + t;
+          setTimeout(() => { try { img.src = ''; } catch (e) {} }, 2500);
+        });
+    }
+
+    let openedWizard = false;
+    let openedDashboard = false;
+    function redirect(url, kind) {
+      statusText.textContent = 'Opening ' + url + '…';
+      if (kind === 'wizard' && !openedWizard) {
+        openedWizard = true;
+        window.open(url, '_blank');
+      } else if (kind === 'dashboard' && !openedDashboard) {
+        openedDashboard = true;
+        window.open(url, '_blank');
+      }
+    }
+
+    function openUrls() {
+      // Open in separate tabs so the fallback page remains accessible
+      window.open(wizardUrl, '_blank');
+      setTimeout(() => window.open(dashboardUrl, '_blank'), 800);
+    }
+
+    function checkWizardStatus(next) {
+      // Ask the wizard directly if setup is complete. If complete, prefer dashboard.
+      fetch(wizardUrl + 'api/wizard/status', { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(d => {
+          wizardKnown = true;
+          wizardComplete = !!(d.completed || d.flag_exists);
+          if (wizardComplete) wizardPill.textContent = 'Wizard: complete';
+        })
+        .catch(() => {/* ignore */})
+        .finally(() => next());
+    }
+
+    let tries = 0;
+    let dashOkCount = 0;
+    let wizOkCount = 0;
+    function tick() {
+      tries++;
+      checkWizardStatus(() => {
+        if (wizardKnown && wizardComplete) {
+          // Wizard complete: prefer dashboard
+          checkAlive(dashboardUrl + 'api/status',
+            () => {
+              dashPill.textContent = 'Dashboard: ready';
+              dashOkCount++;
+              if (dashOkCount >= 2 && !openedDashboard) {
+                // Double-confirm by probing root index as well
+                checkAlive(dashboardUrl,
+                  () => redirect(dashboardUrl, 'dashboard'),
+                  () => {/* wait next tick */}
+                );
+              }
+            },
+            () => {
+              dashPill.textContent = 'Dashboard: starting…';
+              dashOkCount = 0;
+            }
+          );
+        } else {
+          // During setup: prefer wizard if ready; otherwise dashboard
+          checkAlive(wizardUrl + 'api/wizard/status',
+            () => {
+              wizardPill.textContent = 'Wizard: ready';
+              wizOkCount++;
+              if ((!preferred || preferred === 'wizard') && wizOkCount >= 2 && !openedWizard) {
+                redirect(wizardUrl, 'wizard');
+              }
+            },
+            () => {
+              wizardPill.textContent = 'Wizard: starting…';
+              wizOkCount = 0;
+            }
+          );
+          checkAlive(dashboardUrl + 'api/status',
+            () => {
+              dashPill.textContent = 'Dashboard: ready';
+              setTimeout(() => {
+                if (((preferred === 'dashboard') || !/ready$/.test(wizardPill.textContent)) && !openedDashboard) {
+                  // Second probe to root before opening
+                  checkAlive(dashboardUrl,
+                    () => redirect(dashboardUrl, 'dashboard'),
+                    () => {/* skip */}
+                  );
+                }
+              }, 500);
+            },
+            () => {
+              dashPill.textContent = 'Dashboard: starting…';
+            }
+          );
+        }
+
+        if (tries < 120) {
+          setTimeout(tick, 2000);
+        } else {
+          statusText.textContent = 'Still waiting… opening fallback tabs.';
+          // As a last resort, open both tabs to let the user pick
+          if (!openedWizard) window.open(wizardUrl, '_blank');
+          if (!openedDashboard) window.open(dashboardUrl, '_blank');
+        }
+      });
+    }
+
+    tick();
+  </script>
+</body>
+</html>
