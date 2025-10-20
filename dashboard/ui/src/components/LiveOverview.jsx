@@ -4,10 +4,9 @@ import { Users, Music, Volume2, Thermometer, Droplet, Sun, Cloud } from 'lucide-
 export default function LiveOverview({ sensorData }) {
   const [snapshotUrl, setSnapshotUrl] = useState('')
   useEffect(() => {
-    const makeUrl = () => `/api/camera/snapshot?ts=${Date.now()}`
-    setSnapshotUrl(makeUrl())
-    const interval = setInterval(() => setSnapshotUrl(makeUrl()), 3000)
-    return () => clearInterval(interval)
+    // Prefer MJPEG stream; fall back to periodic snapshots
+    const streamUrl = `/api/camera/stream`
+    setSnapshotUrl(streamUrl)
   }, [])
   const {
     occupancy = 0,
@@ -85,8 +84,7 @@ export default function LiveOverview({ sensorData }) {
                 src={snapshotUrl}
                 alt="Live camera"
                 className="w-full h-full object-cover"
-                onError={(e) => { e.currentTarget.style.display = 'none' }}
-                onLoad={(e) => { e.currentTarget.style.display = 'block' }}
+                onError={(e) => { e.currentTarget.src = `/api/camera/snapshot?ts=${Date.now()}` }}
               />
             ) : (
               <span className="text-gray-400 text-sm">No camera snapshot available</span>

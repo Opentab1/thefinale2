@@ -264,6 +264,40 @@ def camera_snapshot():
         return ("Error", 500)
 
 
+@app.route('/api/camera/stream')
+def camera_stream():
+    """Simple MJPEG stream sourced from the latest saved snapshot.
+
+    This avoids direct camera access in the API process and reuses the
+    background PeopleCounter's annotated snapshot for an overlaid feed.
+    """
+    try:
+        boundary = 'frame'
+        snapshot_path = Path('/opt/pulse/data/latest_camera.jpg')
+
+        def generate():
+            last_mtime = 0
+            while True:
+                try:
+                    if snapshot_path.exists():
+                        mtime = int(snapshot_path.stat().st_mtime)
+                        if mtime != last_mtime:
+                            last_mtime = mtime
+                            with open(snapshot_path, 'rb') as f:
+                                frame = f.read()
+                            yield (b"--" + boundary.encode() + b"\r\n"
+                                   b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
+                    # Throttle to ~5 FPS when updates are available
+                    time.sleep(0.2)
+                except Exception:
+                    time.sleep(0.5)
+
+        return Response(generate(), mimetype=f'multipart/x-mixed-replace; boundary={boundary}')
+    except Exception as e:
+        logger.error(f"Error starting camera stream: {e}")
+        return ("Error", 500)
+
+
 # ===== Control API Routes =====
 
 @app.route('/api/hvac/status', methods=['GET'])
