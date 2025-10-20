@@ -37,6 +37,12 @@ logger = logging.getLogger(__name__)
 
 class AudioMonitor:
     def __init__(self, device_index: int = None, sample_rate: int = 44100, chunk_size: int = 2048):
+        # Allow overriding device/backend from environment for quick field fixes
+        env_dev = os.getenv('PULSE_MIC_DEVICE_INDEX')
+        try:
+            device_index = int(env_dev) if env_dev is not None else device_index
+        except Exception:
+            pass
         self.device_index = device_index
         self.sample_rate = sample_rate
         self.chunk_size = chunk_size

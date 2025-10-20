@@ -126,6 +126,7 @@ class LightSensor:
         """Main monitoring loop"""
         camera = None
         use_picamera = False
+        # Allow operator override to force direct camera mode or snapshot
         source = os.getenv('PULSE_LIGHT_SOURCE', 'snapshot').strip().lower()
         
         try:
