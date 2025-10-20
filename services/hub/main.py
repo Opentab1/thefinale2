@@ -107,11 +107,20 @@ class PulseHub:
         logger.info("\n🌡️  Initializing BME280 Sensor...")
         if modules.get('bme280'):
             try:
-                self.bme280 = BME280Reader()
+                # Try default address first (0x76), then 0x77
+                # BME280Reader will automatically try both addresses
+                self.bme280 = BME280Reader(address=0x76)
                 self.health_monitor.register_test("bme280", lambda: True)
                 logger.info("  ✓ BME280 sensor initialized successfully")
             except Exception as e:
-                logger.error(f"  ✗ Could not initialize BME280: {e}", exc_info=True)
+                logger.warning(f"  ⚠ BME280 at 0x76 failed, trying 0x77: {e}")
+                try:
+                    self.bme280 = BME280Reader(address=0x77)
+                    self.health_monitor.register_test("bme280", lambda: True)
+                    logger.info("  ✓ BME280 sensor initialized successfully at 0x77")
+                except Exception as e2:
+                    logger.error(f"  ✗ Could not initialize BME280 at any address: {e2}")
+                    self.bme280 = None
         else:
             logger.info("  - Disabled in config")
         
