@@ -193,7 +193,14 @@ cat >> /home/${USER}/.config/lxsession/LXDE-pi/autostart << EOF
 @xset s noblank
 EOF
 
-echo -e "${YELLOW}[10/10] Running hardware detection...${NC}"
+echo -e "${YELLOW}[10/10] Downloading AI detection models...${NC}"
+
+# Download person detection models
+if [ -f "$INSTALL_DIR/services/sensors/download_models.sh" ]; then
+    bash "$INSTALL_DIR/services/sensors/download_models.sh"
+fi
+
+echo -e "${YELLOW}[11/11] Running hardware detection...${NC}"
 
 # Run hardware detection
 cd "$INSTALL_DIR"
