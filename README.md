@@ -4,11 +4,90 @@
 
 ## 🚀 Quick Install (Raspberry Pi)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Raspberry%20Pi%205-red.svg)](https://www.raspberrypi.com/products/raspberry-pi-5/)
+[![Python](https://img.shields.io/badge/Python-3.11%E2%80%933.13-green.svg)](https://www.python.org/)
+
+---
+
+## ✨ Features
+
+### 🧠 **Intelligent Automation**
+- **HVAC Control**: Automatically adjusts temperature based on occupancy, time, and comfort metrics
+- **Smart Lighting**: Circadian rhythm-based lighting with automatic scene selection
+- **Music Management**: Dynamic volume and playlist adjustment based on ambient noise and crowd energy
+- **TV Control**: Scheduled content with event awareness
+
+### 📊 **Real-Time Sensing**
+- **People Counting**: Computer vision-based occupancy tracking with entry/exit detection
+- **Audio Monitoring**: Song detection and decibel level measurement
+- **Environmental Sensors**: Temperature, humidity, pressure, and light level monitoring
+- **Comfort Index**: Real-time calculation of venue comfort based on multiple factors
+
+### 🎛️ **Full Control Dashboard**
+- **Live Overview**: Real-time metrics and current conditions
+- **Analytics**: Historical trends and data visualization
+- **Manual Controls**: Override automation for any system
+- **Auto/Manual Toggle**: Switch between autonomous and manual modes per system
+- **System Health**: Module status and resource monitoring
+
+### 🔧 **Self-Healing Architecture**
+- Automatic hardware detection on startup
+- Graceful degradation when sensors fail
+- Continuous health monitoring with auto-recovery
+- Modular design - every component is optional
+
+### 🚀 **Zero-Touch Setup**
+- One-line installation command
+- Interactive setup wizard on first boot
+- Auto-launch dashboard in kiosk mode
+- No coding required after installation
+
+---
+
+## 🛠️ Hardware Requirements
+
+### Required
+- **Raspberry Pi 5 (8 GB)** – Core compute + display
+- **Power Supply** – Official USB-C power adapter
+- **MicroSD Card** – 32GB+ for Raspberry Pi OS
+
+### Recommended Sensors
+| Component | Purpose | Link |
+|-----------|---------|------|
+| **Waveshare Pan-Tilt HAT** | Camera motion control | [Amazon](https://www.amazon.com/Waveshare-Pan-Tilt-HAT-Raspberry-Intensity/dp/B07PPV122Z/) |
+| **USB Microphone** | Audio detection | [Amazon](https://www.amazon.com/dp/B071WH7FC6) |
+| **BME280 Sensor** | Temperature/humidity/pressure | [Amazon](https://www.amazon.com/dp/B088HJHJXG) |
+| **AI Hat for Pi 5** | Hardware accelerated vision | [Official Site](https://www.raspberrypi.com/products/ai-hat/) |
+
+### Optional Smart Home Integrations
+- **Google Nest Thermostat** (HVAC control)
+- **Philips Hue Bridge + Bulbs** (lighting control)
+- **TVs with HDMI-CEC** (TV control)
+- **Spotify Premium** (music streaming)
+
+---
+
+## ⚡ Quick Start
+
+### 1. Prepare Your Raspberry Pi
+
+1. **Flash Raspberry Pi OS (64-bit)** to your microSD card using [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
+2. Boot your Pi and ensure it's connected to the internet
+3. Open a terminal
+
+### 2. Install Pulse (One Command)
+
 **One-line installation:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
 ```
+
+Notes:
+- Raspberry Pi OS Bookworm: the installer uses `chromium` and `libopenblas-dev` (replacing the older `chromium-browser` and `libatlas-base-dev`).
+- Python compatibility: installer supports Python 3.11–3.13 on aarch64 and upgrades `pip`, `setuptools`, and `wheel` to ensure binary wheels are used.
+- If you previously saw a pip error like `BackendUnavailable: Cannot import 'setuptools.build_meta'` or builds for `numpy` on Python 3.13, this has been resolved by pinning wheels compatible with Python 3.13 and upgrading build tooling during install.
 
 This will:
 - ✅ Install all dependencies
@@ -226,10 +305,37 @@ See LICENSE file for details.
 
 2. **The system auto-starts on boot** with the dashboard
 
-3. **For manual testing with debug output:**
-   ```bash
-   cd /opt/pulse
-   ./START_HERE.sh
-   ```
+---
 
-**That's it!** All sensors work, full debugging included. 🚀
+## 📞 Support
+
+- **Documentation**: [GitHub Wiki](https://github.com/Opentab1/thefinale2/wiki)
+- **Issues**: [GitHub Issues](https://github.com/Opentab1/thefinale2/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/Opentab1/thefinale2/discussions)
+
+---
+
+## 🗺️ Roadmap
+
+### v1.1 (Coming Soon)
+- [ ] Multi-zone support
+- [ ] Mobile app (iOS/Android)
+- [ ] Advanced ML models for predictive automation
+- [ ] Integration with more smart home platforms
+- [ ] Cloud sync for multi-location venues
+
+### v2.0 (Future)
+- [ ] Voice control integration
+- [ ] Customer analytics dashboard
+- [ ] Revenue optimization features
+- [ ] Staff scheduling integration
+
+---
+
+<p align="center">
+  <strong>Built with ❤️ for venue owners who want to focus on their customers, not their systems.</strong>
+</p>
+
+<p align="center">
+  Made with 🎵 Pulse
+</p>

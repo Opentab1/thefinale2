@@ -124,9 +124,8 @@ else
 fi
 
 sudo -u ${USER} ${PY_BIN} -m venv --system-site-packages venv
-sudo -u ${USER} venv/bin/pip install --upgrade pip
-# Install build dependencies first
-sudo -u ${USER} venv/bin/pip install setuptools wheel
+# Ensure modern build tooling to avoid legacy build backend errors
+sudo -u ${USER} venv/bin/pip install --upgrade pip setuptools wheel
 
 # Attempt to install OS-provided tflite runtime when available (Python <3.12)
 if apt-cache policy python3-tflite-runtime | grep -q Candidate; then
@@ -213,7 +212,7 @@ mkdir -p /etc/systemd/system/getty@tty1.service.d
 cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf << EOF
 [Service]
 ExecStart=
-ExecStart=-/sbin/agetty --autologin ${USER} --noclear %I \$TERM
+ExecStart=-/sbin/agetty --autologin ${USER} --noclear %I $TERM
 EOF
 
 # Configure autostart
