@@ -547,7 +547,37 @@ def broadcast_sensor_data():
         try:
             if hub_instance:
                 data = hub_instance._collect_sensor_data()
-                socketio.emit('sensor_update', data)
+            else:
+                # Fallback to current snapshot from DB so UI still updates
+                data = {
+                    "occupancy": db.get_current_occupancy(),
+                    "temperature_f": None,
+                    "humidity": None,
+                    "light_level": None,
+                    "noise_db": None,
+                    "current_song": None,
+                }
+                env = db.get_latest_environment()
+                if env:
+                    data.update({
+                        "temperature_f": env.get("temperature"),
+                        "humidity": env.get("humidity"),
+                        "light_level": env.get("light_level"),
+                        "noise_db": env.get("noise_level"),
+                    })
+                try:
+                    with db.get_connection() as conn:
+                        cur = conn.cursor()
+                        cur.execute("SELECT track_name, artist FROM music_log ORDER BY timestamp DESC LIMIT 1")
+                        row = cur.fetchone()
+                        if row:
+                            data["current_song"] = {"title": row[0], "artist": row[1]}
+                        else:
+                            data["current_song"] = {"title": None, "artist": None}
+                except Exception:
+                    data["current_song"] = {"title": None, "artist": None}
+
+            socketio.emit('sensor_update', data)
             
             time.sleep(5)  # Update every 5 seconds
         except Exception as e:

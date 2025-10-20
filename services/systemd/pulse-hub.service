@@ -19,7 +19,8 @@ StandardError=append:/var/log/pulse/hub-error.log
 
 # Resource limits
 MemoryLimit=512M
-CPUQuota=50%
+# Be permissive by default; adjust via systemctl override if needed
+# CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target

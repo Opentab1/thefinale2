@@ -11,6 +11,10 @@ from datetime import datetime
 from typing import Optional, Tuple
 import os
 from .person_tracker_adapter import PersonTracker
+try:
+    from .person_detector import PersonDetector
+except Exception:
+    PersonDetector = None
 
 logger = logging.getLogger(__name__)
 
@@ -74,15 +78,22 @@ class PeopleCounter:
             raise e
     
     def _init_cpu_detector(self):
-        """Initialize CPU-based detector using OpenCV DNN"""
+        """Initialize CPU-based detector; prefer party_box PersonDetector."""
+        # Try advanced detector first
+        if PersonDetector is not None:
+            try:
+                self.detector = PersonDetector(confidence_threshold=self.confidence_threshold, model_type="ssd")
+                logger.info("CPU detector initialized (party_box PersonDetector)")
+                return
+            except Exception as e:
+                logger.warning(f"party_box PersonDetector unavailable: {e}")
+
+        # Fallbacks
         try:
-            # Use MobileNet SSD for person detection
             model_path = "/opt/pulse/models"
             os.makedirs(model_path, exist_ok=True)
-            
             prototxt = os.path.join(model_path, "MobileNetSSD_deploy.prototxt")
             model = os.path.join(model_path, "MobileNetSSD_deploy.caffemodel")
-            
             if os.path.exists(prototxt) and os.path.exists(model):
                 self.detector = cv2.dnn.readNetFromCaffe(prototxt, model)
                 logger.info("CPU detector initialized with MobileNet SSD")
@@ -98,7 +109,11 @@ class PeopleCounter:
     def detect_people(self, frame: np.ndarray) -> Tuple[int, list, list]:
         """Detect people in frame and return (count, boxes, detections)."""
         try:
-            if isinstance(self.detector, cv2.HOGDescriptor):
+            # party_box detector path
+            if PersonDetector is not None and isinstance(self.detector, PersonDetector):
+                count, boxes, detections = self._detect_party(self.detector, frame)
+                return count, boxes, detections
+            elif isinstance(self.detector, cv2.HOGDescriptor):
                 count, boxes = self._detect_hog(frame)
                 detections = [{'box': tuple(b), 'confidence': 0.6} for b in boxes]
                 return count, boxes, detections
@@ -167,6 +182,23 @@ class PeopleCounter:
         except Exception as e:
             logger.error(f"DNN detection error: {e}")
             return 0, []
+
+    def _detect_party(self, detector: "PersonDetector", frame: np.ndarray) -> Tuple[int, list, list]:
+        """Detect via party_box PersonDetector."""
+        try:
+            results = detector.detect_people(frame) or []
+            boxes = [list(map(int, d.get('box', (0, 0, 0, 0)))) for d in results]
+            detections = [
+                {
+                    'box': tuple(list(map(int, d.get('box', (0, 0, 0, 0))))),
+                    'confidence': float(d.get('confidence', self.confidence_threshold)),
+                }
+                for d in results
+            ]
+            return len(boxes), boxes, detections
+        except Exception as e:
+            logger.error(f"Party detector error: {e}")
+            return 0, [], []
     
     def _detect_ai_hat(self, frame: np.ndarray) -> Tuple[int, list]:
         """Detect using AI HAT"""
@@ -262,7 +294,9 @@ class PeopleCounter:
                     self.entry_count = int(stats.get('entries', self.entry_count))
                     self.exit_count = int(stats.get('exits', self.exit_count))
                     
-                    logger.debug(f"Count: {count}, Entry: {self.entry_count}, Exit: {self.exit_count}")
+                    logger.debug(
+                        f"Count: {self.current_count}, Entry: {self.entry_count}, Exit: {self.exit_count}"
+                    )
 
                     # Opportunistically save a recent snapshot for the dashboard
                     self._maybe_save_snapshot(frame)

@@ -530,6 +530,25 @@ def complete_setup():
         config['policies']['music']['volume_max'] = data['policies']['music']['volume_max']
         
         config['wizard']['completed'] = True
+
+        # Derive module enables based on detected hardware if report exists
+        try:
+            report_path = Path("/var/log/pulse/hardware_report.txt")
+            if report_path.exists():
+                import json as _json
+                with open(report_path, 'r') as rf:
+                    hw = _json.load(rf)
+                # Normalize booleans
+                modules_cfg = config.get('modules', {})
+                for k in ['camera', 'mic', 'bme280', 'light_sensor', 'pan_tilt', 'ai_hat']:
+                    if k in modules_cfg and k in hw:
+                        try:
+                            modules_cfg[k] = bool(hw[k]) if isinstance(hw[k], bool) else bool(hw.get(k, {}).get('present', False))
+                        except Exception:
+                            pass
+                config['modules'] = modules_cfg
+        except Exception:
+            pass
         
         save_config(config)
 

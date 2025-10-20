@@ -69,6 +69,7 @@ apt-get install -y \
     libglib2.0-0 \
     sqlite3 \
     python3-rpi.gpio \
+    wget \
     2>&1 | tee -a /tmp/pulse_install.log
 
 # Enable I2C
@@ -147,6 +148,19 @@ mkdir -p "$INSTALL_DIR/config"
 
 chown -R ${USER}:${USER} "$LOG_DIR"
 chown -R ${USER}:${USER} "$INSTALL_DIR"
+
+# Populate default MobileNetSSD model if missing
+if [ ! -f "$INSTALL_DIR/models/MobileNetSSD_deploy.prototxt" ]; then
+  echo "Fetching MobileNetSSD prototxt..."
+  sudo -u ${USER} wget -q -O "$INSTALL_DIR/models/MobileNetSSD_deploy.prototxt" \
+    https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/deploy.prototxt || true
+fi
+# Caffemodel is large; attempt to fetch if available from mirror user controls
+if [ ! -f "$INSTALL_DIR/models/MobileNetSSD_deploy.caffemodel" ]; then
+  echo "Attempting to fetch MobileNetSSD caffemodel (optional)..."
+  sudo -u ${USER} wget -q -O "$INSTALL_DIR/models/MobileNetSSD_deploy.caffemodel" \
+    https://github.com/chuanqi305/MobileNet-SSD/raw/master/MobileNetSSD_deploy.caffemodel || true
+fi
 
 # Set executable permissions
 chmod +x "$INSTALL_DIR/dashboard/kiosk/start.sh"
