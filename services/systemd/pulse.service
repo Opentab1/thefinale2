@@ -1,0 +1,25 @@
+[Unit]
+Description=Pulse - Integrated Hub and Dashboard Service
+After=network.target
+Requires=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse
+Environment="PYTHONPATH=/opt/pulse:/opt/pulse/services"
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/opt/pulse/venv/bin/python3 /opt/pulse/run_pulse_system.py
+Restart=always
+RestartSec=10
+TimeoutStartSec=30
+
+# Logging - stdout and stderr to separate files
+StandardOutput=append:/var/log/pulse/pulse.log
+StandardError=append:/var/log/pulse/pulse-error.log
+
+# Resource limits
+MemoryLimit=1024M
+
+[Install]
+WantedBy=multi-user.target

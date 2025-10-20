@@ -197,13 +197,20 @@ else
 fi
 
 echo -e "${YELLOW}[8/10] Installing systemd services...${NC}"
+# Copy all service files
 cp "$INSTALL_DIR/services/systemd"/*.service /etc/systemd/system/
+
+# Disable old separate services if they exist
+systemctl disable pulse-hub.service 2>/dev/null || true
+systemctl disable pulse-dashboard.service 2>/dev/null || true
+systemctl stop pulse-hub.service 2>/dev/null || true
+systemctl stop pulse-dashboard.service 2>/dev/null || true
+
 systemctl daemon-reload
 
-# Enable services
+# Enable the new unified service
+systemctl enable pulse.service || true
 systemctl enable pulse-firstboot.service || true
-systemctl enable pulse-hub.service || true
-systemctl enable pulse-dashboard.service || true
 systemctl enable pulse-health.service || true
 
 echo -e "${YELLOW}[9/10] Configuring auto-login and kiosk mode...${NC}"
@@ -299,6 +306,12 @@ echo "  ./START_HERE.sh"
 echo ""
 echo "This will show full debug output in the terminal!"
 echo ""
+echo -e "${BLUE}System Services:${NC}"
+echo "The Pulse system runs as a unified service:"
+echo "  sudo systemctl status pulse"
+echo "  sudo systemctl restart pulse"
+echo "  sudo journalctl -u pulse -f"
+echo ""
 echo -e "${BLUE}Next Steps:${NC}"
 echo "1. Review hardware detection: cat /var/log/pulse/hardware_report.txt"
 echo "2. System will reboot and launch setup wizard"
@@ -311,5 +324,6 @@ sleep 10
 # Start wizard now so kiosk can reach it even before reboot
 echo "Starting setup wizard service..."
 systemctl restart pulse-firstboot.service || true
+systemctl restart pulse.service || true
 
 reboot
