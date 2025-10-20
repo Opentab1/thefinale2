@@ -361,10 +361,10 @@ class AudioMonitor:
                             self._last_song_detect_ts = now
                         
                     
-                    # Analyze spectrum
+                    # Analyze spectrum (optional visualization/stats)
                     spectrum = self.analyze_audio_spectrum(audio_data)
                     
-                    logger.debug(f"dB: {db:.1f}, Peak: {self.peak_db:.1f}")
+                    logger.debug(f"dB: {self.current_db:.1f}, Peak: {self.peak_db:.1f}")
                     
                 except Exception as e:
                     logger.error(f"Error in monitoring loop: {e}")

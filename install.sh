@@ -43,6 +43,7 @@ echo -e "${YELLOW}[2/10] Installing dependencies...${NC}"
 # Base and build dependencies (ensure wheels/sdists build on Python 3.13, aarch64)
 apt-get install -y \
     git \
+    wget \
     python3-full \
     python3-pip \
     python3-venv \
@@ -53,6 +54,7 @@ apt-get install -y \
     v4l-utils \
     pulseaudio \
     alsa-utils \
+    python3-picamera2 \
     libopenblas-dev \
     libportaudio2 \
     portaudio19-dev \
@@ -133,6 +135,11 @@ fi
 
 sudo -u ${USER} venv/bin/pip install -r requirements.txt
 
+# Ensure Python can import local services package when running under systemd
+if ! grep -q "^export PYTHONPATH=/opt/pulse" /home/${USER}/.profile 2>/dev/null; then
+  echo 'export PYTHONPATH=/opt/pulse' >> /home/${USER}/.profile
+fi
+
 echo -e "${YELLOW}[6/10] Installing Node.js dashboard...${NC}"
 cd "$INSTALL_DIR/dashboard/ui"
 sudo -u ${USER} npm install
@@ -151,6 +158,24 @@ chown -R ${USER}:${USER} "$INSTALL_DIR"
 # Set executable permissions
 chmod +x "$INSTALL_DIR/dashboard/kiosk/start.sh"
 chmod +x "$INSTALL_DIR/install.sh"
+
+# Populate AI model files (MobileNet-SSD) if missing
+SSD_PROTO="$INSTALL_DIR/models/MobileNetSSD_deploy.prototxt"
+SSD_MODEL="$INSTALL_DIR/models/MobileNetSSD_deploy.caffemodel"
+if [ ! -f "$SSD_PROTO" ]; then
+  echo "Fetching MobileNet-SSD prototxt..."
+  wget -nv -O "$SSD_PROTO" "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/deploy.prototxt" || true
+fi
+if [ ! -f "$SSD_MODEL" ]; then
+  echo "Fetching MobileNet-SSD caffemodel (this may take a moment)..."
+  wget -nv -O "$SSD_MODEL" "https://github.com/chuanqi305/MobileNet-SSD/raw/master/MobileNetSSD_deploy.caffemodel" || true
+fi
+
+if [ -f "$SSD_PROTO" ] && [ -f "$SSD_MODEL" ]; then
+  echo "MobileNet-SSD model present."
+else
+  echo "Warning: MobileNet-SSD files missing. People counter will fall back to HOG."
+fi
 
 echo -e "${YELLOW}[8/10] Installing systemd services...${NC}"
 cp "$INSTALL_DIR/services/systemd"/*.service /etc/systemd/system/

@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional, Tuple
 import os
 from .person_tracker_adapter import PersonTracker
+from .party_person_detector import PersonDetector as PartyPersonDetector
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,8 @@ class PeopleCounter:
         self._snapshot_interval_seconds = 1.0
         self._snapshot_path = "/opt/pulse/data/latest_camera.jpg"
 
-        # Initialize detector
-        self.detector = None
+        # Initialize detector (PartyBox-derived)
+        self.detector: Optional[PartyPersonDetector] = None
         self._init_detector()
 
         # Initialize tracker (adapted from party_box)
@@ -41,19 +42,26 @@ class PeopleCounter:
             pass
     
     def _init_detector(self):
-        """Initialize person detection model"""
+        """Initialize person detection model (prefers AI hat > SSD > HOG)."""
         try:
-            if self.use_ai_hat:
-                # Try to use AI HAT acceleration
-                try:
-                    # Placeholder for Hailo or other AI accelerator
-                    logger.info("Attempting to use AI HAT for acceleration")
-                    self._init_ai_hat_detector()
-                except Exception as e:
-                    logger.warning(f"AI HAT not available, falling back to CPU: {e}")
-                    self._init_cpu_detector()
+            # Create detector; models live in /opt/pulse/models
+            det = PartyPersonDetector(confidence_threshold=self.confidence_threshold,
+                                      model_type="hog",
+                                      models_dir="/opt/pulse/models")
+
+            # Prefer AI accelerator when present
+            if self.use_ai_hat and (os.path.exists('/dev/hailo0') or os.path.exists('/dev/apex_0')):
+                if det.set_model('hailo'):
+                    logger.info("Using AI HAT accelerated detector")
+                    self.detector = det
+                    return
+
+            # Otherwise try MobileNet-SSD if model files exist
+            if det.set_model('ssd'):
+                logger.info("Using CPU MobileNet-SSD detector")
             else:
-                self._init_cpu_detector()
+                logger.info("Using HOG detector (fallback)")
+            self.detector = det
         except Exception as e:
             logger.error(f"Failed to initialize detector: {e}")
             raise
@@ -68,54 +76,24 @@ class PeopleCounter:
                 raise RuntimeError("AI HAT device not found")
             # Placeholder for actual AI HAT integration
             logger.info("AI HAT detector initialized")
-            self.detector = "ai_hat"
+            # No-op (handled by PartyPersonDetector)
+            self.detector = self.detector or None
         except Exception as e:
             # Propagate to allow CPU fallback in _init_detector
             raise e
     
     def _init_cpu_detector(self):
-        """Initialize CPU-based detector using OpenCV DNN"""
-        try:
-            # Use MobileNet SSD for person detection
-            model_path = "/opt/pulse/models"
-            os.makedirs(model_path, exist_ok=True)
-            
-            prototxt = os.path.join(model_path, "MobileNetSSD_deploy.prototxt")
-            model = os.path.join(model_path, "MobileNetSSD_deploy.caffemodel")
-            
-            if os.path.exists(prototxt) and os.path.exists(model):
-                self.detector = cv2.dnn.readNetFromCaffe(prototxt, model)
-                logger.info("CPU detector initialized with MobileNet SSD")
-            else:
-                logger.warning("Model files not found, using HOG detector")
-                self.detector = cv2.HOGDescriptor()
-                self.detector.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-        except Exception as e:
-            logger.error(f"Failed to initialize CPU detector: {e}")
-            # Fallback to simple background subtraction
-            self.detector = cv2.createBackgroundSubtractorMOG2()
+        """Deprecated: initialization handled by PartyPersonDetector."""
+        pass
     
     def detect_people(self, frame: np.ndarray) -> Tuple[int, list, list]:
         """Detect people in frame and return (count, boxes, detections)."""
         try:
-            if isinstance(self.detector, cv2.HOGDescriptor):
-                count, boxes = self._detect_hog(frame)
-                detections = [{'box': tuple(b), 'confidence': 0.6} for b in boxes]
-                return count, boxes, detections
-            elif isinstance(self.detector, cv2.dnn_Net):
-                count, boxes = self._detect_dnn(frame)
-                # Confidence not returned per-box here; assign threshold
-                detections = [{'box': tuple(b), 'confidence': 0.6} for b in boxes]
-                return count, boxes, detections
-            elif self.detector == "ai_hat":
-                count, boxes = self._detect_ai_hat(frame)
-                detections = [{'box': tuple(b), 'confidence': 0.8} for b in boxes]
-                return count, boxes, detections
-            else:
-                # Background subtraction fallback
-                count, boxes = self._detect_motion(frame)
-                detections = [{'box': tuple(b), 'confidence': 0.5} for b in boxes]
-                return count, boxes, detections
+            if self.detector is None:
+                return 0, [], []
+            detections = self.detector.detect_people(frame)
+            boxes = [list(d['box']) for d in detections]
+            return len(boxes), boxes, detections
         except Exception as e:
             logger.error(f"Detection error: {e}")
             return 0, [], []
@@ -262,7 +240,7 @@ class PeopleCounter:
                     self.entry_count = int(stats.get('entries', self.entry_count))
                     self.exit_count = int(stats.get('exits', self.exit_count))
                     
-                    logger.debug(f"Count: {count}, Entry: {self.entry_count}, Exit: {self.exit_count}")
+                    logger.debug(f"Count: {self.current_count}, Entry: {self.entry_count}, Exit: {self.exit_count}")
 
                     # Opportunistically save a recent snapshot for the dashboard
                     self._maybe_save_snapshot(frame)
