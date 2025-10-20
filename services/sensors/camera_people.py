@@ -1,6 +1,7 @@
 """
 Pulse 1.0 - Camera-based People Counting
 Uses computer vision to detect and count people in venue
+Integrated with party_box implementations for production-ready AI counting
 """
 
 import logging
@@ -10,17 +11,33 @@ from threading import Thread, Event
 from datetime import datetime
 from typing import Optional, Tuple
 import os
+<<<<<<< HEAD
 from .person_tracker_adapter import PersonTracker
+<<<<<<< HEAD
 try:
     from .person_detector import PersonDetector
 except Exception:
     PersonDetector = None
+=======
+from .party_person_detector import PersonDetector as PartyPersonDetector
+=======
+from .detector.person_detector import PersonDetector
+from .tracker.person_tracker import PersonTracker
+>>>>>>> origin/main
+>>>>>>> origin/main
 
 logger = logging.getLogger(__name__)
 
 class PeopleCounter:
-    def __init__(self, use_ai_hat: bool = True, confidence_threshold: float = 0.5):
-        self.use_ai_hat = use_ai_hat
+    def __init__(self, use_ai_hat: bool = True, confidence_threshold: float = 0.5, model_type: str = "hog"):
+        """
+        Initialize people counter with advanced detection and tracking
+        
+        Args:
+            use_ai_hat: Try to use AI HAT acceleration if available
+            confidence_threshold: Minimum confidence for detections
+            model_type: Detection model to use (hog, ssd, yolo, hailo)
+        """
         self.confidence_threshold = confidence_threshold
         self.running = False
         self.stop_event = Event()
@@ -31,12 +48,27 @@ class PeopleCounter:
         self._snapshot_interval_seconds = 1.0
         self._snapshot_path = "/opt/pulse/data/latest_camera.jpg"
 
-        # Initialize detector
-        self.detector = None
+        # Determine model type hint
+        self.model_type = model_type or "hog"
+        self.use_ai_hat = use_ai_hat
+
+        # Initialize detector (PartyBox-derived)
+        self.detector: Optional[PartyPersonDetector] = None
         self._init_detector()
 
-        # Initialize tracker (adapted from party_box)
-        self.tracker = PersonTracker(confidence_threshold=self.confidence_threshold, min_detection_frames=5)
+        # Initialize detector with party_box implementation
+        self.detector = PersonDetector(
+            confidence_threshold=self.confidence_threshold,
+            model_type=self.model_type
+        )
+        logger.info(f"Initialized detector with model: {self.model_type}")
+
+        # Initialize tracker with party_box implementation
+        self.tracker = PersonTracker(
+            confidence_threshold=self.confidence_threshold,
+            min_detection_frames=5
+        )
+        logger.info("Initialized person tracker")
 
         # Ensure snapshot directory exists
         try:
@@ -45,19 +77,26 @@ class PeopleCounter:
             pass
     
     def _init_detector(self):
-        """Initialize person detection model"""
+        """Initialize person detection model (prefers AI hat > SSD > HOG)."""
         try:
-            if self.use_ai_hat:
-                # Try to use AI HAT acceleration
-                try:
-                    # Placeholder for Hailo or other AI accelerator
-                    logger.info("Attempting to use AI HAT for acceleration")
-                    self._init_ai_hat_detector()
-                except Exception as e:
-                    logger.warning(f"AI HAT not available, falling back to CPU: {e}")
-                    self._init_cpu_detector()
+            # Create detector; models live in /opt/pulse/models
+            det = PartyPersonDetector(confidence_threshold=self.confidence_threshold,
+                                      model_type="hog",
+                                      models_dir="/opt/pulse/models")
+
+            # Prefer AI accelerator when present
+            if self.use_ai_hat and (os.path.exists('/dev/hailo0') or os.path.exists('/dev/apex_0')):
+                if det.set_model('hailo'):
+                    logger.info("Using AI HAT accelerated detector")
+                    self.detector = det
+                    return
+
+            # Otherwise try MobileNet-SSD if model files exist
+            if det.set_model('ssd'):
+                logger.info("Using CPU MobileNet-SSD detector")
             else:
-                self._init_cpu_detector()
+                logger.info("Using HOG detector (fallback)")
+            self.detector = det
         except Exception as e:
             logger.error(f"Failed to initialize detector: {e}")
             raise
@@ -72,12 +111,14 @@ class PeopleCounter:
                 raise RuntimeError("AI HAT device not found")
             # Placeholder for actual AI HAT integration
             logger.info("AI HAT detector initialized")
-            self.detector = "ai_hat"
+            # No-op (handled by PartyPersonDetector)
+            self.detector = self.detector or None
         except Exception as e:
             # Propagate to allow CPU fallback in _init_detector
             raise e
     
     def _init_cpu_detector(self):
+<<<<<<< HEAD
         """Initialize CPU-based detector; prefer party_box PersonDetector."""
         # Try advanced detector first
         if PersonDetector is not None:
@@ -105,10 +146,15 @@ class PeopleCounter:
             logger.error(f"Failed to initialize CPU detector: {e}")
             # Fallback to simple background subtraction
             self.detector = cv2.createBackgroundSubtractorMOG2()
+=======
+        """Deprecated: initialization handled by PartyPersonDetector."""
+        pass
+>>>>>>> origin/main
     
     def detect_people(self, frame: np.ndarray) -> Tuple[int, list, list]:
         """Detect people in frame and return (count, boxes, detections)."""
         try:
+<<<<<<< HEAD
             # party_box detector path
             if PersonDetector is not None and isinstance(self.detector, PersonDetector):
                 count, boxes, detections = self._detect_party(self.detector, frame)
@@ -131,10 +177,18 @@ class PeopleCounter:
                 count, boxes = self._detect_motion(frame)
                 detections = [{'box': tuple(b), 'confidence': 0.5} for b in boxes]
                 return count, boxes, detections
+=======
+            if self.detector is None:
+                return 0, [], []
+            detections = self.detector.detect_people(frame)
+            boxes = [list(d['box']) for d in detections]
+            return len(boxes), boxes, detections
+>>>>>>> origin/main
         except Exception as e:
             logger.error(f"Detection error: {e}")
             return 0, [], []
     
+<<<<<<< HEAD
     def _detect_hog(self, frame: np.ndarray) -> Tuple[int, list]:
         """Detect using HOG descriptor"""
         try:
@@ -228,6 +282,8 @@ class PeopleCounter:
             logger.error(f"Motion detection error: {e}")
             return 0, []
     
+=======
+>>>>>>> origin/main
     def start_counting(self, camera_index: int = 0, zone: str = "Main Floor"):
         """Start continuous people counting"""
         if self.running:
@@ -244,7 +300,7 @@ class PeopleCounter:
         logger.info(f"Started people counting for zone: {zone}")
     
     def _counting_loop(self, camera_index: int, zone: str):
-        """Main counting loop"""
+        """Main counting loop with party_box integration"""
         try:
             # Try picamera2 first (Raspberry Pi camera)
             try:
@@ -280,26 +336,29 @@ class PeopleCounter:
                     
                     # Process every Nth frame to reduce CPU load
                     frame_count += 1
-                    if frame_count % 3 != 0:
+                    if frame_count % 2 != 0:  # Process every other frame
                         continue
                     
-                    # Detect people + track across frames
+                    # Detect people using party_box detector
                     raw_count, boxes, detections = self.detect_people(frame)
 
-                    # Update tracker for more stable counts and entries/exits
-                    _, stats = self.tracker.process_detections(detections, frame)
-                    prev_count = self.current_count
-                    self.current_count = int(stats.get('current', raw_count))
-                    # Entry/exit from tracker
-                    self.entry_count = int(stats.get('entries', self.entry_count))
-                    self.exit_count = int(stats.get('exits', self.exit_count))
+                    # Update tracker for stable counts and entry/exit tracking
+                    annotated_frame, stats = self.tracker.process_detections(detections, frame)
                     
+<<<<<<< HEAD
                     logger.debug(
                         f"Count: {self.current_count}, Entry: {self.entry_count}, Exit: {self.exit_count}"
                     )
+=======
+                    # Update counts from tracker
+                    self.current_count = int(stats.get('current', 0))
+                    self.entry_count = int(stats.get('entries', 0))
+                    self.exit_count = int(stats.get('exits', 0))
+                    logger.debug(f"Current: {self.current_count}, Entries: {self.entry_count}, Exits: {self.exit_count}")
+>>>>>>> origin/main
 
-                    # Opportunistically save a recent snapshot for the dashboard
-                    self._maybe_save_snapshot(frame)
+                    # Save snapshot for dashboard
+                    self._maybe_save_snapshot(annotated_frame)
                     
                 except Exception as e:
                     logger.error(f"Error in counting loop: {e}")
@@ -320,6 +379,12 @@ class PeopleCounter:
         """Stop people counting"""
         self.running = False
         self.stop_event.set()
+        
+        # Cleanup detector resources
+        try:
+            self.detector.cleanup()
+        except Exception as e:
+            logger.warning(f"Error cleaning up detector: {e}")
     
     def get_current_count(self) -> int:
         """Get current people count"""
@@ -336,8 +401,10 @@ class PeopleCounter:
     
     def reset_stats(self):
         """Reset entry/exit counters"""
+        self.tracker.reset_counts()
         self.entry_count = 0
         self.exit_count = 0
+        self.current_count = 0
 
     def _maybe_save_snapshot(self, frame: np.ndarray):
         """Save a JPEG snapshot to disk at a throttled interval."""
@@ -354,12 +421,39 @@ class PeopleCounter:
             self._last_snapshot_ts = now
         except Exception as e:
             logger.debug(f"Snapshot save failed: {e}")
+    
+    def get_fps(self) -> float:
+        """Get current detection FPS"""
+        try:
+            return self.detector.get_fps()
+        except:
+            return 0.0
+    
+    def set_model(self, model_type: str) -> bool:
+        """
+        Change the detection model
+        
+        Args:
+            model_type: New model type (hog, ssd, yolo, hailo)
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            success = self.detector.set_model(model_type)
+            if success:
+                self.model_type = model_type
+                logger.info(f"Switched to model: {model_type}")
+            return success
+        except Exception as e:
+            logger.error(f"Error switching model: {e}")
+            return False
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
-    counter = PeopleCounter(use_ai_hat=False)
+    counter = PeopleCounter(use_ai_hat=False, model_type="hog")
     
     try:
         counter.start_counting()
@@ -370,7 +464,8 @@ if __name__ == "__main__":
             stats = counter.get_traffic_stats()
             print(f"Current: {stats['current_count']}, "
                   f"Entry: {stats['entry_count']}, "
-                  f"Exit: {stats['exit_count']}")
+                  f"Exit: {stats['exit_count']}, "
+                  f"FPS: {counter.get_fps():.1f}")
     except KeyboardInterrupt:
         print("\nStopping...")
         counter.stop_counting()

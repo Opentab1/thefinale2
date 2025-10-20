@@ -1,6 +1,7 @@
 """
 Pulse 1.0 - Microphone Audio Analysis
 Song detection and decibel level monitoring
+Integrated with party_box song detection for production-ready music recognition
 """
 
 import logging
@@ -14,10 +15,12 @@ import os
 import tempfile
 import io
 import time
-import requests
-import hmac
-import hashlib
-import base64
+try:
+    # Prefer local party_box-style song detector if available in our workspace
+    from .song_detector import SongDetector  # re-exported/compatible API
+except Exception:
+    # Fallback: use internal Shazam-based detection baked in this module
+    SongDetector = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -32,19 +35,22 @@ class AudioMonitor:
         self.current_db = 0.0
         self.peak_db = 0.0
         self.current_song = None
-        self._last_song_detect_ts = 0.0
-        self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '10'))
-        # dB update cadence (seconds)
-        try:
-            self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '60'))
-        except Exception:
-            self._db_interval = 60.0
+        
+        # Song detection configuration from environment
+        self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '60'))
+        self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '5'))
         self._last_db_ts = 0.0
-        self._song_detect_provider = os.getenv('SONG_DETECT_PROVIDER', 'shazam').strip().lower()
-        self._audd_api_token = os.getenv('AUDD_API_TOKEN', '').strip()
-        self._acr_host = os.getenv('ACR_HOST', '').strip()
-        self._acr_key = os.getenv('ACR_ACCESS_KEY', '').strip()
-        self._acr_secret = os.getenv('ACR_ACCESS_SECRET', '').strip()
+        
+        # Initialize song detector if available
+        if SongDetector is not None:
+            self.song_detector = SongDetector(
+                enabled=True,
+                detection_interval=int(self._song_detect_interval)
+            )
+            logger.info("Initialized song detector from party_box")
+        else:
+            self.song_detector = None
+            logger.info("Using built-in song detection (Shazam/AudD/ACRCloud) when invoked")
         
         # Audio interface
         self.audio = pyaudio.PyAudio()
@@ -132,125 +138,6 @@ class AudioMonitor:
             logger.error(f"Error calculating dB: {e}")
             return 0.0
     
-    def detect_song(self, audio_data: np.ndarray) -> dict:
-        """Detect song from audio data via configured provider."""
-        try:
-            if self._song_detect_provider == 'shazam':
-                return self._detect_song_shazam(audio_data)
-            if self._song_detect_provider == 'audd' and self._audd_api_token:
-                return self._detect_song_audd(audio_data)
-            if self._song_detect_provider == 'acrcloud' and self._acr_host and self._acr_key and self._acr_secret:
-                return self._detect_song_acrcloud(audio_data)
-            # TODO: add 'acrcloud' support when credentials are provided
-        except Exception as e:
-            logger.error(f"Song detection failed: {e}")
-        return {"detected": False, "title": None, "artist": None, "confidence": 0.0}
-
-    def _detect_song_shazam(self, audio_data: np.ndarray) -> dict:
-        """Detect song using ShazamIO (no key required)."""
-        try:
-            from shazamio import Shazam
-            # Write WAV to temp file (ShazamIO expects a path)
-            with io.BytesIO() as buf:
-                with wave.open(buf, 'wb') as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)
-                    wf.setframerate(self.sample_rate)
-                    wf.writeframes(audio_data.tobytes())
-                wav_bytes = buf.getvalue()
-
-            import tempfile, os as _os
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tf:
-                tf.write(wav_bytes)
-                tmp_path = tf.name
-
-            try:
-                import asyncio
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                result = loop.run_until_complete(Shazam().recognize(tmp_path))
-                loop.close()
-            finally:
-                try:
-                    _os.remove(tmp_path)
-                except Exception:
-                    pass
-
-            if result and 'track' in result:
-                track = result['track']
-                title = track.get('title')
-                artist = track.get('subtitle')
-                if title or artist:
-                    return { 'detected': True, 'title': title, 'artist': artist, 'confidence': 1.0 }
-        except Exception as e:
-            logger.error(f"Shazam detection failed: {e}")
-        return { 'detected': False, 'title': None, 'artist': None, 'confidence': 0.0 }
-
-    def _detect_song_acrcloud(self, audio_data: np.ndarray) -> dict:
-        """Detect song using ACRCloud identify API."""
-        endpoint = f"/v1/identify"
-        url = f"http://{self._acr_host}{endpoint}"
-        http_method = "POST"
-        data_type = "audio"
-        signature_version = "1"
-        timestamp = str(int(time.time()))
-
-        # Prepare sample bytes as WAV
-        with io.BytesIO() as buf:
-            with wave.open(buf, 'wb') as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(self.sample_rate)
-                wf.writeframes(audio_data.tobytes())
-            sample_bytes = buf.getvalue()
-
-        string_to_sign = "\n".join([http_method, endpoint, self._acr_key, data_type, signature_version, timestamp])
-        sign = base64.b64encode(hmac.new(self._acr_secret.encode('utf-8'), string_to_sign.encode('utf-8'), digestmod=hashlib.sha1).digest()).decode('utf-8')
-
-        files = {
-            'sample': ('sample.wav', sample_bytes, 'audio/wav')
-        }
-        data = {
-            'access_key': self._acr_key,
-            'data_type': data_type,
-            'signature_version': signature_version,
-            'signature': sign,
-            'timestamp': timestamp,
-        }
-        resp = requests.post(url, data=data, files=files, timeout=15)
-        js = resp.json()
-        if js.get('status', {}).get('code') == 0 and js.get('metadata', {}).get('music'):
-            m = js['metadata']['music'][0]
-            title = m.get('title')
-            artist = None
-            if isinstance(m.get('artists'), list) and m['artists']:
-                artist = m['artists'][0].get('name')
-            return { 'detected': True, 'title': title, 'artist': artist, 'confidence': 1.0 }
-        return { 'detected': False, 'title': None, 'artist': None, 'confidence': 0.0 }
-
-    def _detect_song_audd(self, audio_data: np.ndarray) -> dict:
-        """Detect song using AudD API by sending ~10 seconds of audio."""
-        # Encode PCM int16 numpy array to WAV bytes in-memory
-        with io.BytesIO() as buf:
-            with wave.open(buf, 'wb') as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)  # 16-bit
-                wf.setframerate(self.sample_rate)
-                wf.writeframes(audio_data.tobytes())
-            wav_bytes = buf.getvalue()
-
-        files = { 'file': ('audio.wav', wav_bytes, 'audio/wav') }
-        data = { 'api_token': self._audd_api_token, 'return': 'timecode,deezer,apple_music,spotify' }
-        resp = requests.post('https://api.audd.io/', data=data, files=files, timeout=15)
-        js = resp.json()
-        if js.get('status') == 'success' and js.get('result'):
-            r = js['result']
-            title = r.get('title')
-            artist = r.get('artist')
-            confidence = float(r.get('score') or 1.0)
-            return { 'detected': True, 'title': title, 'artist': artist, 'confidence': confidence }
-        return { 'detected': False, 'title': None, 'artist': None, 'confidence': 0.0 }
-    
     def analyze_audio_spectrum(self, audio_data: np.ndarray) -> dict:
         """Analyze audio frequency spectrum"""
         try:
@@ -300,7 +187,7 @@ class AudioMonitor:
         logger.info("Started audio monitoring")
     
     def _monitoring_loop(self):
-        """Main monitoring loop"""
+        """Main monitoring loop with integrated song detection"""
         stream = None
         
         try:
@@ -314,11 +201,6 @@ class AudioMonitor:
             )
             
             logger.info("Audio stream opened")
-            
-            # Buffer for song detection (collect ~10 seconds)
-            song_buffer = []
-            buffer_duration = max(10, int(self._song_detect_interval))
-            buffer_chunks = int(buffer_duration * self.sample_rate / self.chunk_size)
             
             while self.running and not self.stop_event.is_set():
                 try:
@@ -335,7 +217,9 @@ class AudioMonitor:
                         self.current_db = db
                         self.peak_db = max(self.peak_db, db)
                         self._last_db_ts = now_db
+                        logger.debug(f"dB: {db:.1f}, Peak: {self.peak_db:.1f}")
                     
+<<<<<<< HEAD
                     # Add to song detection buffer
                     song_buffer.append(audio_data)
                     if len(song_buffer) > buffer_chunks:
@@ -361,10 +245,18 @@ class AudioMonitor:
                             self._last_song_detect_ts = now
                         
                     
-                    # Analyze spectrum
+                    # Analyze spectrum (optional visualization/stats)
                     spectrum = self.analyze_audio_spectrum(audio_data)
                     
-                    logger.debug(f"dB: {db:.1f}, Peak: {self.peak_db:.1f}")
+                    logger.debug(f"dB: {self.current_db:.1f}, Peak: {self.peak_db:.1f}")
+=======
+                    # Get song detection results
+                    if self.song_detector is not None:
+                        # party_box song detector runs in background
+                        song_info = self.song_detector.get_latest_song()
+                        if song_info and song_info.get("title") != "Unknown":
+                            self.current_song = song_info
+>>>>>>> origin/main
                     
                 except Exception as e:
                     logger.error(f"Error in monitoring loop: {e}")
@@ -383,6 +275,12 @@ class AudioMonitor:
         """Stop audio monitoring"""
         self.running = False
         self.stop_event.set()
+        
+        # Stop song detector
+        try:
+            self.song_detector.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping song detector: {e}")
     
     def get_current_db(self) -> float:
         """Get current decibel level"""
@@ -397,8 +295,10 @@ class AudioMonitor:
         self.peak_db = 0.0
     
     def get_current_song(self) -> dict:
-        """Get currently detected song"""
-        return self.current_song if self.current_song else {
+        """Get currently detected song from party_box detector"""
+        if self.current_song:
+            return self.current_song
+        return {
             "title": "Unknown",
             "artist": "Unknown",
             "confidence": 0.0,
@@ -431,7 +331,7 @@ if __name__ == "__main__":
         
         import time
         while True:
-            time.sleep(2)
+            time.sleep(5)
             stats = monitor.get_stats()
             print(f"dB: {stats['current_db']:.1f} (peak: {stats['peak_db']:.1f})")
             if stats['current_song']['title'] != "Unknown":
