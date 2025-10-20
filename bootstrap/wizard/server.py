@@ -10,11 +10,14 @@ import yaml
 import subprocess
 from pathlib import Path
 from flask import Flask, render_template_string, request, jsonify
+from flask_cors import CORS
 from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+# Allow kiosk (served from localhost:9977) to query status without CORS issues
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 CONFIG_PATH = "/opt/pulse/config/config.yaml"
 ENV_PATH = "/opt/pulse/.env"
@@ -449,6 +452,25 @@ WIZARD_HTML = """
 </html>
 """
 
+@app.route('/api/wizard/status')
+def wizard_status():
+    """Report wizard completion status and marker presence"""
+    try:
+        cfg = load_config()
+    except Exception:
+        cfg = { 'wizard': { 'completed': False } }
+
+    try:
+        flag_exists = Path(WIZARD_FLAG_PATH).exists()
+    except Exception:
+        flag_exists = False
+
+    return jsonify({
+        "completed": bool(cfg.get('wizard', {}).get('completed', False)),
+        "flag_exists": flag_exists,
+        "config_path": CONFIG_PATH
+    })
+
 @app.route('/')
 def index():
     """Serve wizard interface"""
@@ -508,6 +530,25 @@ def complete_setup():
         config['policies']['music']['volume_max'] = data['policies']['music']['volume_max']
         
         config['wizard']['completed'] = True
+
+        # Derive module enables based on detected hardware if report exists
+        try:
+            report_path = Path("/var/log/pulse/hardware_report.txt")
+            if report_path.exists():
+                import json as _json
+                with open(report_path, 'r') as rf:
+                    hw = _json.load(rf)
+                # Normalize booleans
+                modules_cfg = config.get('modules', {})
+                for k in ['camera', 'mic', 'bme280', 'light_sensor', 'pan_tilt', 'ai_hat']:
+                    if k in modules_cfg and k in hw:
+                        try:
+                            modules_cfg[k] = bool(hw[k]) if isinstance(hw[k], bool) else bool(hw.get(k, {}).get('present', False))
+                        except Exception:
+                            pass
+                config['modules'] = modules_cfg
+        except Exception:
+            pass
         
         save_config(config)
 
@@ -536,8 +577,8 @@ def complete_setup():
                 f.write(f"SECRET_KEY={key.decode()}\n")
                 f.write(f"ENCRYPTION_KEY={key.decode()}\n")
         
-        # Create wizard completion marker file
-        marker_file = config_dir / ".wizard_complete"
+        # Create wizard completion marker file (canonical location)
+        marker_file = Path(WIZARD_FLAG_PATH)
         marker_file.touch()
         logger.info(f"Created wizard completion marker at {marker_file}")
         
@@ -625,4 +666,12 @@ def save_config(config):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    app.run(host='0.0.0.0', port=9090, debug=False)
+    # Robust startup: retry bind if port is not immediately free
+    import time as _t
+    for _i in range(5):
+        try:
+            app.run(host='0.0.0.0', port=9090, debug=False)
+            break
+        except OSError as _e:
+            logging.warning(f"Wizard server bind failed (attempt {_i+1}/5): {_e}")
+            _t.sleep(2)
