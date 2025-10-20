@@ -47,19 +47,22 @@ class SongDetector:
         
         Args:
             enabled: Whether song detection is enabled
-            detection_interval: Seconds between detection attempts
-        """
-        self.enabled = bool(enabled) and SOUNDDEVICE_AVAILABLE and SHAZAMIO_AVAILABLE
+            detection_interval        self.enabled = bool(enabled) and SOUNDDEVICE_AVAILABLE and SHAZAMIO_AVAILABLE
         
         if self.enabled:
-            logging.info("Song detection enabled")
+            logging.info("🎵 Song detection enabled")
+            logging.info(f"  - Detection interval: {detection_interval} seconds")
+            logging.info(f"  - Using ShazamIO for recognition")
         else:
             reasons = []
             if not SHAZAMIO_AVAILABLE:
-                reasons.append("ShazamIO not available")
+                reasons.append("ShazamIO not installed (pip install shazamio)")
             if not SOUNDDEVICE_AVAILABLE:
-                reasons.append("sounddevice/PortAudio not available")
-            logging.warning("Song detection disabled: " + ", ".join(reasons) if reasons else "disabled by config")
+                reasons.append("sounddevice not installed (pip install sounddevice)")
+            if not enabled:
+                reasons.append("disabled by config")
+            logging.warning("🎵 Song detection disabled: " + ", ".join(reasons) if reasons else "unknown reason")
+            logging.warning("Song detector will return 'Unknown' for all queries") " + ", ".join(reasons) if reasons else "disabled by config")
         
         # Audio parameters
         self.sample_rate = 44100
