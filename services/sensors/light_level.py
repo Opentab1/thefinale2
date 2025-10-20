@@ -132,6 +132,10 @@ class LightSensor:
         try:
             if source != 'camera':
                 # Snapshot mode: read brightness from saved JPEGs
+                # Wait up to 5 cycles for snapshot, then fall back to camera
+                snapshot_wait_cycles = 0
+                max_wait_cycles = 5
+                
                 while self.running and not self.stop_event.is_set():
                     try:
                         if os.path.exists(self.snapshot_path):
@@ -143,18 +147,29 @@ class LightSensor:
                                 if len(self.brightness_history) > self.max_history:
                                     self.brightness_history.pop(0)
                                 analysis = self.analyze_lighting_conditions(lux)
-                                logger.debug(f"Light level: {lux:.1f} lux ({analysis['description']}) [snapshot]")
+                                logger.info(f"💡 Light level: {lux:.1f} lux ({analysis['description']}) [snapshot]")
+                                snapshot_wait_cycles = 0  # Reset counter on success
                             else:
                                 logger.debug("Snapshot unreadable; waiting for next")
+                                snapshot_wait_cycles += 1
                         else:
                             logger.debug("Snapshot not found yet; waiting for people counter to write one")
+                            snapshot_wait_cycles += 1
+                        
+                        # If snapshot hasn't appeared after max_wait_cycles, fall back to camera
+                        if snapshot_wait_cycles >= max_wait_cycles:
+                            logger.warning(f"Snapshot not available after {max_wait_cycles} cycles, falling back to direct camera access")
+                            source = 'camera'
+                            break
 
                         self.stop_event.wait(interval)
                     except Exception as e:
                         logger.error(f"Error in snapshot monitoring loop: {e}")
                         self.stop_event.wait(interval)
-                logger.info("Light monitoring stopped (snapshot mode)")
-                return
+                
+                if source != 'camera':
+                    logger.info("Light monitoring stopped (snapshot mode)")
+                    return
 
             # Try picamera2 first (camera mode)
             try:
@@ -194,7 +209,7 @@ class LightSensor:
                     # Analyze conditions
                     analysis = self.analyze_lighting_conditions(lux)
                     
-                    logger.debug(f"Light level: {lux:.1f} lux ({analysis['description']})")
+                    logger.info(f"💡 Light level: {lux:.1f} lux ({analysis['description']}) [camera]")
                     
                     # Wait for next reading
                     self.stop_event.wait(interval)

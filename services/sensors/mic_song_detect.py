@@ -235,25 +235,39 @@ class AudioMonitor:
 
         try:
             if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None:
-                pa_stream = self.pyaudio_instance.open(
-                    format=pyaudio.paInt16,  # type: ignore[attr-defined]
-                    channels=1,
-                    rate=self.sample_rate,
-                    input=True,
-                    input_device_index=self.device_index,
-                    frames_per_buffer=self.chunk_size
-                )
-                logger.info("Audio stream opened (PyAudio)")
+                if self.device_index is None:
+                    logger.error("No audio input device found; cannot open audio stream")
+                    logger.warning("Audio monitoring will be disabled")
+                else:
+                    try:
+                        pa_stream = self.pyaudio_instance.open(
+                            format=pyaudio.paInt16,  # type: ignore[attr-defined]
+                            channels=1,
+                            rate=self.sample_rate,
+                            input=True,
+                            input_device_index=self.device_index,
+                            frames_per_buffer=self.chunk_size
+                        )
+                        logger.info(f"✓ Audio stream opened successfully (PyAudio, device {self.device_index})")
+                    except Exception as e:
+                        logger.error(f"Failed to open PyAudio stream: {e}")
             elif SOUNDDEVICE_AVAILABLE:
-                sd_stream = sd.InputStream(  # type: ignore[call-arg]
-                    samplerate=self.sample_rate,
-                    dtype='int16',
-                    channels=1,
-                    blocksize=self.chunk_size,
-                    device=self.device_index,
-                )
-                sd_stream.start()
-                logger.info("Audio stream opened (sounddevice)")
+                if self.device_index is None:
+                    logger.error("No audio input device found; cannot open audio stream")
+                    logger.warning("Audio monitoring will be disabled")
+                else:
+                    try:
+                        sd_stream = sd.InputStream(  # type: ignore[call-arg]
+                            samplerate=self.sample_rate,
+                            dtype='int16',
+                            channels=1,
+                            blocksize=self.chunk_size,
+                            device=self.device_index,
+                        )
+                        sd_stream.start()
+                        logger.info(f"✓ Audio stream opened successfully (sounddevice, device {self.device_index})")
+                    except Exception as e:
+                        logger.error(f"Failed to open sounddevice stream: {e}")
             else:
                 logger.warning("No audio backend available; monitoring loop will idle")
 
@@ -283,7 +297,7 @@ class AudioMonitor:
                         self.current_db = db
                         self.peak_db = max(self.peak_db, db)
                         self._last_db_ts = now_db
-                        logger.debug(f"dB: {db:.1f}, Peak: {self.peak_db:.1f}")
+                        logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
                     
                     # Get song detection results from background detector
                     if self.song_detector is not None:
