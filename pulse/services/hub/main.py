@@ -123,6 +123,15 @@ async def get_live_data():
                 except Exception:
                     pass
             
+            # Read light level if present (written by light service)
+            light_file = sensor_dir / 'light_level.txt'
+            if light_file.exists():
+                try:
+                    # Only add to live_data if numeric; front-end may not yet render
+                    live_data['light_level'] = float(light_file.read_text().strip())
+                except Exception:
+                    pass
+            
             # Check camera status
             camera_file = sensor_dir / 'camera_active.txt'
             if camera_file.exists():

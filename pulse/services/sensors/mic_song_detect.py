@@ -10,12 +10,34 @@ DATA_DIR = Path('/opt/pulse/data/sensors')
 SONG_FILE = DATA_DIR / 'song.json'
 AUDIO_LEVEL_FILE = DATA_DIR / 'audio_level.txt'
 
-async def has_mic() -> bool:
+def _read_hardware_status() -> dict:
     try:
-        status = json.loads(STATUS_FILE.read_text())
-        return bool(status.get('mic'))
+        return json.loads(STATUS_FILE.read_text())
     except Exception:
-        return False
+        return {}
+
+def _module_present(status: dict, module: str) -> bool:
+    """Return True if hardware module is present, supporting old and new schemas.
+
+    Defaults to True when unknown so the simulation continues in dev.
+    """
+    # New schema: { "modules": { "mic": { "present": true } } }
+    try:
+        modules = status.get('modules') or {}
+        mod = modules.get(module) or {}
+        if isinstance(mod, dict) and 'present' in mod:
+            return bool(mod.get('present'))
+    except Exception:
+        pass
+    # Old schema: { "mic": true } or null/undefined when unknown
+    value = status.get(module)
+    if value is None:
+        return True
+    return bool(value)
+
+async def has_mic() -> bool:
+    status = _read_hardware_status()
+    return _module_present(status, 'mic')
 
 # Sample songs for demo
 SAMPLE_SONGS = [
