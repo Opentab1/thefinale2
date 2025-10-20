@@ -203,14 +203,23 @@ else
 fi
 
 echo -e "${YELLOW}[8/10] Installing systemd services...${NC}"
-# Copy all service files
-cp "$INSTALL_DIR/services/systemd"/*.service /etc/systemd/system/
 
-# Disable old separate services if they exist
-systemctl disable pulse-hub.service 2>/dev/null || true
-systemctl disable pulse-dashboard.service 2>/dev/null || true
+# Remove old service files completely
+echo "Removing old service files..."
+rm -f /etc/systemd/system/pulse-hub.service
+rm -f /etc/systemd/system/pulse-dashboard.service
+
+# Only copy the new services we want to use
+echo "Installing new unified services..."
+cp "$INSTALL_DIR/services/systemd/pulse.service" /etc/systemd/system/
+cp "$INSTALL_DIR/services/systemd/pulse-firstboot.service" /etc/systemd/system/
+cp "$INSTALL_DIR/services/systemd/pulse-health.service" /etc/systemd/system/
+
+# Stop and disable old separate services if they exist
 systemctl stop pulse-hub.service 2>/dev/null || true
 systemctl stop pulse-dashboard.service 2>/dev/null || true
+systemctl disable pulse-hub.service 2>/dev/null || true
+systemctl disable pulse-dashboard.service 2>/dev/null || true
 
 systemctl daemon-reload
 

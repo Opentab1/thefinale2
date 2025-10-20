@@ -25,28 +25,42 @@ class BME280Reader:
         self._init_sensor()
     
     def _init_sensor(self):
-        """Initialize BME280 sensor"""
+        """Initialize BME280 sensor with robust error handling"""
         try:
             # Use busio directly to avoid board pin mapping issues
             import busio
             import board
             import adafruit_bme280.advanced as adafruit_bme280
             
+            logger.debug(f"Attempting to initialize BME280 at address {hex(self.address)}")
+            
             # Create I2C bus using busio (more reliable on Pi 5)
             try:
                 i2c = busio.I2C(board.SCL, board.SDA)
-            except Exception:
+                logger.debug("I2C bus created successfully using busio.I2C()")
+            except Exception as e:
+                logger.debug(f"busio.I2C() failed ({e}), falling back to board.I2C()")
                 # Fallback to board.I2C() if busio fails
                 i2c = board.I2C()
             
+            # Try to initialize sensor
             try:
+                logger.debug(f"Creating BME280 sensor object at {hex(self.address)}...")
                 self.sensor = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=self.address)
-            except ValueError:
+                logger.debug(f"BME280 sensor object created at {hex(self.address)}")
+            except ValueError as e:
                 # Try alternate address
-                logger.info(f"Sensor not found at {hex(self.address)}, trying 0x77")
+                logger.info(f"Sensor not found at {hex(self.address)} ({e}), trying 0x77")
                 self.sensor = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=0x77)
+                self.address = 0x77  # Update stored address
+            except OSError as e:
+                logger.error(f"I2C bus error at {hex(self.address)}: {e}")
+                logger.error("This may be due to I2C bus contention or hardware issue")
+                logger.error("Check: sudo i2cdetect -y 1")
+                raise
             
             # Configure sensor for indoor monitoring
+            logger.debug("Configuring BME280 sensor...")
             self.sensor.sea_level_pressure = 1013.25
             self.sensor.mode = adafruit_bme280.MODE_NORMAL
             self.sensor.standby_period = adafruit_bme280.STANDBY_TC_500
@@ -54,11 +68,13 @@ class BME280Reader:
             self.sensor.overscan_pressure = adafruit_bme280.OVERSCAN_X16
             self.sensor.overscan_humidity = adafruit_bme280.OVERSCAN_X1
             self.sensor.overscan_temperature = adafruit_bme280.OVERSCAN_X2
+            logger.debug("BME280 sensor configured")
             
             logger.info(f"BME280 sensor initialized at address {hex(self.address)}")
             
         except Exception as e:
             logger.error(f"Failed to initialize BME280 sensor: {e}")
+            logger.error(f"Exception type: {type(e).__name__}")
             raise
     
     def read_sensor(self) -> Dict[str, float]:

@@ -74,7 +74,7 @@ class AudioMonitor:
 
         # Song detection configuration from environment (default: 30s)
         self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '30'))
-        self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '5'))
+        self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '2.0'))
         self._last_db_ts = 0.0
 
         # Initialize song detector if available
@@ -123,9 +123,20 @@ class AudioMonitor:
                         sd_in = sd_default[0]
                     else:
                         sd_in = sd_default
-                    if sd_in is not None and int(sd_in) >= 0:
-                        self.device_index = int(sd_in)
-                        logger.info(f"Using sounddevice default input index: {self.device_index}")
+                    
+                    # Handle _InputOutputPair objects (has input/output attributes)
+                    if hasattr(sd_in, 'input'):
+                        sd_in = sd_in.input
+                    
+                    # Convert to int safely
+                    if sd_in is not None:
+                        try:
+                            device_idx = int(sd_in)
+                            if device_idx >= 0:
+                                self.device_index = device_idx
+                                logger.info(f"Using sounddevice default input index: {self.device_index}")
+                        except (TypeError, ValueError):
+                            logger.debug(f"Could not convert sounddevice default to int: {sd_in}")
                 except Exception as e:
                     logger.debug(f"sounddevice default selection failed: {e}")
 
