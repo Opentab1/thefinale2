@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, send_file, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from threading import Thread
@@ -19,6 +19,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from services.storage.db import PulseDB
 from services.sensors.health_monitor import HealthMonitor
+# Avoid importing heavy OpenCV-dependent modules at import time to keep API up even
+# when camera dependencies are missing. Camera sensor runs in the Hub service.
+try:
+    from services.sensors.camera_people import PeopleCounter  # noqa: F401
+except Exception:
+    PeopleCounter = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +33,21 @@ app = Flask(__name__, static_folder='../ui/build', static_url_path='')
 CORS(app)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'pulse-development-key')
 
-# Initialize SocketIO
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# Initialize SocketIO with robust async fallback
+def _choose_async_mode() -> str:
+    preferred = os.getenv('PULSE_SIO_MODE', '').strip().lower()
+    if preferred in {'eventlet', 'gevent', 'threading'}:
+        return preferred
+    # Default to threading for maximum compatibility on fresh images
+    # (eventlet/gevent can be enabled later via PULSE_SIO_MODE)
+    return 'threading'
+
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_choose_async_mode())
 
 # Initialize database and health monitor
 db = PulseDB()
 health_monitor = HealthMonitor()
+camera_for_snapshot = None
 
 # Global hub instance (will be set by main)
 hub_instance = None
@@ -47,8 +62,11 @@ def set_hub_instance(hub):
 
 @app.route('/')
 def index():
-    """Serve React app"""
-    return send_from_directory(app.static_folder, 'index.html')
+    """Serve React app. If UI is not built yet, return a simple readiness page."""
+    index_path = Path(app.static_folder) / 'index.html'
+    if index_path.exists():
+        return send_from_directory(app.static_folder, 'index.html')
+    return jsonify({"status": "ok", "ui": "not-built"})
 
 @app.route('/api/status')
 def get_status():
@@ -81,7 +99,40 @@ def get_current_sensors():
         if hub_instance:
             data = hub_instance._collect_sensor_data()
         else:
-            data = {}
+            # Fallback: derive current snapshot from database
+            data = {
+                "occupancy": db.get_current_occupancy(),
+                "entries": 0,
+                "exits": 0,
+                "traffic": None,
+                "temperature_f": None,
+                "humidity": None,
+                "light_level": None,
+                "noise_db": None,
+                "current_song": None,
+            }
+
+            env = db.get_latest_environment()
+            if env:
+                data.update({
+                    "temperature_f": env.get("temperature"),
+                    "humidity": env.get("humidity"),
+                    "light_level": env.get("light_level"),
+                    "noise_db": env.get("noise_level"),
+                })
+
+            # Last played song from music_log (if any)
+            try:
+                with db.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT track_name, artist FROM music_log ORDER BY timestamp DESC LIMIT 1")
+                    row = cur.fetchone()
+                    if row:
+                        data["current_song"] = {"title": row[0], "artist": row[1]}
+                    else:
+                        data["current_song"] = {"title": None, "artist": None}
+            except Exception:
+                data["current_song"] = {"title": None, "artist": None}
         
         return jsonify(data)
     except Exception as e:
@@ -156,6 +207,64 @@ def get_health():
     except Exception as e:
         logger.error(f"Error getting health: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/camera/snapshot')
+def camera_snapshot():
+    """Return a single JPEG frame from the camera or latest saved snapshot.
+    Tries saved snapshot first, then attempts a live capture via OpenCV.
+    Falls back to a 1x1 transparent PNG if unavailable."""
+    try:
+        # 1) Try an existing snapshot saved by a background process
+        snapshot_path = Path('/opt/pulse/data/latest_camera.jpg')
+        if snapshot_path.exists() and snapshot_path.stat().st_size > 0:
+            resp = send_file(str(snapshot_path), mimetype='image/jpeg', max_age=0)
+            # Ensure no caching
+            resp.headers['Cache-Control'] = 'no-store'
+            return resp
+
+        # 2) Try to capture a live frame via PiCamera2 first, then V4L2
+        ok, frame = False, None
+        try:
+            try:
+                from picamera2 import Picamera2
+                cam = Picamera2()
+                try:
+                    cfg = cam.create_video_configuration(main={"size": (640, 480), "format": "RGB888"})
+                except Exception:
+                    cfg = cam.create_still_configuration()
+                cam.configure(cfg)
+                cam.start()
+                arr = cam.capture_array()
+                cam.stop()
+                import cv2
+                frame = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                ok = True
+            except Exception:
+                import cv2
+                cap = cv2.VideoCapture(0)
+                ok, frame = cap.read()
+                cap.release()
+        except Exception:
+            ok, frame = False, None
+
+        if ok and frame is not None:
+            import cv2
+            ok, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            if ok:
+                data = buf.tobytes()
+                return Response(data, mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
+
+        # 3) Fallback: transparent PNG
+        transparent_png = (
+            b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+            b'\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0bIDATx\xda\x63\x60\x00\x00\x00\x02\x00\x01'
+            b'\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82'
+        )
+        return Response(transparent_png, mimetype='image/png', headers={'Cache-Control': 'no-store'})
+    except Exception as e:
+        logger.error(f"Error serving snapshot: {e}")
+        return ("Error", 500)
 
 
 # ===== Control API Routes =====
@@ -446,7 +555,37 @@ def broadcast_sensor_data():
         try:
             if hub_instance:
                 data = hub_instance._collect_sensor_data()
-                socketio.emit('sensor_update', data)
+            else:
+                # Fallback to current snapshot from DB so UI still updates
+                data = {
+                    "occupancy": db.get_current_occupancy(),
+                    "temperature_f": None,
+                    "humidity": None,
+                    "light_level": None,
+                    "noise_db": None,
+                    "current_song": None,
+                }
+                env = db.get_latest_environment()
+                if env:
+                    data.update({
+                        "temperature_f": env.get("temperature"),
+                        "humidity": env.get("humidity"),
+                        "light_level": env.get("light_level"),
+                        "noise_db": env.get("noise_level"),
+                    })
+                try:
+                    with db.get_connection() as conn:
+                        cur = conn.cursor()
+                        cur.execute("SELECT track_name, artist FROM music_log ORDER BY timestamp DESC LIMIT 1")
+                        row = cur.fetchone()
+                        if row:
+                            data["current_song"] = {"title": row[0], "artist": row[1]}
+                        else:
+                            data["current_song"] = {"title": None, "artist": None}
+                except Exception:
+                    data["current_song"] = {"title": None, "artist": None}
+
+            socketio.emit('sensor_update', data)
             
             time.sleep(5)  # Update every 5 seconds
         except Exception as e:
@@ -462,9 +601,20 @@ def start_broadcast_thread():
 
 
 def run_server(host='0.0.0.0', port=8080, debug=False):
-    """Run the dashboard server"""
+    """Run the dashboard server with safe fallbacks."""
     start_broadcast_thread()
-    socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
+    try:
+        socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
+    except Exception as e:
+        logger.error(f"SocketIO server failed ({e}); falling back to Flask built-in server")
+        # Minimal fallback to keep HTTP API reachable
+        app.run(host=host, port=port, debug=False)
+
+
+# ===== Camera helper (optional init placeholder) =====
+def _try_init_camera_once():
+    """Placeholder for future camera warmup/init if needed."""
+    return True
 
 
 if __name__ == "__main__":

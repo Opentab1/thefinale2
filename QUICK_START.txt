@@ -1,0 +1,94 @@
+╔════════════════════════════════════════════════════════════════════╗
+║                    PULSE - QUICK START GUIDE                       ║
+╚════════════════════════════════════════════════════════════════════╝
+
+STEP 1: Get Pulse onto your Raspberry Pi
+─────────────────────────────────────────────────────────────────────
+
+Option A: If you have these files on a USB drive
+    1. Insert USB drive into Pi
+    2. Open file manager, copy the 'pulse' folder to your home directory
+    3. Open terminal
+
+Option B: If you're downloading/cloning
+    - git clone <repo-url> ~/pulse
+    - Or download and extract to ~/pulse
+
+Option C: Already have the files?
+    - Just note where they are (e.g., ~/pulse or /opt/pulse)
+
+
+STEP 2: Install Pulse (ONE TIME ONLY)
+─────────────────────────────────────────────────────────────────────
+
+Open a terminal on your Pi and run:
+
+    cd ~/pulse                    # or wherever you put the files
+    bash SIMPLE_INSTALL.sh        # Install Pulse
+    source ~/.bashrc              # Reload your shell
+
+
+STEP 3: Start Pulse (EVERY TIME)
+─────────────────────────────────────────────────────────────────────
+
+Just type this from ANYWHERE:
+
+    pulse
+
+That's it! The 'pulse' command will:
+✓ Find your Pulse installation automatically
+✓ Start the hub with full debug output in the terminal
+✓ Start the dashboard API server
+✓ Open your browser to http://localhost:8080
+
+
+WHAT YOU'LL SEE:
+─────────────────────────────────────────────────────────────────────
+
+In the terminal, you'll see color-coded output showing:
+  🎥 Camera/People Counter - real-time detection
+  🎤 Microphone - decibel levels and song detection
+  🌡️  BME280 - temperature, humidity, pressure
+  💡 Light Sensor - brightness levels
+  📊 Status updates every 30 seconds
+
+In the browser:
+  - Live dashboard at http://localhost:8080
+  - Real-time sensor data
+  - System health monitoring
+
+
+TO STOP PULSE:
+─────────────────────────────────────────────────────────────────────
+
+Press: Ctrl+C in the terminal
+
+
+TROUBLESHOOTING:
+─────────────────────────────────────────────────────────────────────
+
+If 'pulse' command not found after install:
+    source ~/.bashrc
+
+If you want to reinstall:
+    cd ~/pulse
+    bash SIMPLE_INSTALL.sh
+
+If a sensor isn't working:
+    cd ~/pulse
+    ./diagnose_sensors.py
+
+All errors will show in the terminal with detailed explanations!
+
+
+═══════════════════════════════════════════════════════════════════════
+
+Ready? Here's your command:
+
+    cd ~/pulse && bash SIMPLE_INSTALL.sh
+
+Then:
+
+    pulse
+
+═══════════════════════════════════════════════════════════════════════

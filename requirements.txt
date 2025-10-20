@@ -37,6 +37,9 @@ tflite-runtime==2.14.0; python_version < '3.13'
 librosa>=0.10.2
 soundfile==0.12.1
 pydub==0.25.1
+sounddevice==0.4.6
+shazamio>=0.4.0
+aiohttp<4.0.0  # shazamio dependency pin for stability on aarch64
 
 # Smart Home Integrations
 google-auth==2.25.2

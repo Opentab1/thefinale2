@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Callable
 import psutil
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -234,10 +235,32 @@ class HealthMonitor:
 def test_camera() -> bool:
     """Test if camera is available"""
     try:
-        from picamera2 import Picamera2
-        camera = Picamera2()
-        camera.close()
-        return True
+        # Prefer Picamera2 check (Raspberry Pi cam)
+        try:
+            from picamera2 import Picamera2
+            camera = Picamera2()
+            camera.close()
+            return True
+        except Exception as e:
+            msg = str(e).lower()
+            # If the camera is busy/in use, we still consider it PRESENT
+            if "busy" in msg or "in use" in msg or "pipeline handler in use" in msg:
+                return True
+            # Fallback to OpenCV check (USB/UVC cams)
+            try:
+                import cv2  # type: ignore
+                cap = cv2.VideoCapture(0)
+                ok = cap.isOpened()
+                cap.release()
+                if ok:
+                    return True
+            except Exception:
+                pass
+            # As a last resort, presence of /dev/video0 implies a V4L2 camera
+            if os.path.exists('/dev/video0'):
+                return True
+            # Otherwise, propagate failure
+            raise
     except Exception as e:
         logger.debug(f"Camera test failed: {e}")
         return False
