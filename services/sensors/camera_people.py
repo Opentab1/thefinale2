@@ -1,7 +1,7 @@
 """
 Pulse 1.0 - Camera-based People Counting
 Uses computer vision to detect and count people in venue
-Integrated with party_box implementations for production-ready AI counting
+Integrated with party_box-inspired implementations for production-ready AI counting
 """
 
 import logging
@@ -11,13 +11,11 @@ from threading import Thread, Event
 from datetime import datetime
 from typing import Optional, Tuple
 import os
-<<<<<<< HEAD
 from .person_tracker_adapter import PersonTracker
-from .party_person_detector import PersonDetector as PartyPersonDetector
-=======
-from .detector.person_detector import PersonDetector
-from .tracker.person_tracker import PersonTracker
->>>>>>> origin/main
+try:
+    from .person_detector import PersonDetector
+except Exception:
+    PersonDetector = None
 
 logger = logging.getLogger(__name__)
 
@@ -45,18 +43,11 @@ class PeopleCounter:
         self.model_type = model_type or "hog"
         self.use_ai_hat = use_ai_hat
 
-        # Initialize detector (PartyBox-derived)
-        self.detector: Optional[PartyPersonDetector] = None
+        # Initialize detector (party_box-inspired)
+        self.detector = None
         self._init_detector()
 
-        # Initialize detector with party_box implementation
-        self.detector = PersonDetector(
-            confidence_threshold=self.confidence_threshold,
-            model_type=self.model_type
-        )
-        logger.info(f"Initialized detector with model: {self.model_type}")
-
-        # Initialize tracker with party_box implementation
+        # Initialize tracker (party_box-inspired)
         self.tracker = PersonTracker(
             confidence_threshold=self.confidence_threshold,
             min_detection_frames=5
@@ -72,27 +63,26 @@ class PeopleCounter:
     def _init_detector(self):
         """Initialize person detection model (prefers AI hat > SSD > HOG)."""
         try:
-            # Create detector; models live in /opt/pulse/models
-            det = PartyPersonDetector(confidence_threshold=self.confidence_threshold,
-                                      model_type="hog",
-                                      models_dir="/opt/pulse/models")
-
-            # Prefer AI accelerator when present
             if self.use_ai_hat and (os.path.exists('/dev/hailo0') or os.path.exists('/dev/apex_0')):
-                if det.set_model('hailo'):
-                    logger.info("Using AI HAT accelerated detector")
-                    self.detector = det
-                    return
-
-            # Otherwise try MobileNet-SSD if model files exist
-            if det.set_model('ssd'):
-                logger.info("Using CPU MobileNet-SSD detector")
-            else:
-                logger.info("Using HOG detector (fallback)")
-            self.detector = det
+                logger.info("AI HAT present; detector will use accelerator when available")
+            # Prefer lightweight PersonDetector wrapper; falls back internally
+            if PersonDetector is not None:
+                self.detector = PersonDetector(
+                    confidence_threshold=self.confidence_threshold,
+                    model_type=self.model_type,
+                )
+                logger.info(f"Initialized detector with model: {self.model_type}")
+                return
         except Exception as e:
-            logger.error(f"Failed to initialize detector: {e}")
-            raise
+            logger.warning(f"Preferred detector unavailable: {e}")
+        # As last resort fallback to simple motion subtractor to prevent crashes
+        try:
+            self.detector = cv2.HOGDescriptor()
+            self.detector.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+            logger.info("Initialized HOG detector as fallback")
+        except Exception as e:
+            logger.error(f"Failed to initialize HOG; falling back to motion: {e}")
+            self.detector = cv2.createBackgroundSubtractorMOG2()
     
     def _init_ai_hat_detector(self):
         """Initialize AI HAT accelerated detector if hardware present.
@@ -104,27 +94,156 @@ class PeopleCounter:
                 raise RuntimeError("AI HAT device not found")
             # Placeholder for actual AI HAT integration
             logger.info("AI HAT detector initialized")
-            # No-op (handled by PartyPersonDetector)
+            # No-op; acceleration handled within specific backends
             self.detector = self.detector or None
         except Exception as e:
             # Propagate to allow CPU fallback in _init_detector
             raise e
     
     def _init_cpu_detector(self):
-        """Deprecated: initialization handled by PartyPersonDetector."""
-        pass
+        """Initialize CPU-based detector; prefer PersonDetector when available."""
+        if PersonDetector is not None:
+            try:
+                self.detector = PersonDetector(confidence_threshold=self.confidence_threshold, model_type="ssd")
+                logger.info("CPU detector initialized (PersonDetector)")
+                return
+            except Exception as e:
+                logger.warning(f"PersonDetector unavailable: {e}")
+        try:
+            model_path = "/opt/pulse/models"
+            os.makedirs(model_path, exist_ok=True)
+            prototxt = os.path.join(model_path, "MobileNetSSD_deploy.prototxt")
+            model = os.path.join(model_path, "MobileNetSSD_deploy.caffemodel")
+            if os.path.exists(prototxt) and os.path.exists(model):
+                self.detector = cv2.dnn.readNetFromCaffe(prototxt, model)
+                logger.info("CPU detector initialized with MobileNet SSD")
+            else:
+                logger.warning("Model files not found, using HOG detector")
+                self.detector = cv2.HOGDescriptor()
+                self.detector.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        except Exception as e:
+            logger.error(f"Failed to initialize CPU detector: {e}")
+            self.detector = cv2.createBackgroundSubtractorMOG2()
     
     def detect_people(self, frame: np.ndarray) -> Tuple[int, list, list]:
         """Detect people in frame and return (count, boxes, detections)."""
         try:
-            if self.detector is None:
-                return 0, [], []
-            detections = self.detector.detect_people(frame)
-            boxes = [list(d['box']) for d in detections]
-            return len(boxes), boxes, detections
+            # party_box-inspired detector path
+            if PersonDetector is not None and isinstance(self.detector, PersonDetector):
+                count, boxes, detections = self._detect_party(self.detector, frame)
+                return count, boxes, detections
+            elif isinstance(self.detector, cv2.HOGDescriptor):
+                count, boxes = self._detect_hog(frame)
+                detections = [{'box': tuple(b), 'confidence': 0.6} for b in boxes]
+                return count, boxes, detections
+            elif isinstance(self.detector, cv2.dnn_Net):
+                count, boxes = self._detect_dnn(frame)
+                detections = [{'box': tuple(b), 'confidence': 0.6} for b in boxes]
+                return count, boxes, detections
+            elif self.detector == "ai_hat":
+                count, boxes = self._detect_ai_hat(frame)
+                detections = [{'box': tuple(b), 'confidence': 0.8} for b in boxes]
+                return count, boxes, detections
+            else:
+                count, boxes = self._detect_motion(frame)
+                detections = [{'box': tuple(b), 'confidence': 0.5} for b in boxes]
+                return count, boxes, detections
         except Exception as e:
             logger.error(f"Detection error: {e}")
             return 0, [], []
+    
+    def _detect_hog(self, frame: np.ndarray) -> Tuple[int, list]:
+        """Detect using HOG descriptor"""
+        try:
+            # Resize for faster processing
+            scale = 0.5
+            resized = cv2.resize(frame, None, fx=scale, fy=scale)
+            
+            boxes, weights = self.detector.detectMultiScale(
+                resized,
+                winStride=(4, 4),
+                padding=(8, 8),
+                scale=1.05
+            )
+            
+            # Scale boxes back to original size
+            boxes = [[int(x/scale), int(y/scale), int(w/scale), int(h/scale)] 
+                    for x, y, w, h in boxes]
+            
+            return len(boxes), boxes
+        except Exception as e:
+            logger.error(f"HOG detection error: {e}")
+            return 0, []
+    
+    def _detect_dnn(self, frame: np.ndarray) -> Tuple[int, list]:
+        """Detect using DNN model"""
+        try:
+            h, w = frame.shape[:2]
+            blob = cv2.dnn.blobFromImage(frame, 0.007843, (300, 300), 127.5)
+            
+            self.detector.setInput(blob)
+            detections = self.detector.forward()
+            
+            boxes = []
+            for i in range(detections.shape[2]):
+                confidence = detections[0, 0, i, 2]
+                
+                if confidence > self.confidence_threshold:
+                    # Class 15 is person in MobileNet SSD
+                    class_id = int(detections[0, 0, i, 1])
+                    if class_id == 15:
+                        box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                        boxes.append(box.astype(int).tolist())
+            
+            return len(boxes), boxes
+        except Exception as e:
+            logger.error(f"DNN detection error: {e}")
+            return 0, []
+
+    def _detect_party(self, detector: "PersonDetector", frame: np.ndarray) -> Tuple[int, list, list]:
+        """Detect via party_box PersonDetector."""
+        try:
+            results = detector.detect_people(frame) or []
+            boxes = [list(map(int, d.get('box', (0, 0, 0, 0)))) for d in results]
+            detections = [
+                {
+                    'box': tuple(list(map(int, d.get('box', (0, 0, 0, 0))))),
+                    'confidence': float(d.get('confidence', self.confidence_threshold)),
+                }
+                for d in results
+            ]
+            return len(boxes), boxes, detections
+        except Exception as e:
+            logger.error(f"Party detector error: {e}")
+            return 0, [], []
+    
+    def _detect_ai_hat(self, frame: np.ndarray) -> Tuple[int, list]:
+        """Detect using AI HAT"""
+        # Placeholder for actual AI HAT implementation
+        # Would use hailo-tappas or similar framework
+        logger.debug("AI HAT detection placeholder")
+        return 0, []
+    
+    def _detect_motion(self, frame: np.ndarray) -> Tuple[int, list]:
+        """Simple motion-based detection (fallback)"""
+        try:
+            fg_mask = self.detector.apply(frame)
+            
+            # Find contours
+            contours, _ = cv2.findContours(
+                fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            
+            # Filter by size
+            min_area = 2000
+            valid_contours = [c for c in contours if cv2.contourArea(c) > min_area]
+            
+            boxes = [cv2.boundingRect(c) for c in valid_contours]
+            
+            return len(boxes), boxes
+        except Exception as e:
+            logger.error(f"Motion detection error: {e}")
+            return 0, []
     
     def start_counting(self, camera_index: int = 0, zone: str = "Main Floor"):
         """Start continuous people counting"""
@@ -142,7 +261,7 @@ class PeopleCounter:
         logger.info(f"Started people counting for zone: {zone}")
     
     def _counting_loop(self, camera_index: int, zone: str):
-        """Main counting loop with party_box integration"""
+        """Main counting loop with party_box-inspired integration"""
         try:
             # Try picamera2 first (Raspberry Pi camera)
             try:
@@ -181,17 +300,17 @@ class PeopleCounter:
                     if frame_count % 2 != 0:  # Process every other frame
                         continue
                     
-                    # Detect people using party_box detector
+                    # Detect people
                     raw_count, boxes, detections = self.detect_people(frame)
 
                     # Update tracker for stable counts and entry/exit tracking
                     annotated_frame, stats = self.tracker.process_detections(detections, frame)
-                    
-                    # Update counts from tracker
-                    self.current_count = int(stats.get('current', 0))
-                    self.entry_count = int(stats.get('entries', 0))
-                    self.exit_count = int(stats.get('exits', 0))
-                    logger.debug(f"Current: {self.current_count}, Entries: {self.entry_count}, Exits: {self.exit_count}")
+                    self.current_count = int(stats.get('current', raw_count))
+                    self.entry_count = int(stats.get('entries', self.entry_count))
+                    self.exit_count = int(stats.get('exits', self.exit_count))
+                    logger.debug(
+                        f"Count: {self.current_count}, Entry: {self.entry_count}, Exit: {self.exit_count}"
+                    )
 
                     # Save snapshot for dashboard
                     self._maybe_save_snapshot(annotated_frame)

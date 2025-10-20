@@ -266,6 +266,7 @@ class PulseHub:
         
         if self.people_counter:
             data["occupancy"] = self.people_counter.get_current_count()
+            # Optionally persist entry/exit granulars in metadata
         
         if self.bme280:
             readings = self.bme280.get_all_readings()
