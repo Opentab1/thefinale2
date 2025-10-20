@@ -77,12 +77,15 @@ class SongDetector:
             self.detection_active = True
             self.detection_thread = threading.Thread(target=self._detection_loop)
             self.detection_thread.daemon = True
-            self.detection_thread.start()
-            logging.info("Song detection thread started")
-    
-    def _detection_loop(self):
+            self.detection    def _detection_loop(self):
         """Background thread for periodic song detection"""
         logging.info("Song detection loop started")
+        
+        # Initialize last detection time to now to prevent immediate first detection
+        # This gives the AudioMonitor time to open its dB monitoring stream first
+        self.last_detection_time = time.time()
+        
+        while self.detection_active:ng.info("Song detection loop started")
         
         while self.detection_active:
             # Check if it's time for a new detection
