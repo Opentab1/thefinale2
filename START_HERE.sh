@@ -45,12 +45,25 @@ echo ""
 echo -e "${WHITE}Starting Pulse System with Debug Output...${NC}"
 echo ""
 
-# Determine workspace directory
-WORKSPACE_DIR="/workspace"
-if [ ! -d "$WORKSPACE_DIR/services" ]; then
-    WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Auto-detect Pulse installation directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Try to find Pulse installation
+if [ -d "$SCRIPT_DIR/services" ]; then
+    WORKSPACE_DIR="$SCRIPT_DIR"
+elif [ -d "/workspace/services" ]; then
+    WORKSPACE_DIR="/workspace"
+elif [ -d "/opt/pulse/services" ]; then
+    WORKSPACE_DIR="/opt/pulse"
+elif [ -d "$HOME/pulse/services" ]; then
+    WORKSPACE_DIR="$HOME/pulse"
+else
+    echo -e "${RED}Error: Cannot find Pulse installation${NC}"
+    echo "Please run this script from the Pulse directory"
+    exit 1
 fi
 
+echo -e "${GREEN}Found Pulse at: $WORKSPACE_DIR${NC}"
 cd "$WORKSPACE_DIR"
 
 # Determine Python executable

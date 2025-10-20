@@ -11,9 +11,34 @@ from pathlib import Path
 from threading import Thread
 import time
 
+# Auto-detect Pulse installation directory
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+# Try common locations
+PULSE_DIRS = [
+    SCRIPT_DIR,
+    Path('/workspace'),
+    Path('/opt/pulse'),
+    Path.home() / 'pulse',
+]
+
+PULSE_ROOT = None
+for pd in PULSE_DIRS:
+    if (pd / 'services' / 'hub' / 'main.py').exists():
+        PULSE_ROOT = pd
+        break
+
+if PULSE_ROOT is None:
+    print("ERROR: Cannot find Pulse installation!")
+    print(f"Searched: {[str(p) for p in PULSE_DIRS]}")
+    sys.exit(1)
+
+print(f"Found Pulse at: {PULSE_ROOT}")
+
 # Add paths
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).parent / 'services'))
+sys.path.insert(0, str(PULSE_ROOT))
+sys.path.insert(0, str(PULSE_ROOT / 'services'))
+os.chdir(str(PULSE_ROOT))
 
 # Setup detailed logging to console
 logging.basicConfig(
