@@ -78,19 +78,11 @@ class AudioMonitor:
         self._last_db_ts = 0.0
 
         # Initialize song detector if available
-        if SongDetector is not None:
-            try:
-                self.song_detector = SongDetector(
-                    enabled=True,
-                    detection_interval=int(self._song_detect_interval)
-                )
-                logger.info("Initialized song detector from party_box")
-            except Exception as e:
-                logger.warning(f"Failed to initialize song detector: {e}")
-                self.song_detector = None
-        else:
-            self.song_detector = None
-            logger.info("Song detector disabled (dependencies missing)")
+        # TEMPORARY: Disabled due to microphone conflict with dB monitoring
+        # TODO: Refactor to use shared audio stream instead of opening separate stream
+        self.song_detector = None
+        logger.warning("⚠️  Song detector temporarily disabled (microphone conflict with dB monitoring)")
+        logger.warning("   dB readings will work, song detection will be fixed in next update")
 
         # Audio interfaces (optional)
         self.pyaudio_instance = None
