@@ -9,6 +9,7 @@ from threading import Thread, Event
 from datetime import datetime
 import os
 import time
+import time
 
 # NumPy is required
 try:
@@ -76,13 +77,30 @@ class AudioMonitor:
         self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '30'))
         self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '2.0'))
         self._last_db_ts = 0.0
+        self._last_song_detect_ts = 0.0
+        
+        # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
+        # This allows song detection without opening a separate audio stream
+        self._audio_buffer_size = int(5 * self.sample_rate)  # 5 seconds
+        self._audio_buffer = np.zeros(self._audio_buffer_size, dtype=np.int16)
+        self._buffer_index = 0
 
         # Initialize song detector if available
-        # TEMPORARY: Disabled due to microphone conflict with dB monitoring
-        # TODO: Refactor to use shared audio stream instead of opening separate stream
-        self.song_detector = None
-        logger.warning("⚠️  Song detector temporarily disabled (microphone conflict with dB monitoring)")
-        logger.warning("   dB readings will work, song detection will be fixed in next update")
+        if SongDetector is not None:
+            try:
+                # Pass enabled=False so it doesn't start its own recording thread
+                # We'll call detect_song_from_buffer() manually with our buffered audio
+                self.song_detector = SongDetector(
+                    enabled=False,  # Don't start background recording
+                    detection_interval=int(self._song_detect_interval)
+                )
+                logger.info("✅ Song detector initialized (using shared audio buffer)")
+            except Exception as e:
+                logger.warning(f"Failed to initialize song detector: {e}")
+                self.song_detector = None
+        else:
+            self.song_detector = None
+            logger.info("Song detector disabled (dependencies missing)")
 
         # Audio interfaces (optional)
         self.pyaudio_instance = None
@@ -341,6 +359,19 @@ class AudioMonitor:
                     if audio_data.size == 0:
                         continue
                     
+                    # Store audio in rolling buffer for song detection
+                    chunk_len = min(len(audio_data), self._audio_buffer_size)
+                    if self._buffer_index + chunk_len <= self._audio_buffer_size:
+                        # Fits in remaining buffer space
+                        self._audio_buffer[self._buffer_index:self._buffer_index + chunk_len] = audio_data[:chunk_len]
+                        self._buffer_index += chunk_len
+                    else:
+                        # Wrap around - shift old data and append new
+                        shift_amount = chunk_len
+                        self._audio_buffer = np.roll(self._audio_buffer, -shift_amount)
+                        self._audio_buffer[-shift_amount:] = audio_data[:chunk_len]
+                        self._buffer_index = self._audio_buffer_size  # Buffer is full
+                    
                     # Calculate dB level more frequently for better responsiveness (every 2 seconds)
                     now_db = time.time()
                     if (now_db - self._last_db_ts) >= 2.0:  # Update every 2 seconds
@@ -350,14 +381,13 @@ class AudioMonitor:
                         self._last_db_ts = now_db
                         logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
                     
-                    # Get song detection results from background detector
-                    if self.song_detector is not None:
-                        song_info = self.song_detector.get_latest_song()
-                        if song_info and song_info.get("title") != "Unknown":
-                            if not self.current_song or self.current_song.get("title") != song_info.get("title"):
-                                # New song detected!
-                                logger.info(f"🎵 Song detected: {song_info['title']} - {song_info['artist']}")
-                            self.current_song = song_info
+                    # Trigger song detection every 30 seconds using buffered audio
+                    now_song = time.time()
+                    if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
+                        if self._buffer_index >= self._audio_buffer_size:  # Buffer is full (5 seconds)
+                            logger.info("🎵 Running song detection from audio buffer...")
+                            self._detect_song_from_buffer()
+                        self._last_song_detect_ts = now_song
                     
                 except Exception as e:
                     logger.error(f"Error in monitoring loop: {e}")
@@ -383,16 +413,83 @@ class AudioMonitor:
             except Exception:
                 pass
     
+    def _detect_song_from_buffer(self):
+        """Detect song using buffered audio data (runs in background thread)"""
+        import tempfile
+        import wave
+        import threading
+        
+        def detect_async():
+            try:
+                # Save buffer to temporary WAV file
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                    temp_filename = temp_file.name
+                
+                with wave.open(temp_filename, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)  # 16-bit audio
+                    wf.setframerate(self.sample_rate)
+                    wf.writeframes(self._audio_buffer.tobytes())
+                
+                logger.debug(f"Saved audio buffer to {temp_filename}")
+                
+                # Process the audio file with ShazamIO
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                result = loop.run_until_complete(self._recognize_song_async(temp_filename))
+                
+                # Process result
+                if result and 'track' in result:
+                    track = result['track']
+                    title = track.get('title', 'Unknown')
+                    artist = track.get('subtitle', 'Unknown')
+                    
+                    new_song = {
+                        "title": title,
+                        "artist": artist,
+                        "timestamp": time.time(),
+                        "confidence": 1.0
+                    }
+                    
+                    # Only log if it's a new song
+                    if not self.current_song or self.current_song.get("title") != title:
+                        logger.info(f"✅ Song detected: {title} - {artist}")
+                    
+                    self.current_song = new_song
+                else:
+                    logger.debug("No song detected from buffer")
+                
+                # Clean up temp file
+                try:
+                    import os
+                    os.remove(temp_filename)
+                except Exception:
+                    pass
+                    
+            except Exception as e:
+                logger.error(f"Error detecting song from buffer: {e}")
+        
+        # Run in background thread to not block audio monitoring
+        thread = threading.Thread(target=detect_async, daemon=True)
+        thread.start()
+    
+    async def _recognize_song_async(self, audio_file):
+        """Recognize song using ShazamIO (async)"""
+        try:
+            from shazamio import Shazam
+            shazam = Shazam()
+            result = await shazam.recognize(audio_file)
+            return result
+        except Exception as e:
+            logger.error(f"Shazam recognition error: {e}")
+            return None
+    
     def stop_monitoring(self):
         """Stop audio monitoring"""
         self.running = False
         self.stop_event.set()
-        
-        # Stop song detector
-        try:
-            self.song_detector.stop()
-        except Exception as e:
-            logger.warning(f"Error stopping song detector: {e}")
     
     def get_current_db(self) -> float:
         """Get current decibel level"""
