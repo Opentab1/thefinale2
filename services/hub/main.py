@@ -11,6 +11,8 @@ import yaml
 from datetime import datetime, timedelta
 from threading import Thread, Event
 from pathlib import Path
+import signal
+from contextlib import contextmanager
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -24,6 +26,27 @@ from sensors.light_level import LightSensor
 from sensors.pan_tilt import PanTiltController
 
 logger = logging.getLogger(__name__)
+
+class TimeoutError(Exception):
+    """Raised when an operation times out"""
+    pass
+
+@contextmanager
+def timeout(seconds, error_message="Operation timed out"):
+    """Context manager for timing out operations"""
+    def timeout_handler(signum, frame):
+        raise TimeoutError(error_message)
+    
+    # Set up the timeout
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+    
+    try:
+        yield
+    finally:
+        # Disable the alarm
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 class PulseHub:
     def __init__(self, config_path: str = "/opt/pulse/config/config.yaml"):
@@ -74,169 +97,232 @@ class PulseHub:
         logger.info("INITIALIZING SYSTEM COMPONENTS")
         logger.info("="*80)
         
-        # Initialize sensors
-        logger.info("\n🎥 Initializing Camera/People Counter...")
+        # Initialize sensors with timeout protection
+        logger.info("\n🎥 [1/10] Initializing Camera/People Counter...")
         if modules.get('camera'):
             try:
                 use_ai_hat = modules.get('ai_hat', False)
                 logger.info(f"  - AI HAT acceleration: {'Enabled' if use_ai_hat else 'Disabled'}")
-                self.people_counter = PeopleCounter(use_ai_hat=use_ai_hat)
-                self.health_monitor.register_test("camera", lambda: True)
-                logger.info("  ✓ People counter initialized successfully")
+                
+                # Initialize with 10 second timeout
+                try:
+                    with timeout(10, "Camera initialization timed out after 10 seconds"):
+                        self.people_counter = PeopleCounter(use_ai_hat=use_ai_hat)
+                        self.health_monitor.register_test("camera", lambda: True)
+                        logger.info("  ✓ People counter initialized successfully")
+                except TimeoutError as e:
+                    logger.warning(f"  ⚠ Camera initialization timed out - skipping")
+                    self.people_counter = None
             except Exception as e:
-                logger.error(f"  ✗ Could not initialize people counter: {e}", exc_info=True)
+                logger.error(f"  ✗ Could not initialize people counter: {e}")
+                self.people_counter = None
         else:
             logger.info("  - Disabled in config")
         
-        logger.info("\n🎤 Initializing Microphone/Audio Monitor...")
+        logger.info("\n🎤 [2/10] Initializing Microphone/Audio Monitor...")
         if modules.get('mic'):
             try:
-                self.audio_monitor = AudioMonitor()
-                self.health_monitor.register_test("mic", lambda: True)
-                logger.info("  ✓ Audio monitor initialized successfully")
+                # Initialize with 8 second timeout
+                try:
+                    with timeout(8, "Audio monitor initialization timed out after 8 seconds"):
+                        self.audio_monitor = AudioMonitor()
+                        self.health_monitor.register_test("mic", lambda: True)
+                        logger.info("  ✓ Audio monitor initialized successfully")
+                except TimeoutError as e:
+                    logger.warning(f"  ⚠ Audio initialization timed out - skipping")
+                    self.audio_monitor = None
             except ImportError as e:
                 logger.error(f"  ✗ Audio monitor dependencies missing: {e}")
                 logger.error("  → Install with: pip install numpy pyaudio sounddevice")
                 self.audio_monitor = None
             except Exception as e:
-                logger.error(f"  ✗ Could not initialize audio monitor: {e}", exc_info=True)
+                logger.error(f"  ✗ Could not initialize audio monitor: {e}")
                 self.audio_monitor = None
         else:
             logger.info("  - Disabled in config")
         
-        logger.info("\n🌡️  Initializing BME280 Sensor...")
+        logger.info("\n🌡️  [3/10] Initializing BME280 Sensor...")
         if modules.get('bme280'):
             try:
-                # Try default address first (0x76), then 0x77
-                # BME280Reader will automatically try both addresses
-                self.bme280 = BME280Reader(address=0x76)
-                self.health_monitor.register_test("bme280", lambda: True)
-                logger.info("  ✓ BME280 sensor initialized successfully")
-            except Exception as e:
-                logger.warning(f"  ⚠ BME280 at 0x76 failed, trying 0x77: {e}")
+                # Try default address first (0x76), then 0x77 with timeout
                 try:
-                    self.bme280 = BME280Reader(address=0x77)
-                    self.health_monitor.register_test("bme280", lambda: True)
-                    logger.info("  ✓ BME280 sensor initialized successfully at 0x77")
-                except Exception as e2:
-                    logger.error(f"  ✗ Could not initialize BME280 at any address: {e2}")
-                    self.bme280 = None
+                    with timeout(5, "BME280 initialization timed out after 5 seconds"):
+                        self.bme280 = BME280Reader(address=0x76)
+                        self.health_monitor.register_test("bme280", lambda: True)
+                        logger.info("  ✓ BME280 sensor initialized successfully")
+                except TimeoutError:
+                    logger.warning(f"  ⚠ BME280 at 0x76 timed out, trying 0x77")
+                    try:
+                        with timeout(5, "BME280 initialization timed out after 5 seconds"):
+                            self.bme280 = BME280Reader(address=0x77)
+                            self.health_monitor.register_test("bme280", lambda: True)
+                            logger.info("  ✓ BME280 sensor initialized successfully at 0x77")
+                    except TimeoutError:
+                        logger.warning(f"  ⚠ BME280 initialization timed out - skipping")
+                        self.bme280 = None
+            except Exception as e:
+                logger.error(f"  ✗ Could not initialize BME280: {e}")
+                self.bme280 = None
         else:
             logger.info("  - Disabled in config")
         
-        logger.info("\n💡 Initializing Light Sensor...")
+        logger.info("\n💡 [4/10] Initializing Light Sensor...")
         if modules.get('light_sensor'):
             try:
-                self.light_sensor = LightSensor()
-                self.health_monitor.register_test("light_sensor", lambda: True)
-                logger.info("  ✓ Light sensor initialized successfully")
+                # Light sensor initialization is usually quick, but add timeout just in case
+                try:
+                    with timeout(5, "Light sensor initialization timed out after 5 seconds"):
+                        self.light_sensor = LightSensor()
+                        self.health_monitor.register_test("light_sensor", lambda: True)
+                        logger.info("  ✓ Light sensor initialized successfully")
+                except TimeoutError:
+                    logger.warning(f"  ⚠ Light sensor initialization timed out - skipping")
+                    self.light_sensor = None
             except ImportError as e:
                 logger.error(f"  ✗ Light sensor dependencies missing: {e}")
                 logger.error("  → Install with: pip install opencv-python numpy")
                 self.light_sensor = None
             except Exception as e:
-                logger.error(f"  ✗ Could not initialize light sensor: {e}", exc_info=True)
+                logger.error(f"  ✗ Could not initialize light sensor: {e}")
                 self.light_sensor = None
         else:
             logger.info("  - Disabled in config")
         
-        logger.info("\n🔄 Initializing Pan-Tilt Controller...")
+        logger.info("\n🔄 [5/10] Initializing Pan-Tilt Controller...")
         if modules.get('pan_tilt'):
             try:
-                self.pan_tilt = PanTiltController()
-                self.health_monitor.register_test("pan_tilt", lambda: True)
-                logger.info("  ✓ Pan-tilt controller initialized successfully")
+                with timeout(5, "Pan-tilt initialization timed out after 5 seconds"):
+                    self.pan_tilt = PanTiltController()
+                    self.health_monitor.register_test("pan_tilt", lambda: True)
+                    logger.info("  ✓ Pan-tilt controller initialized successfully")
+            except TimeoutError:
+                logger.warning(f"  ⚠ Pan-tilt initialization timed out - skipping")
+                self.pan_tilt = None
             except Exception as e:
-                logger.error(f"  ✗ Could not initialize pan-tilt: {e}", exc_info=True)
+                logger.error(f"  ✗ Could not initialize pan-tilt: {e}")
+                self.pan_tilt = None
         else:
             logger.info("  - Disabled in config")
         
         # Initialize controllers
-        logger.info("\n🏠 Initializing Smart Home Controllers...")
+        logger.info("\n🏠 [6/10] Initializing HVAC Controller...")
         self._init_hvac(integrations.get('hvac', {}))
+        
+        logger.info("\n💡 [7/10] Initializing Lighting Controller...")
         self._init_lighting(integrations.get('lighting', {}))
+        
+        logger.info("\n📺 [8/10] Initializing TV Controller...")
         self._init_tv(integrations.get('tv', {}))
+        
+        logger.info("\n🎵 [9/10] Initializing Music Controller...")
         self._init_music(integrations.get('music', {}))
         
         logger.info("\n" + "="*80)
-        logger.info("COMPONENT INITIALIZATION COMPLETE")
+        logger.info("[10/10] COMPONENT INITIALIZATION COMPLETE")
+        logger.info("="*80)
+        
+        # Summary of initialized components
+        active_sensors = []
+        if self.people_counter: active_sensors.append("Camera")
+        if self.audio_monitor: active_sensors.append("Microphone")
+        if self.bme280: active_sensors.append("BME280")
+        if self.light_sensor: active_sensors.append("Light Sensor")
+        if self.pan_tilt: active_sensors.append("Pan-Tilt")
+        
+        logger.info(f"✓ Active sensors: {', '.join(active_sensors) if active_sensors else 'None'}")
         logger.info("="*80)
     
     def _init_hvac(self, config: dict):
         """Initialize HVAC controller"""
         if not config.get('enabled'):
+            logger.info("  - Disabled in config")
             return
         
         try:
-            from controls.hvac_nest import NestHVACController
-            
-            self.hvac_controller = NestHVACController(
-                project_id=os.getenv('GOOGLE_PROJECT_ID'),
-                device_id=config.get('device_id') or os.getenv('NEST_DEVICE_ID'),
-                client_id=os.getenv('GOOGLE_CLIENT_ID'),
-                client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
-                refresh_token=os.getenv('NEST_REFRESH_TOKEN')
-            )
-            
-            logger.info("HVAC controller initialized")
+            with timeout(5, "HVAC controller initialization timed out"):
+                from controls.hvac_nest import NestHVACController
+                
+                self.hvac_controller = NestHVACController(
+                    project_id=os.getenv('GOOGLE_PROJECT_ID'),
+                    device_id=config.get('device_id') or os.getenv('NEST_DEVICE_ID'),
+                    client_id=os.getenv('GOOGLE_CLIENT_ID'),
+                    client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
+                    refresh_token=os.getenv('NEST_REFRESH_TOKEN')
+                )
+                
+                logger.info("  ✓ HVAC controller initialized")
+        except TimeoutError:
+            logger.warning("  ⚠ HVAC initialization timed out - skipping")
         except Exception as e:
-            logger.warning(f"Could not initialize HVAC: {e}")
+            logger.warning(f"  ⚠ Could not initialize HVAC: {e}")
     
     def _init_lighting(self, config: dict):
         """Initialize lighting controller"""
         if not config.get('enabled'):
+            logger.info("  - Disabled in config")
             return
         
         try:
-            from controls.lighting_hue import HueLightingController
-            
-            self.lighting_controller = HueLightingController(
-                bridge_ip=config.get('bridge_ip') or os.getenv('HUE_BRIDGE_IP'),
-                username=os.getenv('HUE_USERNAME')
-            )
-            
-            logger.info("Lighting controller initialized")
+            with timeout(5, "Lighting controller initialization timed out"):
+                from controls.lighting_hue import HueLightingController
+                
+                self.lighting_controller = HueLightingController(
+                    bridge_ip=config.get('bridge_ip') or os.getenv('HUE_BRIDGE_IP'),
+                    username=os.getenv('HUE_USERNAME')
+                )
+                
+                logger.info("  ✓ Lighting controller initialized")
+        except TimeoutError:
+            logger.warning("  ⚠ Lighting initialization timed out - skipping")
         except Exception as e:
-            logger.warning(f"Could not initialize lighting: {e}")
+            logger.warning(f"  ⚠ Could not initialize lighting: {e}")
     
     def _init_tv(self, config: dict):
         """Initialize TV controller"""
         if not config.get('enabled'):
+            logger.info("  - Disabled in config")
             return
         
         try:
-            if config.get('provider') == 'cec':
-                from controls.tv_cec import CECTVController
-                self.tv_controller = CECTVController()
-            else:
-                from controls.tv_cec import IPTVController
-                self.tv_controller = IPTVController(config.get('devices', []))
-            
-            logger.info("TV controller initialized")
+            with timeout(5, "TV controller initialization timed out"):
+                if config.get('provider') == 'cec':
+                    from controls.tv_cec import CECTVController
+                    self.tv_controller = CECTVController()
+                else:
+                    from controls.tv_cec import IPTVController
+                    self.tv_controller = IPTVController(config.get('devices', []))
+                
+                logger.info("  ✓ TV controller initialized")
+        except TimeoutError:
+            logger.warning("  ⚠ TV initialization timed out - skipping")
         except Exception as e:
-            logger.warning(f"Could not initialize TV: {e}")
+            logger.warning(f"  ⚠ Could not initialize TV: {e}")
     
     def _init_music(self, config: dict):
         """Initialize music controller"""
         if not config.get('enabled'):
+            logger.info("  - Disabled in config")
             return
         
         try:
-            if config.get('provider') == 'spotify':
-                from controls.music_spotify import SpotifyController
+            with timeout(5, "Music controller initialization timed out"):
+                if config.get('provider') == 'spotify':
+                    from controls.music_spotify import SpotifyController
+                    
+                    self.music_controller = SpotifyController(
+                        client_id=os.getenv('SPOTIFY_CLIENT_ID'),
+                        client_secret=os.getenv('SPOTIFY_CLIENT_SECRET'),
+                        redirect_uri=os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:9090/callback/spotify')
+                    )
+                else:
+                    from controls.music_local import LocalMusicController
+                    self.music_controller = LocalMusicController()
                 
-                self.music_controller = SpotifyController(
-                    client_id=os.getenv('SPOTIFY_CLIENT_ID'),
-                    client_secret=os.getenv('SPOTIFY_CLIENT_SECRET'),
-                    redirect_uri=os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:9090/callback/spotify')
-                )
-            else:
-                from controls.music_local import LocalMusicController
-                self.music_controller = LocalMusicController()
-            
-            logger.info("Music controller initialized")
+                logger.info("  ✓ Music controller initialized")
+        except TimeoutError:
+            logger.warning("  ⚠ Music initialization timed out - skipping")
         except Exception as e:
-            logger.warning(f"Could not initialize music: {e}")
+            logger.warning(f"  ⚠ Could not initialize music: {e}")
     
     def start(self):
         """Start the hub"""
