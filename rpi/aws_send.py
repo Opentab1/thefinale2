@@ -33,8 +33,8 @@ DB_PATH = "/opt/pulse/data/pulse.db"
 VENUE_ID = "fergs-stpete"
 LOCATION_ID = "main-floor"
 
-# Certificate paths (will be set up by startup.sh)
-CERT_DIR = Path.home() / ".pulse" / "certs"
+# Certificate paths
+CERT_DIR = Path("/etc/pulse/certs")
 ROOT_CA = CERT_DIR / "AmazonRootCA1.pem"
 CERT = CERT_DIR / "device.pem.crt"
 PRIVATE_KEY = CERT_DIR / "private.pem.key"
