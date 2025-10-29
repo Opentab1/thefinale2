@@ -21,11 +21,17 @@ except ImportError:
 else:
     MOCK_MODE = False
 
-# Configuration
-IOT_ENDPOINT = "iot.us-east-2.amazonaws.com"  # Replace with your endpoint
-CLIENT_ID = "pulse-rpi-local"
-TOPIC = "pulse/sensors/data"
-DB_PATH = "/workspace/services/storage/pulse.db"
+# Configuration (EXACT VALUES PROVIDED)
+IOT_ENDPOINT = "a1h5tm3jvbz8cg-ats.iot.us-east-2.amazonaws.com"
+CLIENT_ID = "pulse-fergs-stpete-main-floor-rpi5"
+TOPIC = "pulse/fergs-stpete/main-floor"
+
+# Default database path for production on RPi
+DB_PATH = "/opt/pulse/data/pulse.db"
+
+# Location metadata (EXACT VALUES PROVIDED)
+VENUE_ID = "fergs-stpete"
+LOCATION_ID = "main-floor"
 
 # Certificate paths (will be set up by startup.sh)
 CERT_DIR = Path.home() / ".pulse" / "certs"
@@ -81,31 +87,67 @@ class AWSIoTSender:
             self.connected = False
     
     def get_sensor_data(self):
-        """Fetch latest sensor data from local database"""
+        """Fetch latest sensor data from local database and normalize schema for dashboard"""
         try:
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             
-            # Get latest readings
-            cursor.execute("""
-                SELECT temperature, humidity, pressure, people_count, timestamp
-                FROM sensor_data
-                ORDER BY timestamp DESC
-                LIMIT 1
-            """)
-            row = cursor.fetchone()
+            # Get latest readings from consolidated sensor snapshot table if available,
+            # otherwise fall back to a generic sensor_data table if present.
+            try:
+                cursor.execute(
+                    """
+                    SELECT temperature_f, humidity, light_level, noise_db, occupancy, timestamp
+                    FROM current_snapshot
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                    """
+                )
+                row = cursor.fetchone()
+                if row:
+                    temperature_f, humidity, light_level, noise_db, occupancy, ts = row
+                else:
+                    row = None
+            except Exception:
+                row = None
+
+            if row is None:
+                cursor.execute(
+                    """
+                    SELECT temperature, humidity, NULL as light_level, NULL as noise_db, people_count as occupancy, timestamp
+                    FROM sensor_data
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                    """
+                )
+                row = cursor.fetchone()
             conn.close()
             
             if row:
-                return {
-                    'device_id': CLIENT_ID,
-                    'timestamp': datetime.now().isoformat(),
-                    'temperature': round(row[0], 2) if row[0] else None,
-                    'humidity': round(row[1], 2) if row[1] else None,
-                    'pressure': round(row[2], 2) if row[2] else None,
-                    'people_count': row[3] or 0,
-                    'last_reading': row[4]
+                temperature_f = row[0]
+                humidity = row[1]
+                light_level = row[2]
+                noise_db = row[3]
+                occupancy = row[4]
+                last_ts = row[5]
+
+                # Normalize types and rounding
+                payload = {
+                    "venue_id": VENUE_ID,
+                    "location_id": LOCATION_ID,
+                    "device_id": CLIENT_ID,
+                    "timestamp": datetime.now().isoformat(),
+                    "occupancy": int(occupancy or 0),
+                    "temperature_f": round(float(temperature_f), 1) if temperature_f is not None else None,
+                    "humidity": round(float(humidity), 1) if humidity is not None else None,
+                    "light_level": round(float(light_level), 0) if light_level is not None else None,
+                    "noise_db": round(float(noise_db), 1) if noise_db is not None else None,
+                    "current_song": None,
+                    "camera_active": None,
+                    "last_reading": last_ts,
+                    "source": "rpi"
                 }
+                return payload
             else:
                 return None
                 
@@ -117,9 +159,9 @@ class AWSIoTSender:
             return None
     
     def send_data(self, data):
-        """Send data to AWS IoT Core"""
+        """Send data to AWS IoT Core on the exact topic"""
         if MOCK_MODE:
-            print(f"📤 [MOCK] Would send to AWS IoT: {json.dumps(data, indent=2)}")
+            print(f"📤 [MOCK] Would send to AWS IoT topic '{TOPIC}': {json.dumps(data, indent=2)}")
             return True
         
         if not self.connected:
@@ -133,7 +175,9 @@ class AWSIoTSender:
                 payload=payload,
                 qos=mqtt.QoS.AT_LEAST_ONCE
             )
-            print(f"📤 Sent to AWS IoT: {data['temperature']}°C, {data['people_count']} people")
+            temp_display = data.get('temperature_f')
+            occ_display = data.get('occupancy')
+            print(f"📤 Sent to AWS IoT [{TOPIC}]: temp={temp_display}F, occupancy={occ_display}")
             return True
             
         except Exception as e:
