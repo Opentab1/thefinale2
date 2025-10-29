@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pulse Dashboard (Local)</title>
+    <style>
+      :root {
+        --bg: #0f172a; /* slate-900 */
+        --panel: #111827; /* gray-900 */
+        --muted: #9ca3af; /* gray-400 */
+        --text: #e5e7eb; /* gray-200 */
+        --accent: #22d3ee; /* cyan-400 */
+        --accent2: #a78bfa; /* violet-400 */
+        --good: #22c55e; /* green-500 */
+        --warn: #f59e0b; /* amber-500 */
+        --bad: #ef4444; /* red-500 */
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        color: var(--text);
+        background: radial-gradient(1200px 600px at 10% 10%, rgba(167, 139, 250, 0.1), transparent),
+                    radial-gradient(800px 400px at 90% 20%, rgba(34, 211, 238, 0.12), transparent),
+                    var(--bg);
+      }
+      .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+      header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+      h1 { font-size: 24px; margin: 0; letter-spacing: 0.5px; }
+      .pill { padding: 6px 10px; border-radius: 999px; background: rgba(34, 211, 238, 0.12); color: var(--accent); font-weight: 600; font-size: 12px; border: 1px solid rgba(34, 211, 238, 0.35) }
+
+      .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+      .card { grid-column: span 4; background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.0)); border: 1px solid rgba(255,255,255,0.08); padding: 16px; border-radius: 14px; backdrop-filter: blur(8px); position: relative; overflow: hidden; }
+      .card.large { grid-column: span 8; }
+      .card.full { grid-column: span 12; }
+      .subtle { color: var(--muted); font-size: 12px; }
+
+      .stat { display: flex; align-items: baseline; gap: 8px; }
+      .stat .value { font-size: 36px; font-weight: 700; }
+      .stat .unit { color: var(--muted); font-size: 14px; }
+
+      .bar { height: 10px; border-radius: 99px; background: rgba(255,255,255,0.08); overflow: hidden; margin-top: 8px; }
+      .bar > div { height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent), var(--accent2)); width: 0%; transition: width 0.6s ease; }
+
+      .row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+
+      .song {
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+      }
+      .badge { display: inline-block; padding: 4px 8px; font-size: 12px; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; color: var(--muted) }
+
+      footer { margin-top: 32px; text-align: center; color: var(--muted); font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>Pulse Dashboard <span class="subtle">(Local)</span></h1>
+        <span class="pill">LIVE</span>
+      </header>
+
+      <div class="grid">
+        <div class="card large">
+          <div class="subtle">Current Song</div>
+          <div class="song" id="song">—</div>
+
+          <div style="height:10px"></div>
+
+          <div class="row">
+            <div>
+              <div class="subtle">Crowd Energy</div>
+              <div class="stat"><div class="value" id="decibels">0</div><div class="unit">dB</div></div>
+              <div class="bar"><div id="decibelsBar"></div></div>
+            </div>
+            <div>
+              <div class="subtle">Comfort</div>
+              <div class="stat"><div class="value" id="comfort">0</div><div class="unit">/ 100</div></div>
+              <div class="bar"><div id="comfortBar"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="subtle">Light</div>
+          <div class="stat"><div class="value" id="light">0</div><div class="unit">lux</div></div>
+          <div class="bar"><div id="lightBar"></div></div>
+        </div>
+
+        <div class="card">
+          <div class="subtle">Indoor</div>
+          <div class="stat"><div class="value" id="indoorTemp">0</div><div class="unit">°F</div></div>
+        </div>
+
+        <div class="card">
+          <div class="subtle">Outdoor</div>
+          <div class="stat"><div class="value" id="outdoorTemp">0</div><div class="unit">°F</div></div>
+        </div>
+
+        <div class="card full">
+          <div class="row">
+            <div>
+              <div class="subtle">Humidity</div>
+              <div class="stat"><div class="value" id="humidity">0</div><div class="unit">%</div></div>
+              <div class="bar"><div id="humidityBar"></div></div>
+            </div>
+            <div>
+              <div class="subtle">Status</div>
+              <div class="badge" id="status">Connecting…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer>
+        No login. Local only. AWS sync runs in background if configured.
+      </footer>
+    </div>
+
+    <script>
+      const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+      const el = id => document.getElementById(id);
+
+      async function fetchData() {
+        try {
+          const res = await fetch('/data', { cache: 'no-store' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const d = await res.json();
+          update(d);
+          el('status').textContent = 'Live';
+        } catch (e) {
+          el('status').textContent = 'Offline';
+        }
+      }
+
+      function update(d) {
+        el('song').textContent = d.song || '—';
+
+        el('decibels').textContent = d.decibels ?? 0;
+        el('decibelsBar').style.width = clamp(((d.decibels ?? 0) - 50) * 2, 0, 100) + '%';
+
+        el('comfort').textContent = d.comfort ?? 0;
+        el('comfortBar').style.width = clamp((d.comfort ?? 0), 0, 100) + '%';
+
+        el('light').textContent = d.light ?? 0;
+        el('lightBar').style.width = clamp((d.light ?? 0) / 10, 0, 100) + '%';
+
+        el('indoorTemp').textContent = d.indoorTemp ?? 0;
+        el('outdoorTemp').textContent = d.outdoorTemp ?? 0;
+
+        el('humidity').textContent = d.humidity ?? 0;
+        el('humidityBar').style.width = clamp(d.humidity ?? 0, 0, 100) + '%';
+      }
+
+      fetchData();
+      setInterval(fetchData, 2000);
+    </script>
+  </body>
+</html>
