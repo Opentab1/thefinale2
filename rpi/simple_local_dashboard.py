@@ -87,7 +87,8 @@ def get_real_sensor_data():
     if light_sensor:
         try:
             light_value = light_sensor.get_light_level()
-            if light_value is not None:
+            # Only use value if sensor has actually started (not initial 0)
+            if light_value is not None and light_value > 0:
                 data["light"] = int(light_value)
         except Exception as e:
             logger.debug(f"Light sensor read error: {e}")
@@ -96,7 +97,8 @@ def get_real_sensor_data():
     if audio_monitor:
         try:
             db_value = audio_monitor.get_current_db()
-            if db_value is not None:
+            # Only use value if sensor has actually started (not initial 0)
+            if db_value is not None and db_value > 0:
                 data["decibels"] = round(db_value, 1)
         except Exception as e:
             logger.debug(f"Audio monitor error: {e}")
