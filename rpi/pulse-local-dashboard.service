@@ -1,0 +1,16 @@
+[Unit]
+Description=Pulse Local Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/pulse
+ExecStart=/usr/bin/python3 /home/pi/pulse/rpi/local_dashboard.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
