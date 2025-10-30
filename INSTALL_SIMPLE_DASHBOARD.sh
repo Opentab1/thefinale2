@@ -20,18 +20,29 @@ if [ ! -f "/opt/pulse/rpi/simple_local_dashboard.py" ]; then
     exit 1
 fi
 
-echo "📦 Step 1: Stopping old services..."
+echo "📦 Step 1: Installing Python dependencies..."
+pip3 install --user flask flask-cors 2>/dev/null || true
+
+# Check if venv exists, if not create it
+if [ ! -d "/opt/pulse/venv" ]; then
+    echo "Creating Python virtual environment..."
+    python3 -m venv /opt/pulse/venv
+    /opt/pulse/venv/bin/pip install flask flask-cors
+fi
+
+echo ""
+echo "📦 Step 2: Stopping old services..."
 sudo systemctl stop pulse.service 2>/dev/null || true
 sudo systemctl stop pulse-hub.service 2>/dev/null || true
 sudo systemctl stop pulse-dashboard.service 2>/dev/null || true
 
 echo ""
-echo "📝 Step 2: Installing new service file..."
+echo "📝 Step 3: Installing new service file..."
 sudo cp /opt/pulse/services/systemd/pulse.service /etc/systemd/system/
 sudo systemctl daemon-reload
 
 echo ""
-echo "🚀 Step 3: Enabling and starting simple dashboard..."
+echo "🚀 Step 4: Enabling and starting simple dashboard..."
 sudo systemctl enable pulse.service
 sudo systemctl start pulse.service
 
