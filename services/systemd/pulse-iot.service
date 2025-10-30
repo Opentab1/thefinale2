@@ -1,0 +1,21 @@
+[Unit]
+Description=Pulse AWS IoT Data Sender
+After=network-online.target pulse.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONPATH=/opt/pulse"
+ExecStart=/opt/pulse/venv/bin/python3 -u /opt/pulse/rpi/aws_send.py
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=append:/var/log/pulse/iot-sender.log
+StandardError=append:/var/log/pulse/iot-sender-error.log
+
+[Install]
+WantedBy=multi-user.target

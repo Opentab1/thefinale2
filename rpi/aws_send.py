@@ -87,51 +87,60 @@ class AWSIoTSender:
             self.connected = False
     
     def get_sensor_data(self):
-        """Fetch latest sensor data from local database and normalize schema for dashboard"""
+        """Fetch latest sensor data from local database (PulseDB schema) and normalize payload"""
         try:
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
-            
-            # Get latest readings from consolidated sensor snapshot table if available,
-            # otherwise fall back to a generic sensor_data table if present.
-            try:
-                cursor.execute(
-                    """
-                    SELECT temperature_f, humidity, light_level, noise_db, occupancy, timestamp
-                    FROM current_snapshot
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                    """
-                )
-                row = cursor.fetchone()
-                if row:
-                    temperature_f, humidity, light_level, noise_db, occupancy, ts = row
-                else:
-                    row = None
-            except Exception:
-                row = None
 
-            if row is None:
-                cursor.execute(
-                    """
-                    SELECT temperature, humidity, NULL as light_level, NULL as noise_db, people_count as occupancy, timestamp
-                    FROM sensor_data
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                    """
-                )
-                row = cursor.fetchone()
+            # Occupancy (most recent)
+            cursor.execute(
+                """
+                SELECT count, timestamp
+                FROM occupancy
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """
+            )
+            occ_row = cursor.fetchone()
+            occupancy = int(occ_row[0]) if occ_row and occ_row[0] is not None else 0
+
+            # Environment (most recent)
+            cursor.execute(
+                """
+                SELECT temperature, humidity, light_level, noise_level, timestamp
+                FROM environment
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """
+            )
+            env_row = cursor.fetchone()
+            temperature_f = env_row[0] if env_row else None
+            humidity = env_row[1] if env_row else None
+            light_level = env_row[2] if env_row else None
+            noise_db = env_row[3] if env_row else None
+            last_ts = env_row[4] if env_row else None
+
+            # Music (most recent)
+            cursor.execute(
+                """
+                SELECT track_name, artist
+                FROM music_log
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """
+            )
+            song_row = cursor.fetchone()
+            current_song = None
+            if song_row:
+                title = song_row[0] or None
+                artist = song_row[1] or None
+                if title or artist:
+                    current_song = {"title": title, "artist": artist}
+
             conn.close()
-            
-            if row:
-                temperature_f = row[0]
-                humidity = row[1]
-                light_level = row[2]
-                noise_db = row[3]
-                occupancy = row[4]
-                last_ts = row[5]
 
-                # Normalize types and rounding
+            # If we have at least occupancy or any environment metric, build payload
+            if any(v is not None for v in (temperature_f, humidity, light_level, noise_db)) or occupancy is not None:
                 payload = {
                     "venue_id": VENUE_ID,
                     "location_id": LOCATION_ID,
@@ -142,7 +151,7 @@ class AWSIoTSender:
                     "humidity": round(float(humidity), 1) if humidity is not None else None,
                     "light_level": round(float(light_level), 0) if light_level is not None else None,
                     "noise_db": round(float(noise_db), 1) if noise_db is not None else None,
-                    "current_song": None,
+                    "current_song": current_song,
                     "camera_active": None,
                     "last_reading": last_ts,
                     "source": "rpi"
@@ -150,7 +159,7 @@ class AWSIoTSender:
                 return payload
             else:
                 return None
-                
+
         except sqlite3.Error as e:
             print(f"Database error: {e}")
             return None

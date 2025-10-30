@@ -214,6 +214,8 @@ echo "Installing new unified services..."
 cp "$INSTALL_DIR/services/systemd/pulse.service" /etc/systemd/system/
 cp "$INSTALL_DIR/services/systemd/pulse-firstboot.service" /etc/systemd/system/
 cp "$INSTALL_DIR/services/systemd/pulse-health.service" /etc/systemd/system/
+# AWS IoT data sender service
+cp "$INSTALL_DIR/services/systemd/pulse-iot.service" /etc/systemd/system/
 
 # Stop and disable old separate services if they exist
 systemctl stop pulse-hub.service 2>/dev/null || true
@@ -223,10 +225,16 @@ systemctl disable pulse-dashboard.service 2>/dev/null || true
 
 systemctl daemon-reload
 
-# Enable the new unified service
+# Enable the new unified service and IoT data sender
 systemctl enable pulse.service || true
 systemctl enable pulse-firstboot.service || true
 systemctl enable pulse-health.service || true
+systemctl enable pulse-iot.service || true
+
+# Prepare AWS IoT certificate directory
+mkdir -p /etc/pulse/certs
+chown -R ${USER}:${USER} /etc/pulse || true
+echo "AWS IoT certificates directory ready at /etc/pulse/certs"
 
 echo -e "${YELLOW}[9/10] Configuring auto-login and kiosk mode...${NC}"
 
@@ -340,5 +348,6 @@ sleep 10
 echo "Starting setup wizard service..."
 systemctl restart pulse-firstboot.service || true
 systemctl restart pulse.service || true
+systemctl restart pulse-iot.service || true
 
 reboot

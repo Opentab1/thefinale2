@@ -5,7 +5,7 @@ import io from 'socket.io-client'
 import axios from 'axios'
 import { Amplify } from 'aws-amplify'
 import { getCurrentUser, signOut } from 'aws-amplify/auth'
-import { awsConfig } from './aws-config'
+import { awsConfig, isAuthConfigured } from './aws-config'
 import { useIoTData } from './hooks/useIoTData'
 
 // Components
@@ -39,6 +39,12 @@ function App() {
 
   // Check authentication status
   useEffect(() => {
+    if (!isAuthConfigured) {
+      // Bypass login when Cognito is not configured for local deployments
+      setAuthenticated(true)
+      setCheckingAuth(false)
+      return
+    }
     checkAuth()
   }, [])
 
@@ -164,7 +170,7 @@ function App() {
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-4">
                 <Activity className="w-8 h-8 text-pulse-blue" />
-                <h1 className="text-2xl font-bold">Pulse 1.0</h1>
+                <h1 className="text-2xl font-extrabold bg-gradient-to-r from-blue-400 via-cyan-300 to-purple-400 bg-clip-text text-transparent">Pulse 1.0</h1>
                 <span className="text-sm text-gray-400">
                   {new Date().toLocaleTimeString()}
                 </span>
