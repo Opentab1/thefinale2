@@ -1,8 +1,5 @@
 import { useState, useEffect } from 'react'
-import { fetchAuthSession } from 'aws-amplify/auth'
-import AWS from 'aws-sdk'
-import AWSIoT from 'aws-iot-device-sdk'
-import { awsConfig } from '../aws-config'
+import { awsConfig, isAuthConfigured } from '../aws-config'
 
 // Exact IoT values provided
 const IOT_ENDPOINT = 'a1h5tm3jvbz8cg-ats.iot.us-east-2.amazonaws.com'
@@ -22,10 +19,16 @@ export function useIoTData() {
         const identityPoolId = awsConfig?.Auth?.Cognito?.identityPoolId || ''
         const userPoolId = awsConfig?.Auth?.Cognito?.userPoolId
 
-        if (!identityPoolId) {
-          console.warn('AWS IoT: identityPoolId not configured; skipping IoT connection')
+        // Skip IoT connection if auth is not configured or no identity pool
+        if (!isAuthConfigured || !identityPoolId) {
+          console.log('AWS IoT: Authentication not configured; skipping IoT connection')
           return
         }
+
+        // Dynamically import AWS SDK only when needed to avoid bundle bloat
+        const { fetchAuthSession } = await import('aws-amplify/auth')
+        const AWS = await import('aws-sdk')
+        const AWSIoT = await import('aws-iot-device-sdk')
 
         const session = await fetchAuthSession()
         const idToken = session?.tokens?.idToken?.toString()
@@ -35,8 +38,8 @@ export function useIoTData() {
           return
         }
 
-        AWS.config.region = REGION
-        AWS.config.credentials = new AWS.CognitoIdentityCredentials({
+        AWS.default.config.region = REGION
+        AWS.default.config.credentials = new AWS.default.CognitoIdentityCredentials({
           IdentityPoolId: identityPoolId,
           Logins: {
             [`cognito-idp.${REGION}.amazonaws.com/${userPoolId}`]: idToken,
@@ -44,15 +47,15 @@ export function useIoTData() {
         })
 
         await new Promise((resolve, reject) => {
-          AWS.config.credentials.refresh((err) => (err ? reject(err) : resolve()))
+          AWS.default.config.credentials.refresh((err) => (err ? reject(err) : resolve()))
         })
 
         if (cancelled) return
 
-        const creds = AWS.config.credentials
+        const creds = AWS.default.config.credentials
         const clientId = `pulse-web-${Math.random().toString(16).slice(2)}`
 
-        device = AWSIoT.device({
+        device = AWSIoT.default.device({
           region: REGION,
           host: IOT_ENDPOINT,
           clientId,

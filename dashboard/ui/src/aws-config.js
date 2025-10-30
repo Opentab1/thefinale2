@@ -29,8 +29,8 @@ export const awsConfig = {
         oauth: {
           domain: import.meta.env.VITE_COGNITO_DOMAIN || '',
           scopes: ['openid', 'email', 'profile'],
-          redirectSignIn: [window.location.origin],
-          redirectSignOut: [window.location.origin],
+          redirectSignIn: [typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8080'],
+          redirectSignOut: [typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8080'],
           responseType: 'code',
         },
       },
