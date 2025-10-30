@@ -13,6 +13,12 @@ echo "Stopping existing dashboard..."
 sudo pkill -f "dashboard" 2>/dev/null || true
 sudo pkill -f "port 8080" 2>/dev/null || true
 sudo fuser -k 8080/tcp 2>/dev/null || true
+# Also kill by PID if found
+OLD_PID=$(sudo lsof -t -i:8080 2>/dev/null || true)
+if [ ! -z "$OLD_PID" ]; then
+    echo "Killing process $OLD_PID on port 8080..."
+    sudo kill -9 $OLD_PID 2>/dev/null || true
+fi
 sleep 2
 
 # Find the right Python and paths
