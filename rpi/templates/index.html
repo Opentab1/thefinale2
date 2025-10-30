@@ -91,27 +91,19 @@
         </div>
 
         <div class="card">
-          <div class="subtle">Indoor</div>
+          <div class="subtle">Temperature</div>
           <div class="stat"><div class="value" id="indoorTemp">0</div><div class="unit">°F</div></div>
         </div>
 
         <div class="card">
-          <div class="subtle">Outdoor</div>
-          <div class="stat"><div class="value" id="outdoorTemp">0</div><div class="unit">°F</div></div>
+          <div class="subtle">Humidity</div>
+          <div class="stat"><div class="value" id="humidity">0</div><div class="unit">%</div></div>
+          <div class="bar"><div id="humidityBar"></div></div>
         </div>
 
         <div class="card full">
-          <div class="row">
-            <div>
-              <div class="subtle">Humidity</div>
-              <div class="stat"><div class="value" id="humidity">0</div><div class="unit">%</div></div>
-              <div class="bar"><div id="humidityBar"></div></div>
-            </div>
-            <div>
-              <div class="subtle">Status</div>
-              <div class="badge" id="status">Connecting…</div>
-            </div>
-          </div>
+          <div class="subtle">Status</div>
+          <div class="badge" id="status">Connecting…</div>
         </div>
       </div>
 
@@ -149,7 +141,6 @@
         el('lightBar').style.width = clamp((d.light ?? 0) / 10, 0, 100) + '%';
 
         el('indoorTemp').textContent = d.indoorTemp ?? 0;
-        el('outdoorTemp').textContent = d.outdoorTemp ?? 0;
 
         el('humidity').textContent = d.humidity ?? 0;
         el('humidityBar').style.width = clamp(d.humidity ?? 0, 0, 100) + '%';
