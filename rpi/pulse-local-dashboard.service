@@ -6,6 +6,8 @@ After=network.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/pulse
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/home/pi/.local/bin"
+ExecStartPre=/bin/bash -c 'pip3 install --user flask flask-cors 2>/dev/null || true'
 ExecStart=/usr/bin/python3 /home/pi/pulse/rpi/local_dashboard.py
 Restart=always
 RestartSec=10
