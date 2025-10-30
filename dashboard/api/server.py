@@ -62,10 +62,21 @@ def set_hub_instance(hub):
 
 @app.route('/')
 def index():
-    """Serve React app. If UI is not built yet, return a simple readiness page."""
+    """Serve React app when built; otherwise serve a clean HTML fallback.
+
+    The fallback is the local dashboard UI (`rpi/templates/index.html`) which
+    renders immediately and fetches simplified data from `/data`.
+    """
     index_path = Path(app.static_folder) / 'index.html'
     if index_path.exists():
         return send_from_directory(app.static_folder, 'index.html')
+
+    # Serve the elegant local HTML if the React UI isn't built
+    fallback = Path(__file__).resolve().parents[2] / 'rpi' / 'templates' / 'index.html'
+    if fallback.exists():
+        return send_file(str(fallback))
+
+    # Last resort: readiness JSON
     return jsonify({"status": "ok", "ui": "not-built"})
 
 @app.route('/api/status')
@@ -138,6 +149,93 @@ def get_current_sensors():
     except Exception as e:
         logger.error(f"Error getting sensors: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/data')
+def get_simple_dashboard_data():
+    """Provide simplified dashboard data for the lightweight HTML fallback.
+
+    Keys mirror the local Flask demo (`rpi/local_dashboard.py`) so the same
+    HTML works whether we run the full API or the minimal local server.
+    """
+    try:
+        # Prefer live hub data when available
+        if hub_instance:
+            snapshot = hub_instance._collect_sensor_data()
+            noise_db = snapshot.get('noise_db')
+            light_level = snapshot.get('light_level')
+            temperature_f = snapshot.get('temperature_f')
+            humidity = snapshot.get('humidity')
+            current_song = snapshot.get('current_song')
+        else:
+            # Fallback to DB snapshot (same approach as get_current_sensors)
+            snapshot = {
+                "temperature_f": None,
+                "humidity": None,
+                "light_level": None,
+                "noise_db": None,
+                "current_song": None,
+            }
+            env = db.get_latest_environment()
+            if env:
+                snapshot.update({
+                    "temperature_f": env.get("temperature"),
+                    "humidity": env.get("humidity"),
+                    "light_level": env.get("light_level"),
+                    "noise_db": env.get("noise_level"),
+                })
+            # Last played song from music_log (if any)
+            try:
+                with db.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT track_name, artist FROM music_log ORDER BY timestamp DESC LIMIT 1")
+                    row = cur.fetchone()
+                    if row:
+                        snapshot["current_song"] = {"title": row[0], "artist": row[1]}
+            except Exception:
+                pass
+
+            noise_db = snapshot.get('noise_db')
+            light_level = snapshot.get('light_level')
+            temperature_f = snapshot.get('temperature_f')
+            humidity = snapshot.get('humidity')
+            current_song = snapshot.get('current_song')
+
+        # Compose friendly song string
+        song = None
+        if isinstance(current_song, dict):
+            title = current_song.get('title')
+            artist = current_song.get('artist')
+            if title and artist:
+                song = f"{title} — {artist}"
+            elif title:
+                song = title
+
+        # Heuristic comfort score (0-100)
+        comfort = 95
+        try:
+            comfort_penalty = 0
+            if temperature_f is not None:
+                comfort_penalty += max(0, abs(float(temperature_f) - 72.0) * 2.0)
+            if humidity is not None:
+                comfort_penalty += max(0, (abs(int(humidity) - 50)) * 0.5)
+            if noise_db is not None:
+                comfort_penalty += max(0, (float(noise_db) - 70.0) * 0.8)
+            comfort = int(max(0, min(100, 100 - comfort_penalty)))
+        except Exception:
+            comfort = 90
+
+        return jsonify({
+            "decibels": round(float(noise_db), 1) if noise_db is not None else 0,
+            "light": int(light_level) if light_level is not None else 0,
+            "indoorTemp": round(float(temperature_f), 1) if temperature_f is not None else 0,
+            "humidity": int(humidity) if humidity is not None else 0,
+            "song": song or "—",
+            "comfort": comfort,
+        })
+    except Exception as e:
+        logger.error(f"Error building simple dashboard data: {e}")
+        return jsonify({"decibels": 0, "light": 0, "indoorTemp": 0, "humidity": 0, "song": "—", "comfort": 0}), 200
 
 
 @app.route('/api/occupancy/current')
