@@ -35,7 +35,9 @@ except Exception as e:
 try:
     from services.sensors.light_level import LightSensor
     light_sensor = LightSensor()
-    logger.info("✓ Light sensor loaded")
+    # Start monitoring in background
+    light_sensor.start_monitoring(interval=5)
+    logger.info("✓ Light sensor loaded and started")
 except Exception as e:
     logger.warning(f"Light sensor not available: {e}")
     light_sensor = None
@@ -43,7 +45,9 @@ except Exception as e:
 try:
     from services.sensors.mic_song_detect import AudioMonitor
     audio_monitor = AudioMonitor()
-    logger.info("✓ Audio monitor loaded")
+    # Start monitoring in background
+    audio_monitor.start_monitoring()
+    logger.info("✓ Audio monitor loaded and started")
 except Exception as e:
     logger.warning(f"Audio monitor not available: {e}")
     audio_monitor = None
@@ -79,21 +83,23 @@ def get_real_sensor_data():
         except Exception as e:
             logger.debug(f"BME280 read error: {e}")
     
-    # Get light level
+    # Get light level (use get_light_level method)
     if light_sensor:
         try:
-            reading = light_sensor.read()
-            if reading:
-                data["light"] = int(reading.get("light_level", 0))
+            light_value = light_sensor.get_light_level()
+            # Only use value if sensor has actually started (not initial 0)
+            if light_value is not None and light_value > 0:
+                data["light"] = int(light_value)
         except Exception as e:
             logger.debug(f"Light sensor read error: {e}")
     
-    # Get audio/noise level
+    # Get audio/noise level (use get_current_db method)
     if audio_monitor:
         try:
-            reading = audio_monitor.get_current_level()
-            if reading:
-                data["decibels"] = round(reading.get("noise_db", 0), 1)
+            db_value = audio_monitor.get_current_db()
+            # Only use value if sensor has actually started (not initial 0)
+            if db_value is not None and db_value > 0:
+                data["decibels"] = round(db_value, 1)
         except Exception as e:
             logger.debug(f"Audio monitor error: {e}")
     
