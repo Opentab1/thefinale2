@@ -56,3 +56,4 @@ psutil==6.1.0
 
 # Messaging
 paho-mqtt==1.6.1
+awsiotsdk>=1.22.0
