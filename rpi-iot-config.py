@@ -11,15 +11,18 @@ from pathlib import Path
 
 # AWS IoT Configuration
 IOT_CONFIG = {
-    "endpoint": "your-iot-endpoint.iot.us-east-2.amazonaws.com",
+    "endpoint": "a1h5tm3jvbz8cg-ats.iot.us-east-2.amazonaws.com",
     "region": "us-east-2",
-    "client_id": "pulse-rpi-main",
+    "client_id": "pulse-fergs-stpete-main-floor-rpi5",
     "cert_path": "/etc/pulse/certs/",  # Store certificates here
     "topics": {
-        "sensors": "pulse/main-location/sensors",
-        "controls": "pulse/main-location/controls",
-        "status": "pulse/main-location/status"
-    }
+        # EXACT TOPIC PROVIDED (no suffix!)
+        "sensors": "pulse/fergs-stpete/main-floor",
+        "controls": "pulse/fergs-stpete/main-floor/controls",
+        "status": "pulse/fergs-stpete/main-floor/status"
+    },
+    "venue_id": "fergs-stpete",
+    "location_id": "main-floor",
 }
 
 def setup_iot_client():
@@ -100,6 +103,7 @@ def main():
     print("=== Pulse RPi → AWS IoT Bridge ===")
     print(f"Region: {IOT_CONFIG['region']}")
     print(f"Endpoint: {IOT_CONFIG['endpoint']}")
+    print(f"Topic: {IOT_CONFIG['topics']['sensors']}")
     print()
     
     # Setup connection
@@ -112,27 +116,24 @@ def main():
     # Main loop - publish sensor data every 2 seconds
     try:
         while True:
-            # In production, read from actual sensors
-            # For now, simulate data structure
+            # Simulated data in schema expected by dashboard
             sensor_data = {
+                "venue_id": IOT_CONFIG["venue_id"],
+                "location_id": IOT_CONFIG["location_id"],
+                "device_id": IOT_CONFIG["client_id"],
                 "timestamp": int(time.time() * 1000),
-                "location": "Main Location",
-                "people_count": 0,  # From camera_people.py
-                "temperature": 72,   # From bme280_reader.py
-                "humidity": 45,      # From bme280_reader.py
-                "decibels": 0,       # From mic_song_detect.py
-                "light_level": 0,    # From light_level.py
-                "song": {
+                "occupancy": 0,
+                "temperature_f": 72.0,
+                "humidity": 45.0,
+                "light_level": 0,
+                "noise_db": 0.0,
+                "current_song": {
                     "title": "No song detected",
                     "artist": "",
                     "detected": False
                 },
-                "integrations": {
-                    "nest_connected": False,
-                    "hue_connected": False,
-                    "spotify_connected": False
-                },
-                "camera_active": False
+                "camera_active": False,
+                "source": "rpi"
             }
             
             publish_sensor_data(mqtt_connection, sensor_data)

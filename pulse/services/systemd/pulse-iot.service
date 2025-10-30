@@ -1,0 +1,16 @@
+[Unit]
+Description=Pulse AWS IoT Publisher
+After=network-online.target pulse-hub.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pulse
+WorkingDirectory=/opt/pulse
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/pulse/.venv/bin/python3 /opt/pulse/rpi-iot-config.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

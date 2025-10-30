@@ -13,7 +13,8 @@
     "axios": "^1.6.0",
     "lucide-react": "^0.294.0",
     "aws-amplify": "^6.0.0",
-    "aws-iot-device-sdk": "^2.2.13"
+    "aws-iot-device-sdk": "^2.2.13",
+    "aws-sdk": "^2.1517.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.0",

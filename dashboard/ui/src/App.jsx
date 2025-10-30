@@ -6,6 +6,7 @@ import axios from 'axios'
 import { Amplify } from 'aws-amplify'
 import { getCurrentUser, signOut } from 'aws-amplify/auth'
 import { awsConfig } from './aws-config'
+import { useIoTData } from './hooks/useIoTData'
 
 // Components
 import Login from './components/Login'
@@ -27,6 +28,9 @@ function App() {
   const [socket, setSocket] = useState(null)
   const [connected, setConnected] = useState(false)
   const [sensorData, setSensorData] = useState({})
+  // AWS IoT Core live data (Cognito-authenticated, if identity pool configured)
+  const { iotData, iotConnected } = useIoTData()
+
   const [systemStatus, setSystemStatus] = useState({})
   const [safeMode, setSafeMode] = useState(false)
   const [currentLocation, setCurrentLocation] = useState(
@@ -113,6 +117,9 @@ function App() {
     }
   }, [])
 
+  // When IoT data arrives, prefer it over socket data
+  const displayData = iotConnected ? iotData : sensorData
+
   const fetchSystemStatus = async () => {
     try {
       const response = await axios.get(`${API_URL}/api/status`)
@@ -170,8 +177,8 @@ function App() {
                 </div>
                 
                 <div className="flex items-center space-x-2">
-                  <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
-                  <span className="text-sm">{connected ? 'Connected' : 'Disconnected'}</span>
+                  <div className={`w-2 h-2 rounded-full ${(iotConnected || connected) ? 'bg-green-500' : 'bg-red-500'}`} />
+                  <span className="text-sm">{(iotConnected || connected) ? 'Connected' : 'Disconnected'}</span>
                 </div>
                 
                 <button
@@ -213,7 +220,7 @@ function App() {
         {/* Main Content */}
         <main className="container mx-auto px-4 py-6">
           <Routes>
-            <Route path="/" element={<LiveOverview sensorData={sensorData} />} />
+            <Route path="/" element={<LiveOverview sensorData={displayData} />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/controls" element={<Controls />} />
             <Route path="/health" element={<SystemHealth systemStatus={systemStatus} />} />

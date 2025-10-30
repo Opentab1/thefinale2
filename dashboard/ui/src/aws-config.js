@@ -19,9 +19,9 @@
 export const awsConfig = {
   Auth: {
     Cognito: {
-      region: import.meta.env.VITE_COGNITO_REGION || 'us-east-1',
-      userPoolId: import.meta.env.VITE_COGNITO_USER_POOL_ID || 'us-east-1_XXXXXXXXX',
-      userPoolClientId: import.meta.env.VITE_COGNITO_USER_POOL_CLIENT_ID || 'xxxxxxxxxxxxxxxxxxxx',
+      region: import.meta.env.VITE_COGNITO_REGION || 'us-east-2',
+      userPoolId: import.meta.env.VITE_COGNITO_USER_POOL_ID || 'us-east-2_I6EBJm3te',
+      userPoolClientId: import.meta.env.VITE_COGNITO_USER_POOL_CLIENT_ID || '4v7vp7trh72q1priqno9k5prsq',
       identityPoolId: import.meta.env.VITE_COGNITO_IDENTITY_POOL_ID || '',
       
       // Optional: Domain for hosted UI
@@ -40,8 +40,8 @@ export const awsConfig = {
 
 // Development mode: Check if Cognito is configured
 const isConfigured = 
-  awsConfig.Auth.Cognito.userPoolId !== 'us-east-1_XXXXXXXXX' &&
-  awsConfig.Auth.Cognito.userPoolClientId !== 'xxxxxxxxxxxxxxxxxxxx'
+  awsConfig.Auth.Cognito.userPoolId !== 'us-east-2_I6EBJm3te' &&
+  awsConfig.Auth.Cognito.userPoolClientId !== '4v7vp7trh72q1priqno9k5prsq'
 
 if (!isConfigured && import.meta.env.DEV) {
   console.warn('⚠️  AWS Cognito is not configured. Authentication will not work.')
