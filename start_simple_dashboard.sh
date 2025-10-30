@@ -9,7 +9,8 @@ echo "================================"
 echo ""
 
 # Kill any existing dashboards on port 8080
-echo "Stopping existing dashboard..."
+echo "Stopping existing dashboard and services..."
+sudo systemctl stop pulse.service 2>/dev/null || true
 sudo pkill -f "dashboard" 2>/dev/null || true
 sudo pkill -f "port 8080" 2>/dev/null || true
 sudo fuser -k 8080/tcp 2>/dev/null || true

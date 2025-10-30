@@ -1,5 +1,5 @@
 [Unit]
-Description=Pulse - Integrated Hub and Dashboard Service
+Description=Pulse - Simple Local Dashboard with Real Sensors
 After=network.target
 Requires=network.target
 
@@ -9,7 +9,7 @@ User=pi
 WorkingDirectory=/opt/pulse
 Environment="PYTHONPATH=/opt/pulse:/opt/pulse/services"
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=/opt/pulse/venv/bin/python3 /opt/pulse/run_pulse_system.py
+ExecStart=/opt/pulse/venv/bin/python3 /opt/pulse/rpi/simple_local_dashboard.py
 Restart=always
 RestartSec=10
 TimeoutStartSec=30
