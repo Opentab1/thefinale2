@@ -76,10 +76,14 @@ def get_real_sensor_data():
     # Get BME280 data (temperature & humidity)
     if bme280:
         try:
-            reading = bme280.read()
+            reading = bme280.read_sensor()
             if reading:
-                data["indoorTemp"] = round(reading.get("temperature_f", 0), 1)
-                data["humidity"] = int(reading.get("humidity", 0))
+                temp_f = reading.get("temperature_f", 0)
+                humidity = reading.get("humidity", 0)
+                if temp_f > 0:  # Only use if sensor has real data
+                    data["indoorTemp"] = round(temp_f, 1)
+                if humidity > 0:
+                    data["humidity"] = int(humidity)
         except Exception as e:
             logger.debug(f"BME280 read error: {e}")
     
