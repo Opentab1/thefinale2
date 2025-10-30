@@ -1,22 +1,26 @@
-# 🎯 Pulse - Smart Venue Automation System
+# 🎯 Pulse - Simple Local Dashboard with Real Sensors
 
-> **All sensor capabilities are fixed and working!** Full debugging output included.
+> **Live sensor dashboard - NO AWS, NO auth, just real data!**
 
-## 🚀 Quick Install (Raspberry Pi)
+## 🚀 Quick Start (Fresh Raspberry Pi)
 
-**One-line installation:**
+**ONE command to get everything working:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
+git clone https://github.com/Opentab1/thefinale2.git /opt/pulse && cd /opt/pulse && ./INSTALL_SIMPLE_DASHBOARD.sh
 ```
 
-This will:
-- ✅ Install all dependencies
-- ✅ Set up the system with **all sensor fixes**
-- ✅ Configure auto-start on boot
-- ✅ Launch the setup wizard
+**That's it!** Dashboard starts automatically at: `http://<your-pi-ip>:8080`
 
-After installation, the system boots directly into the dashboard with full functionality.
+Shows real-time data from:
+- 🌡️ **Temperature** (BME280 sensor)
+- 💧 **Humidity** (BME280 sensor)
+- 🔊 **Sound Level** (Microphone)
+- 💡 **Light Level** (Camera-based)
+- 🎵 **Current Song** (Database)
+- 😊 **Comfort Score** (Calculated)
+
+**Auto-starts on boot. Auto-restarts on failure. Zero configuration needed.**
 
 ## ✨ What's Fixed
 
