@@ -4,15 +4,19 @@
 
 ## 🚀 Quick Start (Fresh Raspberry Pi)
 
-**ONE command to get everything working:**
+**ONE command to install everything:**
 
 ```bash
-sudo git clone https://github.com/Opentab1/thefinale2.git /opt/pulse && cd /opt/pulse && ./INSTALL_SIMPLE_DASHBOARD.sh
+curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
 ```
 
-> **Note:** The `sudo` is required because `/opt/pulse` is a system directory.
+**That's it!** After installation:
+1. System reboots automatically
+2. Setup wizard opens at `http://localhost:9090`
+3. Click through the wizard (2 minutes)
+4. Dashboard launches at `http://<your-pi-ip>:8080`
 
-**That's it!** Dashboard starts automatically at: `http://<your-pi-ip>:8080`
+**No coding. No configuration. Just one command and a simple wizard.**
 
 Shows real-time data from:
 - 🌡️ **Temperature** (BME280 sensor)
