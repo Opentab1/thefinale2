@@ -7,8 +7,10 @@
 **ONE command to get everything working:**
 
 ```bash
-git clone https://github.com/Opentab1/thefinale2.git /opt/pulse && cd /opt/pulse && ./INSTALL_SIMPLE_DASHBOARD.sh
+sudo git clone https://github.com/Opentab1/thefinale2.git /opt/pulse && cd /opt/pulse && ./INSTALL_SIMPLE_DASHBOARD.sh
 ```
+
+> **Note:** The `sudo` is required because `/opt/pulse` is a system directory.
 
 **That's it!** Dashboard starts automatically at: `http://<your-pi-ip>:8080`
 

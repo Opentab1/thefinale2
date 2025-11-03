@@ -5,8 +5,10 @@
 After flashing Raspberry Pi OS, run **ONE COMMAND**:
 
 ```bash
-git clone https://github.com/Opentab1/thefinale2.git /opt/pulse && cd /opt/pulse && ./INSTALL_SIMPLE_DASHBOARD.sh
+sudo git clone https://github.com/Opentab1/thefinale2.git /opt/pulse && cd /opt/pulse && ./INSTALL_SIMPLE_DASHBOARD.sh
 ```
+
+> **Note:** The `sudo` is required because `/opt/pulse` is a system directory.
 
 ## What This Does
 
