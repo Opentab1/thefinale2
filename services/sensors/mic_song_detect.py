@@ -4,12 +4,17 @@ Song detection and decibel level monitoring
 Integrated with party_box song detection for production-ready music recognition
 """
 
+from __future__ import annotations
+
 import logging
 from threading import Thread, Event
 from datetime import datetime
 import os
 import time
-import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - used for type checkers only
+    import numpy as np
 
 # NumPy is required
 try:

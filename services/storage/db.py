@@ -175,15 +175,18 @@ class PulseDB:
                 cursor.execute('''
                     SELECT count FROM occupancy 
                     WHERE zone = ? 
-                    ORDER BY timestamp DESC LIMIT 1
+                    ORDER BY id DESC LIMIT 1
                 ''', (zone,))
             else:
                 cursor.execute('''
-                    SELECT SUM(count) as total FROM (
-                        SELECT DISTINCT ON (zone) count, zone 
-                        FROM occupancy 
-                        ORDER BY zone, timestamp DESC
-                    )
+                    SELECT COALESCE(SUM(latest.count), 0) AS total
+                    FROM occupancy AS latest
+                    INNER JOIN (
+                        SELECT zone, MAX(id) AS max_id
+                        FROM occupancy
+                        GROUP BY zone
+                    ) AS newest
+                    ON latest.zone = newest.zone AND latest.id = newest.max_id
                 ''')
             result = cursor.fetchone()
             return result[0] if result and result[0] else 0
