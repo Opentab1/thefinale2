@@ -351,9 +351,24 @@ class PulseHub:
                 pass
         
         if self.bme280:
-            readings = self.bme280.get_all_readings()
-            data["temperature_f"] = readings.get("temperature_f")
-            data["humidity"] = readings.get("humidity")
+            # Try to get a fresh reading first, fall back to cached values
+            try:
+                readings = self.bme280.read_sensor()
+                if readings and readings.get("temperature_f") is not None:
+                    data["temperature_f"] = readings.get("temperature_f")
+                    data["humidity"] = readings.get("humidity")
+                    data["pressure"] = readings.get("pressure")
+                else:
+                    # Fall back to cached values if fresh read fails
+                    cached = self.bme280.get_all_readings()
+                    data["temperature_f"] = cached.get("temperature_f")
+                    data["humidity"] = cached.get("humidity")
+            except Exception as e:
+                logger.warning(f"Error reading BME280: {e}")
+                # Try cached values as last resort
+                cached = self.bme280.get_all_readings()
+                data["temperature_f"] = cached.get("temperature_f")
+                data["humidity"] = cached.get("humidity")
         
         if self.light_sensor:
             data["light_level"] = self.light_sensor.get_light_level()
