@@ -99,12 +99,23 @@ class AudioMonitor:
                     detection_interval=int(self._song_detect_interval)
                 )
                 logger.info("✅ Song detector initialized (using shared audio buffer)")
+                # Check if ShazamIO is actually available
+                try:
+                    from shazamio import Shazam
+                    logger.info("✅ ShazamIO library available - song detection will work")
+                except ImportError:
+                    logger.warning("⚠️ ShazamIO not available - song detection will not work")
+                    logger.warning("   Install with: pip install shazamio aiohttp")
             except Exception as e:
                 logger.warning(f"Failed to initialize song detector: {e}")
+                logger.warning(f"   Error details: {type(e).__name__}: {str(e)}")
+                import traceback
+                logger.debug(traceback.format_exc())
                 self.song_detector = None
         else:
             self.song_detector = None
-            logger.info("Song detector disabled (dependencies missing)")
+            logger.warning("⚠️ Song detector disabled (SongDetector class not available)")
+            logger.warning("   Check if song_detector.py is properly imported")
 
         # Audio interfaces (optional)
         self.pyaudio_instance = None
@@ -421,8 +432,14 @@ class AudioMonitor:
                         if self._buffer_index >= self._audio_buffer_size:  # Buffer is full (5 seconds)
                             logger.info("🎵 Running song detection from audio buffer...")
                             self._detect_song_from_buffer()
+                        else:
+                            logger.debug(f"Audio buffer not ready for song detection (index: {self._buffer_index}/{self._audio_buffer_size})")
                         self._last_song_detect_ts = now_song
                         self._last_activity = now_song  # Update watchdog
+                    elif self.song_detector is None:
+                        # Log occasionally if song detector is not available
+                        if int(now_song) % 60 == 0:  # Log once per minute
+                            logger.debug("Song detector not available - song detection disabled")
                     
                 except Exception as e:
                     logger.error(f"Error in monitoring loop: {e}")
@@ -506,7 +523,12 @@ class AudioMonitor:
                     
                     self.current_song = new_song
                 else:
-                    logger.debug("No song detected from buffer")
+                    logger.debug("No song detected from buffer (Shazam returned no match)")
+                    # Log reason if available
+                    if result:
+                        logger.debug(f"Shazam result: {list(result.keys())}")
+                    else:
+                        logger.debug("Shazam returned None (may be network issue or timeout)")
                 
                 # Clean up temp file
                 try:
@@ -536,11 +558,15 @@ class AudioMonitor:
                 timeout=15.0
             )
             return result
+        except ImportError as e:
+            logger.error(f"ShazamIO not available: {e}")
+            logger.error("Install with: pip install shazamio aiohttp")
+            return None
         except asyncio.TimeoutError:
             logger.warning("Song recognition timed out after 15 seconds")
             return None
         except Exception as e:
-            logger.error(f"Shazam recognition error: {e}")
+            logger.error(f"Shazam recognition error: {type(e).__name__}: {e}")
             return None
     
     def stop_monitoring(self):

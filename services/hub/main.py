@@ -362,21 +362,51 @@ class PulseHub:
                 data["humidity"] = cached.get("humidity")
                 data["pressure"] = cached.get("pressure")
                 
-                # Warn if values become None (sensor failure)
+                # Fallback: if cached values are None, try a direct read
                 if data["temperature_f"] is None:
-                    logger.warning("BME280 temperature is None - sensor may have failed")
+                    logger.warning("BME280 cached temperature is None - attempting direct read")
+                    try:
+                        direct_read = self.bme280.read_sensor()
+                        if direct_read and direct_read.get("temperature_f") is not None:
+                            data["temperature_f"] = direct_read.get("temperature_f")
+                            data["humidity"] = direct_read.get("humidity")
+                            data["pressure"] = direct_read.get("pressure")
+                            logger.info(f"Direct BME280 read successful: {data['temperature_f']:.1f}°F")
+                        else:
+                            logger.error("BME280 direct read returned no data - sensor may have failed")
+                    except Exception as e2:
+                        logger.error(f"BME280 direct read failed: {e2}")
             except Exception as e:
                 logger.error(f"Error getting BME280 readings: {e}")
-                data["temperature_f"] = None
-                data["humidity"] = None
-                data["pressure"] = None
+                # Try direct read as last resort
+                try:
+                    direct_read = self.bme280.read_sensor()
+                    if direct_read and direct_read.get("temperature_f") is not None:
+                        data["temperature_f"] = direct_read.get("temperature_f")
+                        data["humidity"] = direct_read.get("humidity")
+                        data["pressure"] = direct_read.get("pressure")
+                    else:
+                        data["temperature_f"] = None
+                        data["humidity"] = None
+                        data["pressure"] = None
+                except Exception:
+                    data["temperature_f"] = None
+                    data["humidity"] = None
+                    data["pressure"] = None
         
         if self.light_sensor:
             data["light_level"] = self.light_sensor.get_light_level()
         
         if self.audio_monitor:
             data["noise_db"] = self.audio_monitor.get_current_db()
-            data["current_song"] = self.audio_monitor.get_current_song()
+            song_data = self.audio_monitor.get_current_song()
+            data["current_song"] = song_data
+            
+            # Log song detection status for debugging
+            if song_data and song_data.get("title") not in (None, "Unknown"):
+                logger.debug(f"Song detected via audio monitor: {song_data.get('title')} - {song_data.get('artist')}")
+            else:
+                logger.debug("No song detected via audio monitor (title: Unknown or None)")
 
         # Fallback: if no song detected via mic, use music controller's current track
         if (not data.get("current_song") or data["current_song"].get("title") in (None, "Unknown")) and self.music_controller:
