@@ -3,11 +3,15 @@ Pulse 1.0 - BME280 Temperature/Humidity/Pressure Sensor
 """
 
 import logging
+import os
+import random
 import time
-import numpy as np
+from pathlib import Path
 from threading import Thread, Event
 from datetime import datetime
 from typing import Optional, Dict
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +25,24 @@ class BME280Reader:
         self.temperature = None
         self.humidity = None
         self.pressure = None
+        self.simulated = False
+        self._sim_state: Dict[str, Optional[float]] = {
+            "temperature_c": None,
+            "humidity": None,
+            "pressure": None,
+            "altitude": 0.0
+        }
+        self._sim_last_update = 0.0
         
         self._init_sensor()
     
     def _init_sensor(self):
         """Initialize BME280 sensor with robust error handling"""
+        force_sim = os.getenv('PULSE_ENABLE_BME280_SIM')
+        if force_sim and force_sim.strip().lower() in {'1', 'true', 'yes', 'on'}:
+            self._enable_simulation("forced via PULSE_ENABLE_BME280_SIM")
+            return
+
         try:
             # Use busio directly to avoid board pin mapping issues
             import busio
@@ -77,11 +94,121 @@ class BME280Reader:
         except Exception as e:
             logger.error(f"Failed to initialize BME280 sensor: {e}")
             logger.error(f"Exception type: {type(e).__name__}")
+            if self._enable_simulation(str(e)):
+                return
             raise
+    
+    def _enable_simulation(self, reason: str = "") -> bool:
+        """Enable simulated readings when hardware is unavailable."""
+        if not self._should_use_simulation():
+            return False
+
+        self.simulated = True
+
+        base_temp_c = self._get_env_float('PULSE_SIM_TEMP_C', 22.0)
+        base_humidity = self._get_env_float('PULSE_SIM_HUMIDITY', 45.0)
+        base_pressure = self._get_env_float('PULSE_SIM_PRESSURE', 1013.25)
+        base_altitude = self._get_env_float('PULSE_SIM_ALTITUDE', 0.0)
+
+        self._sim_state.update({
+            "temperature_c": base_temp_c,
+            "humidity": base_humidity,
+            "pressure": base_pressure,
+            "altitude": base_altitude
+        })
+
+        self.temperature = (base_temp_c * 9/5) + 32
+        self.humidity = base_humidity
+        self.pressure = base_pressure
+        self._sim_last_update = time.time()
+
+        reason_text = f" ({reason})" if reason else ""
+        logger.warning("BME280 hardware unavailable%s - using simulated readings for development.", reason_text)
+        logger.warning("Set PULSE_ENABLE_BME280_SIM=0 to disable simulation and surface hardware errors.")
+        return True
+
+    def _should_use_simulation(self) -> bool:
+        env = os.getenv('PULSE_ENABLE_BME280_SIM')
+        if env is not None:
+            env_val = env.strip().lower()
+            if env_val in {'1', 'true', 'yes', 'on'}:
+                return True
+            if env_val in {'0', 'false', 'no', 'off'}:
+                return False
+        # Default: enable simulation automatically on non-Raspberry Pi systems (development machines)
+        return not self._is_running_on_pi()
+
+    @staticmethod
+    def _is_running_on_pi() -> bool:
+        try:
+            model_path = Path('/sys/firmware/devicetree/base/model')
+            if model_path.exists():
+                model = model_path.read_text(errors='ignore').lower()
+                if 'raspberry pi' in model:
+                    return True
+        except Exception:
+            pass
+        try:
+            return os.uname().machine.startswith('arm')
+        except AttributeError:
+            return False
+
+    @staticmethod
+    def _get_env_float(var: str, default: float) -> float:
+        try:
+            value = os.getenv(var)
+            return float(value) if value is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    def _generate_simulated_readings(self) -> Dict[str, float]:
+        now = time.time()
+        if (now - self._sim_last_update) >= 1.0:
+            temp_c = self._sim_state.get("temperature_c") or 22.0
+            humidity = self._sim_state.get("humidity") or 45.0
+            pressure = self._sim_state.get("pressure") or 1013.25
+            altitude = self._sim_state.get("altitude") or 0.0
+
+            temp_c = max(16.0, min(32.0, temp_c + random.uniform(-0.25, 0.25)))
+            humidity = max(25.0, min(75.0, humidity + random.uniform(-0.8, 0.8)))
+            pressure = max(1008.0, min(1018.0, pressure + random.uniform(-0.6, 0.6)))
+
+            self._sim_state.update({
+                "temperature_c": temp_c,
+                "humidity": humidity,
+                "pressure": pressure,
+                "altitude": altitude
+            })
+            self.temperature = (temp_c * 9/5) + 32
+            self.humidity = humidity
+            self.pressure = pressure
+            self._sim_last_update = now
+
+        temp_c = self._sim_state.get("temperature_c") or 22.0
+        humidity = self._sim_state.get("humidity") or 45.0
+        pressure = self._sim_state.get("pressure") or 1013.25
+        altitude = self._sim_state.get("altitude") or 0.0
+        temp_f = (temp_c * 9/5) + 32
+
+        return {
+            "temperature_f": round(temp_f, 1),
+            "temperature_c": round(temp_c, 1),
+            "humidity": round(humidity, 1),
+            "pressure": round(pressure, 2),
+            "altitude": round(altitude, 1)
+        }
     
     def read_sensor(self) -> Dict[str, float]:
         """Read current sensor values"""
         try:
+            if self.simulated:
+                data = self._generate_simulated_readings()
+                self.temperature = data.get("temperature_f")
+                self.humidity = data.get("humidity")
+                self.pressure = data.get("pressure")
+                data["timestamp"] = datetime.now().isoformat()
+                return data
+
             if self.sensor is None:
                 raise Exception("Sensor not initialized")
             
@@ -103,7 +230,7 @@ class BME280Reader:
                 "temperature_c": round(temp_c, 1),
                 "humidity": round(humidity, 1),
                 "pressure": round(pressure, 2),
-                "altitude": round(self.sensor.altitude, 1),
+                "altitude": round(self.sensor.altitude, 1) if hasattr(self.sensor, 'altitude') else None,
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -190,9 +317,16 @@ class BME280Reader:
     
     def get_all_readings(self) -> Dict:
         """Get all current readings"""
+        if self.simulated:
+            data = self._generate_simulated_readings()
+            data["timestamp"] = datetime.now().isoformat()
+            return data
+
+        temp_f = self.temperature
+        temp_c = ((temp_f - 32) * 5/9) if isinstance(temp_f, (int, float)) else None
         return {
-            "temperature_f": self.temperature,
-            "temperature_c": (self.temperature - 32) * 5/9 if self.temperature else None,
+            "temperature_f": temp_f,
+            "temperature_c": temp_c,
             "humidity": self.humidity,
             "pressure": self.pressure,
             "timestamp": datetime.now().isoformat()
