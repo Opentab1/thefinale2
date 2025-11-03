@@ -1,114 +1,214 @@
-# Fix: Reboot After Quick Start - Wizard Not Appearing
+# Quick Fix Summary - DB Reader & Song Detection
 
-## Problem
+## Issues Diagnosed
 
-After running the installation command and rebooting, the setup wizard was not appearing. Users were left with a blank screen or no browser window, making it impossible to complete the initial setup.
+### 1. DB Reader Cutting Out
+**Problem**: The dashboard API's `broadcast_sensor_data()` loop was crashing on database exceptions without recovery, causing the DB reader to stop updating the UI.
 
-## Root Cause
+**Root Cause**: 
+- Weak error handling in broadcast loop
+- No retry logic for database connection failures
+- Database lock timeouts not handled properly
 
-The kiosk startup script (`dashboard/kiosk/start.sh`) was always trying to open the dashboard at `http://localhost:8080`, even on first boot when the wizard should be displayed at `http://localhost:9090`.
+### 2. Song Detection Not Working
+**Problem**: Song detection via ShazamIO was failing silently or not initializing properly.
 
-The wizard completion detection logic was missing, causing:
-1. Browser to try loading the dashboard before wizard was complete
-2. Dashboard service wouldn't start (requires wizard completion marker)
-3. User stuck at blank screen with no indication of what to do
+**Root Cause**:
+- Missing or improperly configured audio libraries
+- Poor error handling in song detection initialization
+- Audio device detection issues
+- Missing ShazamIO library or its dependencies
 
-## Changes Made
+## Fixes Applied
 
-### 1. Fixed Kiosk Start Script (`dashboard/kiosk/start.sh`)
-- Added detection of wizard completion marker file (`/opt/pulse/config/.wizard_complete`)
-- Opens wizard URL (`http://localhost:9090`) on first boot
-- Opens dashboard URL (`http://localhost:8080`) after wizard completion
-- Added wait loop to ensure service is ready before opening browser
-- Added logging to help debug startup issues
+### Database & API Fixes
 
-### 2. Fixed Wizard Server (`bootstrap/wizard/server.py`)
-- Added proper marker file creation when wizard is completed
-- Created default config file if none exists on first boot
-- Fixed `load_config()` to handle missing config gracefully
-- Improved hardware detection to use actual detection results
-- Added better logging for debugging
+1. **Enhanced Broadcast Loop Error Recovery** (`dashboard/api/server.py`)
+   - Added consecutive error tracking
+   - Automatic database reconnection after 10 consecutive failures
+   - Better error logging with attempt counts
+   - Graceful degradation on database query failures
 
-### 3. Created Troubleshooting Guide (`TROUBLESHOOTING.md`)
-- Comprehensive guide for common issues
-- Specific section for "wizard doesn't appear" issue
-- Manual recovery steps for users stuck after reboot
-- Service management commands
-- Diagnostic tools and procedures
-- Factory reset instructions
+2. **Database Connection Retry Logic** (`services/storage/db.py`)
+   - Added retry mechanism with exponential backoff
+   - 10-second timeout on connections
+   - Handles SQLite database lock gracefully
+   - Up to 3 retry attempts on lock errors
 
-### 4. Updated Quick Start Guide (`QUICKSTART.md`)
-- Clarified what to expect after reboot (60 second wait)
-- Added troubleshooting tips for first boot issues
-- Referenced detailed troubleshooting guide
-- Added manual recovery steps inline
+### Song Detection Fixes
 
-## Testing Recommendations
+1. **Robust Audio Monitor Initialization** (`services/sensors/mic_song_detect.py`)
+   - Early validation of ShazamIO availability
+   - Graceful fallback when song detection unavailable
+   - Better async error handling
+   - Improved logging for troubleshooting
 
-When testing this fix on an actual Raspberry Pi:
+2. **Enhanced Hub Initialization** (`services/hub/main.py`)
+   - Explicit song detector status checking
+   - Detailed initialization logging
+   - Graceful continuation without audio if initialization fails
+   - Better error messages for troubleshooting
 
-1. **Fresh Installation Test:**
+### Installation & Repair Scripts
+
+1. **`install_audio_deps.sh`** - Installs/repairs all audio dependencies
+   - System-level audio libraries (portaudio, ALSA)
+   - Python audio packages (numpy, sounddevice, pyaudio)
+   - ShazamIO and dependencies
+   - Audio device detection test
+   - ShazamIO installation verification
+
+2. **`quick_fix.sh`** - One-command fix for both issues
+   - Optionally stops running system
+   - Installs/updates audio dependencies
+   - Validates database integrity
+   - Verifies all required libraries
+   - Provides clear next steps
+
+## How to Apply the Fix
+
+### Quick Method (Recommended)
+```bash
+./quick_fix.sh
+```
+
+This will:
+1. Install all dependencies
+2. Verify database integrity
+3. Check audio library installation
+4. Provide status report
+
+### Manual Method
+
+1. Install audio dependencies:
+```bash
+./install_audio_deps.sh
+```
+
+2. Restart the Pulse system:
+```bash
+./start_pulse.sh
+```
+
+## Verification
+
+After applying fixes, verify:
+
+1. **DB Reader Working**:
+   - Dashboard loads and shows data
+   - Values update every 5 seconds
+   - No "connection lost" errors
+
+2. **Song Detection Working**:
+   - Check logs for "✅ ShazamIO library available"
+   - Look for "🎵 Song detection will run every 30 seconds"
+   - Play music near microphone and wait 30-60 seconds
+   - Song info should appear in dashboard
+
+## Expected Behavior
+
+### DB Reader
+- Continuous updates every 5 seconds
+- Auto-recovery after database errors
+- Maximum 10 consecutive errors before reconnection attempt
+- Graceful degradation if hub unavailable
+
+### Song Detection
+- Attempts every 30 seconds (configurable via `SONG_DETECT_INTERVAL_SEC`)
+- 20-second timeout per attempt
+- Non-blocking (runs in background thread)
+- Logs detected songs to console and database
+- Falls back to music controller if mic detection fails
+
+## Troubleshooting
+
+### DB Reader Still Cutting Out
+1. Check database file permissions:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
+   ls -la /opt/pulse/data/pulse.db
    ```
-   - Verify installation completes
-   - Verify automatic reboot occurs
-   - **Expected:** After reboot, wait 60s, wizard opens at localhost:9090
-   - Complete wizard
-   - Verify second reboot
-   - **Expected:** After second reboot, dashboard opens at localhost:8080
 
-2. **Recovery Test:**
+2. Check for disk space:
    ```bash
-   sudo rm /opt/pulse/config/.wizard_complete
-   sudo reboot
+   df -h
    ```
-   - **Expected:** Wizard appears again after reboot
 
-3. **Service Verification:**
+3. Monitor dashboard logs:
    ```bash
-   # Before wizard completion
-   sudo systemctl status pulse-firstboot.service  # Should be active
-   sudo systemctl status pulse-dashboard.service  # Should be inactive (condition not met)
-   
-   # After wizard completion
-   sudo systemctl status pulse-firstboot.service  # Should be inactive (condition not met)
-   sudo systemctl status pulse-dashboard.service  # Should be active
+   journalctl -f | grep -i "database\|broadcast"
    ```
+
+### Song Detection Still Not Working
+1. Verify audio device:
+   ```bash
+   arecord -l
+   ```
+
+2. Test microphone:
+   ```bash
+   arecord -d 3 test.wav && aplay test.wav
+   ```
+
+3. Check installed packages:
+   ```bash
+   pip3 list | grep -E "shazam|pyaudio|sounddevice|numpy"
+   ```
+
+4. Check audio monitor logs:
+   ```bash
+   journalctl -f | grep -i "audio\|song\|shazam"
+   ```
+
+## Technical Details
+
+### Database Connection Pool
+- Timeout: 10 seconds
+- Max retries: 3
+- Retry delay: 0.1s with exponential backoff
+- Row factory: sqlite3.Row (dict-like access)
+
+### Audio Processing
+- Sample rate: 44100 Hz
+- Channels: Mono (1)
+- Buffer size: 2048 samples
+- Rolling buffer: 5 seconds for song detection
+- dB update interval: 2 seconds
+- Song detection interval: 30 seconds (configurable)
+
+### Error Recovery
+- Database: Auto-reconnect after 10 failures
+- Audio: Watchdog thread restarts monitoring on crash
+- Song detection: Isolated in background thread with timeout
+
+## Configuration
+
+### Environment Variables
+
+```bash
+# Audio monitoring
+export SONG_DETECT_INTERVAL_SEC=30        # Song detection frequency
+export DB_UPDATE_INTERVAL_SEC=2.0         # dB reading frequency
+export PULSE_MIC_DEVICE_INDEX=0           # Force specific audio device
+
+# Dashboard
+export PULSE_SIO_MODE=threading           # SocketIO async mode
+```
 
 ## Files Modified
 
-- `dashboard/kiosk/start.sh` - Fixed URL detection logic
-- `bootstrap/wizard/server.py` - Fixed marker file creation and config handling
-- `QUICKSTART.md` - Updated with better expectations and troubleshooting
-- `TROUBLESHOOTING.md` - **NEW** - Comprehensive troubleshooting guide
-- `FIX_SUMMARY.md` - **NEW** - This document
+- `dashboard/api/server.py` - Enhanced broadcast loop
+- `services/storage/db.py` - Added retry logic
+- `services/sensors/mic_song_detect.py` - Better error handling
+- `services/hub/main.py` - Improved initialization
+- `install_audio_deps.sh` - NEW - Audio dependency installer
+- `quick_fix.sh` - NEW - One-command fix script
 
-## Backward Compatibility
+## Next Steps
 
-These changes are fully backward compatible:
-- Existing installations with wizard complete will continue to work
-- The marker file check is the same as before
-- Only the kiosk script behavior changed (improved)
-- Wizard server changes only affect first-boot scenario
+1. Apply the fix using `./quick_fix.sh`
+2. Restart the system
+3. Monitor logs for 2-3 minutes
+4. Verify all sensors working in dashboard
+5. Test song detection with music
 
-## User Impact
-
-**Before Fix:**
-- User runs install command
-- System reboots
-- Blank screen or browser error
-- No indication of what to do next
-- Frustrated user
-
-**After Fix:**
-- User runs install command
-- System reboots
-- Wizard automatically opens in browser
-- User completes setup intuitively
-- Dashboard launches as expected
-- Happy user 🎉
-
-## Related Issues
-
-This fix resolves the issue described in branch name: `cursor/troubleshoot-reboot-after-quick-start-f582`
+If issues persist, check the troubleshooting section above.

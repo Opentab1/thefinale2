@@ -94,12 +94,21 @@ class PulseHub:
                 self.audio_monitor = AudioMonitor()
                 self.health_monitor.register_test("mic", lambda: True)
                 logger.info("  ✓ Audio monitor initialized successfully")
+                
+                # Check if song detection is actually working
+                if self.audio_monitor.song_detector is None:
+                    logger.warning("  ⚠️  Song detection disabled - detector not available")
+                    logger.warning("     Check: pip list | grep shazamio")
+                else:
+                    logger.info("  ✓ Song detection enabled")
+                    
             except ImportError as e:
                 logger.error(f"  ✗ Audio monitor dependencies missing: {e}")
-                logger.error("  → Install with: pip install numpy pyaudio sounddevice")
+                logger.error("  → Install with: pip install numpy pyaudio sounddevice shazamio")
                 self.audio_monitor = None
             except Exception as e:
                 logger.error(f"  ✗ Could not initialize audio monitor: {e}", exc_info=True)
+                logger.error("  → Try: pip install --upgrade numpy pyaudio sounddevice shazamio")
                 self.audio_monitor = None
         else:
             logger.info("  - Disabled in config")
@@ -268,8 +277,12 @@ class PulseHub:
             try:
                 self.audio_monitor.start_monitoring()
                 logger.info("  ✓ Audio monitor started")
+                logger.info("     Audio monitoring active - dB readings and song detection enabled")
+                logger.info("     Song detection will run every 30 seconds")
             except Exception as e:
                 logger.error(f"  ✗ Failed to start audio monitor: {e}", exc_info=True)
+                logger.error("     Continuing without audio monitoring")
+                self.audio_monitor = None
         
         if self.bme280:
             logger.info("🌡️  Starting BME280 sensor...")

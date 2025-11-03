@@ -526,7 +526,10 @@ def handle_update_request():
 
 
 def broadcast_sensor_data():
-    """Broadcast sensor data to all connected clients"""
+    """Broadcast sensor data to all connected clients with robust error handling"""
+    consecutive_errors = 0
+    max_consecutive_errors = 10
+    
     while True:
         try:
             if hub_instance:
@@ -562,15 +565,35 @@ def broadcast_sensor_data():
                             data["current_song"] = {"title": row[0], "artist": row[1]}
                         else:
                             data["current_song"] = {"title": None, "artist": None}
-                except Exception:
+                except Exception as db_err:
+                    logger.warning(f"Database query error (non-fatal): {db_err}")
                     data["current_song"] = {"title": None, "artist": None}
 
             socketio.emit('sensor_update', data)
             
+            # Reset error counter on success
+            consecutive_errors = 0
+            
             time.sleep(5)  # Update every 5 seconds
         except Exception as e:
-            logger.error(f"Error broadcasting sensor data: {e}")
-            time.sleep(5)
+            consecutive_errors += 1
+            logger.error(f"Error broadcasting sensor data (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
+            
+            # If too many consecutive errors, try to recover
+            if consecutive_errors >= max_consecutive_errors:
+                logger.error("Too many consecutive broadcast errors - attempting recovery")
+                try:
+                    # Reinitialize database connection
+                    global db
+                    db = PulseDB()
+                    logger.info("Database connection reinitialized")
+                    consecutive_errors = 0
+                except Exception as recovery_error:
+                    logger.error(f"Recovery failed: {recovery_error}")
+                    # Wait longer before retrying
+                    time.sleep(30)
+            else:
+                time.sleep(5)
 
 
 def start_broadcast_thread():

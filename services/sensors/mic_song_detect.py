@@ -92,6 +92,17 @@ class AudioMonitor:
         # Initialize song detector if available
         if SongDetector is not None:
             try:
+                # Check if ShazamIO is actually available first
+                try:
+                    from shazamio import Shazam
+                    logger.info("✅ ShazamIO library available")
+                except ImportError:
+                    logger.warning("⚠️ ShazamIO not available - song detection will not work")
+                    logger.warning("   Install with: pip install shazamio aiohttp")
+                    self.song_detector = None
+                    # Continue initialization even without song detection
+                    return
+                
                 # Pass enabled=False so it doesn't start its own recording thread
                 # We'll call detect_song_from_buffer() manually with our buffered audio
                 self.song_detector = SongDetector(
@@ -99,19 +110,13 @@ class AudioMonitor:
                     detection_interval=int(self._song_detect_interval)
                 )
                 logger.info("✅ Song detector initialized (using shared audio buffer)")
-                # Check if ShazamIO is actually available
-                try:
-                    from shazamio import Shazam
-                    logger.info("✅ ShazamIO library available - song detection will work")
-                except ImportError:
-                    logger.warning("⚠️ ShazamIO not available - song detection will not work")
-                    logger.warning("   Install with: pip install shazamio aiohttp")
             except Exception as e:
                 logger.warning(f"Failed to initialize song detector: {e}")
                 logger.warning(f"   Error details: {type(e).__name__}: {str(e)}")
                 import traceback
                 logger.debug(traceback.format_exc())
                 self.song_detector = None
+                logger.warning("   Continuing with dB monitoring only (no song detection)")
         else:
             self.song_detector = None
             logger.warning("⚠️ Song detector disabled (SongDetector class not available)")
@@ -374,10 +379,14 @@ class AudioMonitor:
                 logger.error("  1. Audio device is connected: arecord -l")
                 logger.error("  2. Device permissions: arecord -d 1 test.wav")
                 logger.error("  3. Dependencies installed: pip install pyaudio sounddevice")
+                logger.error("  4. Try running: ./install_audio_deps.sh")
                 logger.error("="*80)
                 # Still run the loop for song detection, but no dB readings
+                logger.warning("Continuing with limited functionality...")
             else:
                 logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
+                if self.song_detector:
+                    logger.info(f"🎵 Song detection will run every {self._song_detect_interval} seconds")
 
             while self.running and not self.stop_event.is_set():
                 try:
@@ -501,8 +510,14 @@ class AudioMonitor:
                 except asyncio.TimeoutError:
                     logger.warning("Song detection timed out (20s) - skipping")
                     result = None
+                except Exception as async_error:
+                    logger.error(f"Song detection async error: {async_error}")
+                    result = None
                 finally:
-                    loop.close()
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
                 
                 # Process result
                 if result and 'track' in result:
