@@ -426,8 +426,8 @@ class PulseHub:
     
     def _store_sensor_data(self, data: dict):
         """Store sensor data in database"""
+        # Store occupancy separately to isolate failures
         try:
-            # Occupancy + traffic
             if data.get("occupancy") is not None:
                 self.db.log_occupancy(
                     "Main Floor",
@@ -435,18 +435,30 @@ class PulseHub:
                     entry_count=int(data.get("entries", 0)),
                     exit_count=int(data.get("exits", 0))
                 )
-            
-            # Environment
+        except Exception as e:
+            logger.error(f"Error storing occupancy data: {e}", exc_info=True)
+        
+        # Store environment data separately to isolate failures
+        try:
             self.db.log_environment(
                 temperature=data.get("temperature_f"),
                 humidity=data.get("humidity"),
                 light_level=data.get("light_level"),
                 noise_level=data.get("noise_db")
             )
-            
-            # Music
+        except Exception as e:
+            logger.error(f"Error storing environment data: {e}", exc_info=True)
+            # Try to reconnect to database
+            try:
+                self.db = PulseDB()
+                logger.info("Database connection re-established")
+            except Exception as reconnect_error:
+                logger.error(f"Failed to reconnect to database: {reconnect_error}", exc_info=True)
+        
+        # Store music data separately to isolate failures
+        try:
             song = data.get("current_song")
-            if song and song.get("title") != "Unknown":
+            if song and song.get("title") and song.get("title") != "Unknown":
                 volume = 0
                 if self.music_controller:
                     try:
@@ -460,9 +472,8 @@ class PulseHub:
                     song.get("artist", "Unknown"),
                     volume
                 )
-            
         except Exception as e:
-            logger.error(f"Error storing sensor data: {e}")
+            logger.error(f"Error storing music data: {e}", exc_info=True)
     
     def _run_automation_rules(self, data: dict):
         """Run automation rules based on sensor data"""

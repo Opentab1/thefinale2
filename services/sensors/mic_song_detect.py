@@ -9,7 +9,6 @@ from threading import Thread, Event
 from datetime import datetime
 import os
 import time
-import time
 
 # NumPy is required
 try:
@@ -216,7 +215,7 @@ class AudioMonitor:
         except Exception as e:
             logger.error(f"Audio device validation failed: {e}")
     
-    def calculate_db(self, audio_data: np.ndarray) -> float:
+    def calculate_db(self, audio_data) -> float:
         """Calculate decibel level from audio data"""
         try:
             # Convert to float and normalize
@@ -237,7 +236,7 @@ class AudioMonitor:
             logger.error(f"Error calculating dB: {e}")
             return 0.0
     
-    def analyze_audio_spectrum(self, audio_data: np.ndarray) -> dict:
+    def analyze_audio_spectrum(self, audio_data) -> dict:
         """Analyze audio frequency spectrum"""
         try:
             # Perform FFT
@@ -427,19 +426,17 @@ class AudioMonitor:
                         logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
                     
                     # Trigger song detection every 30 seconds using buffered audio
+                    # Note: We use AudioMonitor's own _detect_song_from_buffer() which uses ShazamIO directly
+                    # This works even if SongDetector class is not available
                     now_song = time.time()
-                    if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
+                    if (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
                         if self._buffer_index >= self._audio_buffer_size:  # Buffer is full (5 seconds)
                             logger.info("🎵 Running song detection from audio buffer...")
                             self._detect_song_from_buffer()
+                            self._last_song_detect_ts = now_song
                         else:
                             logger.debug(f"Audio buffer not ready for song detection (index: {self._buffer_index}/{self._audio_buffer_size})")
-                        self._last_song_detect_ts = now_song
                         self._last_activity = now_song  # Update watchdog
-                    elif self.song_detector is None:
-                        # Log occasionally if song detector is not available
-                        if int(now_song) % 60 == 0:  # Log once per minute
-                            logger.debug("Song detector not available - song detection disabled")
                     
                 except Exception as e:
                     logger.error(f"Error in monitoring loop: {e}")
