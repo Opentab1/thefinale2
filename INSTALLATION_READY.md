@@ -87,6 +87,8 @@ cd thefinale2
 sudo ./install.sh
 ```
 
+> **Note:** When cloning to `/opt/pulse` directly, use `sudo git clone https://github.com/Opentab1/thefinale2.git /opt/pulse`
+
 ## Verification Checklist
 
 After deploying the fix, test that:

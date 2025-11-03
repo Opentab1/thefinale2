@@ -1,0 +1,38 @@
+╔═══════════════════════════════════════════════════════════════╗
+║                                                               ║
+║   THE ONLY COMMAND YOU NEED - COPY AND PASTE THIS:          ║
+║                                                               ║
+╚═══════════════════════════════════════════════════════════════╝
+
+curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
+
+
+WHAT HAPPENS:
+-------------
+1. Installation runs (15-20 min) - fully automatic
+2. Pi reboots automatically  
+3. Setup wizard opens at http://localhost:9090
+4. You click through wizard (2 minutes)
+5. Pi reboots again
+6. Dashboard is LIVE at http://localhost:8080
+
+THAT'S IT!
+----------
+✅ No coding
+✅ No configuration files  
+✅ No manual setup
+✅ Just ONE command + a simple wizard
+
+Total time: ~25 minutes
+Your effort: ONE command + clicking "Next" 4 times
+
+EVERYTHING WORKS PERFECTLY AFTER THIS! 🎉
+
+
+═══════════════════════════════════════════════════════════════
+
+THE COMMAND AGAIN (just copy this):
+
+curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
+
+═══════════════════════════════════════════════════════════════

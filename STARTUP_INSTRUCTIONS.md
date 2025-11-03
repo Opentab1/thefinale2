@@ -6,9 +6,11 @@ After flashing a new SD card and cloning the repo, follow these steps:
 
 ### 1. **Clone the Repository**
 ```bash
-git clone https://github.com/Opentab1/thefinale2.git /opt/pulse
+sudo git clone https://github.com/Opentab1/thefinale2.git /opt/pulse
 cd /opt/pulse
 ```
+
+> **Note:** The `sudo` is required because `/opt/pulse` is a system directory.
 
 ### 2. **Install Dependencies** (if needed)
 ```bash

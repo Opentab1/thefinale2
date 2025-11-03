@@ -5,21 +5,21 @@
 After flashing Raspberry Pi OS, run **ONE COMMAND**:
 
 ```bash
-git clone https://github.com/Opentab1/thefinale2.git /opt/pulse && cd /opt/pulse && ./INSTALL_SIMPLE_DASHBOARD.sh
+curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
 ```
 
-## What This Does
+## What Happens Automatically
 
-1. Clones the repo to `/opt/pulse`
-2. Installs simple dashboard as system service
-3. Enables auto-start on boot
-4. Starts dashboard immediately
+1. **Installation (15-20 min)** - Installs everything automatically
+2. **First Reboot** - System reboots
+3. **Setup Wizard** - Opens at `http://localhost:9090`
+4. **Click Through** - Takes 2-3 minutes
+5. **Final Reboot** - System reboots again
+6. **Dashboard Live** - Opens at `http://<your-pi-ip>:8080`
 
-## Access Dashboard
+## Total Time: ~25 minutes (only 2 minutes of clicking)
 
-Open browser to: `http://<your-pi-ip>:8080`
-
-Wait 30-40 seconds for sensors to warm up.
+**No coding. No configuration files. Just one command and a wizard.**
 
 ## What You'll See
 
