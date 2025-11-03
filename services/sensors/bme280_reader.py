@@ -43,21 +43,23 @@ class BME280Reader:
                 # Fallback to board.I2C() if busio fails
                 i2c = board.I2C()
             
-            # Try to initialize sensor
+            # Try to initialize sensor at primary address
             try:
                 logger.debug(f"Creating BME280 sensor object at {hex(self.address)}...")
                 self.sensor = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=self.address)
                 logger.debug(f"BME280 sensor object created at {hex(self.address)}")
-            except ValueError as e:
-                # Try alternate address
-                logger.info(f"Sensor not found at {hex(self.address)} ({e}), trying 0x77")
-                self.sensor = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=0x77)
-                self.address = 0x77  # Update stored address
-            except OSError as e:
-                logger.error(f"I2C bus error at {hex(self.address)}: {e}")
-                logger.error("This may be due to I2C bus contention or hardware issue")
-                logger.error("Check: sudo i2cdetect -y 1")
-                raise
+            except (ValueError, OSError) as e:
+                # Try alternate address (BME280 can be at 0x76 or 0x77)
+                alternate_addr = 0x77 if self.address == 0x76 else 0x76
+                logger.info(f"Sensor not found at {hex(self.address)} ({e}), trying {hex(alternate_addr)}")
+                try:
+                    self.sensor = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=alternate_addr)
+                    self.address = alternate_addr  # Update stored address
+                    logger.info(f"BME280 sensor initialized at alternate address {hex(alternate_addr)}")
+                except (ValueError, OSError) as e2:
+                    logger.error(f"I2C bus error - sensor not found at {hex(self.address)} or {hex(alternate_addr)}")
+                    logger.error("Check sensor connection and run: sudo i2cdetect -y 1")
+                    raise Exception(f"BME280 not found at either address") from e2
             
             # Configure sensor for indoor monitoring
             logger.debug("Configuring BME280 sensor...")
