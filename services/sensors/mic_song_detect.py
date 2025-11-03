@@ -72,6 +72,10 @@ class AudioMonitor:
         self.current_db = 0.0
         self.peak_db = 0.0
         self.current_song = None
+        
+        # Watchdog tracking
+        self._monitoring_thread = None
+        self._last_activity = 0.0
 
         # Song detection configuration from environment (default: 30s)
         self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '30'))
@@ -256,7 +260,7 @@ class AudioMonitor:
             return {}
     
     def start_monitoring(self):
-        """Start audio monitoring"""
+        """Start audio monitoring with automatic restart on crash"""
         if self.running:
             logger.warning("Monitor already running")
             return
@@ -264,11 +268,40 @@ class AudioMonitor:
         self.running = True
         self.stop_event.clear()
         
-        thread = Thread(target=self._monitoring_loop)
-        thread.daemon = True
-        thread.start()
+        # Start monitoring thread
+        self._start_monitoring_thread()
         
-        logger.info("Started audio monitoring")
+        # Start watchdog thread to restart if monitoring crashes
+        watchdog_thread = Thread(target=self._watchdog_loop, daemon=True)
+        watchdog_thread.start()
+        
+        logger.info("Started audio monitoring with watchdog")
+    
+    def _start_monitoring_thread(self):
+        """Start the monitoring thread"""
+        self._monitoring_thread = Thread(target=self._monitoring_loop, daemon=True)
+        self._monitoring_thread.start()
+        self._last_activity = time.time()
+    
+    def _watchdog_loop(self):
+        """Watchdog to restart monitoring if it crashes"""
+        while self.running and not self.stop_event.is_set():
+            try:
+                # Check if monitoring thread is alive
+                if not self._monitoring_thread.is_alive():
+                    logger.error("Audio monitoring thread died! Restarting...")
+                    self._start_monitoring_thread()
+                
+                # Check if monitoring is stuck (no activity for 60 seconds)
+                if time.time() - self._last_activity > 60:
+                    logger.warning("Audio monitoring appears stuck (no activity for 60s)")
+                    logger.warning("This is normal if no audio is detected, continuing...")
+                    self._last_activity = time.time()  # Reset to prevent spam
+                
+                self.stop_event.wait(10)  # Check every 10 seconds
+            except Exception as e:
+                logger.error(f"Error in watchdog: {e}")
+                self.stop_event.wait(10)
     
     def _monitoring_loop(self):
         """Main monitoring loop with integrated song detection"""
@@ -379,6 +412,7 @@ class AudioMonitor:
                         self.current_db = db
                         self.peak_db = max(self.peak_db, db)
                         self._last_db_ts = now_db
+                        self._last_activity = now_db  # Update watchdog
                         logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
                     
                     # Trigger song detection every 30 seconds using buffered audio
@@ -388,6 +422,7 @@ class AudioMonitor:
                             logger.info("🎵 Running song detection from audio buffer...")
                             self._detect_song_from_buffer()
                         self._last_song_detect_ts = now_song
+                        self._last_activity = now_song  # Update watchdog
                     
                 except Exception as e:
                     logger.error(f"Error in monitoring loop: {e}")
@@ -433,12 +468,24 @@ class AudioMonitor:
                 
                 logger.debug(f"Saved audio buffer to {temp_filename}")
                 
-                # Process the audio file with ShazamIO
+                # Process the audio file with ShazamIO (with overall timeout)
                 import asyncio
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 
-                result = loop.run_until_complete(self._recognize_song_async(temp_filename))
+                try:
+                    # Add 20 second overall timeout for entire song detection
+                    result = loop.run_until_complete(
+                        asyncio.wait_for(
+                            self._recognize_song_async(temp_filename),
+                            timeout=20.0
+                        )
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Song detection timed out (20s) - skipping")
+                    result = None
+                finally:
+                    loop.close()
                 
                 # Process result
                 if result and 'track' in result:
@@ -476,12 +523,22 @@ class AudioMonitor:
         thread.start()
     
     async def _recognize_song_async(self, audio_file):
-        """Recognize song using ShazamIO (async)"""
+        """Recognize song using ShazamIO (async with timeout)"""
         try:
+            import asyncio
             from shazamio import Shazam
+            
             shazam = Shazam()
-            result = await shazam.recognize(audio_file)
+            
+            # Add 15 second timeout to prevent hanging
+            result = await asyncio.wait_for(
+                shazam.recognize(audio_file),
+                timeout=15.0
+            )
             return result
+        except asyncio.TimeoutError:
+            logger.warning("Song recognition timed out after 15 seconds")
+            return None
         except Exception as e:
             logger.error(f"Shazam recognition error: {e}")
             return None
