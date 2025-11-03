@@ -88,6 +88,12 @@ fi
 # Add user to necessary groups
 usermod -a -G i2c,video,audio,dialout ${USER}
 
+echo ""
+echo -e "${GREEN}✓ I2C interface enabled${NC}"
+echo -e "${YELLOW}⚠ IMPORTANT: A reboot is required for I2C changes to take effect${NC}"
+echo -e "${YELLOW}  The BME280 temperature sensor requires I2C to function${NC}"
+echo ""
+
 echo -e "${YELLOW}[4/10] Cloning Pulse repository...${NC}"
 if [ -d "$INSTALL_DIR" ]; then
     echo "Directory exists, stopping services first..."
@@ -332,6 +338,17 @@ echo "1. Review hardware detection: cat /var/log/pulse/hardware_report.txt"
 echo "2. System will reboot and launch setup wizard"
 echo "3. Complete wizard at http://localhost:9090"
 echo "4. Dashboard will auto-launch at http://localhost:8080"
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}⚠  IMPORTANT - I2C ENABLED FOR TEMPERATURE SENSOR${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "The BME280 temperature sensor requires I2C, which has been enabled."
+echo "After reboot, verify with:"
+echo "  sudo i2cdetect -y 1"
+echo ""
+echo "For complete setup instructions:"
+echo "  cat /opt/pulse/POST_INSTALL_SETUP.md"
 echo ""
 echo -e "${YELLOW}Rebooting in 10 seconds... (Ctrl+C to cancel)${NC}"
 sleep 10
