@@ -1,0 +1,135 @@
+================================================================================
+SENSOR DEBUG & FIX - TERMINAL COMMANDS
+================================================================================
+
+✅ All fixes have been committed to the Git repository!
+   Branch: cursor/debug-and-fix-sensor-readings-4b20
+   Commit: f3a9321
+
+================================================================================
+🚀 STEP 1: RUN COMPREHENSIVE TEST (DO THIS FIRST!)
+================================================================================
+
+bash /workspace/fix_and_test_sensors.sh
+
+This will:
+  ✓ Check all dependencies
+  ✓ Test temperature sensor (BME280)
+  ✓ Test audio/microphone/song detection
+  ✓ Show exactly what's working and what needs fixing
+  ✓ Offer to install missing dependencies
+
+================================================================================
+🔍 STEP 2: TEST INDIVIDUAL SENSORS (IF NEEDED)
+================================================================================
+
+# Test temperature sensor only:
+python3 /workspace/test_temperature.py
+
+# Test audio/microphone only:
+python3 /workspace/test_audio.py
+
+# Test all sensors with full diagnostic:
+bash /workspace/test_all_sensors.sh
+
+================================================================================
+🎯 STEP 3: START THE CORRECT DASHBOARD
+================================================================================
+
+# Stop any running dashboard and start the correct one:
+bash /workspace/start_dashboard_correct.sh
+
+# Or manually:
+pkill -f 'python.*dashboard' && python3 /workspace/rpi/simple_local_dashboard.py
+
+Then open browser to: http://localhost:8080
+
+================================================================================
+🔧 COMMON ISSUES & FIXES
+================================================================================
+
+ISSUE: Temperature shows 0
+FIX:
+  sudo i2cdetect -y 1  # Check if sensor detected
+  pip3 install adafruit-circuitpython-bme280
+  python3 /workspace/test_temperature.py
+
+ISSUE: No song detection
+FIX:
+  pip3 install shazamio
+  # Make sure internet is connected
+  # Play music nearby for 30+ seconds
+  python3 /workspace/test_audio.py
+
+ISSUE: No audio/dB readings
+FIX:
+  arecord -l  # Check if microphone detected
+  pip3 install pyaudio sounddevice
+  sudo usermod -a -G audio $USER
+  # Logout and login
+  python3 /workspace/test_audio.py
+
+================================================================================
+📚 DOCUMENTATION FILES CREATED
+================================================================================
+
+TERMINAL_COMMANDS_DEBUG.md  - Quick command reference (READ THIS!)
+SENSOR_DEBUG_GUIDE.md       - Detailed troubleshooting guide
+test_temperature.py         - Test temperature sensor
+test_audio.py               - Test audio/song detection
+test_all_sensors.sh         - Test all sensors
+fix_and_test_sensors.sh     - Complete diagnostic
+start_dashboard_correct.sh  - Start dashboard correctly
+
+================================================================================
+✅ WHAT WAS FIXED
+================================================================================
+
+1. TEMPERATURE SENSOR (BME280)
+   - Fixed reading logic to properly handle sensor values
+   - Added better logging for debugging
+   - Improved error handling
+
+2. SONG DETECTION
+   - Changed to read directly from audio monitor in real-time
+   - Added fallback to database for historical songs
+   - Requires ShazamIO and internet connection
+
+3. DIAGNOSTIC TOOLS
+   - Created comprehensive test scripts for each sensor
+   - Added one-command fix and test script
+   - Created detailed documentation
+
+4. DASHBOARD STARTUP
+   - Created script to ensure correct dashboard runs
+   - The correct dashboard is: /workspace/rpi/simple_local_dashboard.py
+   - The wrong one (fake data) is: /workspace/rpi/local_dashboard.py
+
+================================================================================
+🎯 EXPECTED DASHBOARD READINGS
+================================================================================
+
+When working correctly, you should see:
+
+✓ Sound Level: 40-90 dB (from USB microphone)
+✓ Light Level: 0-1000+ lux (from light sensor)
+✓ Temperature: 60-80°F (from BME280)
+✓ Humidity: 20-80% (from BME280)
+✓ Now Playing: Song name (from ShazamIO, needs internet & music)
+✓ Comfort Score: 0-100 (calculated from above)
+
+================================================================================
+❓ NEED MORE HELP?
+================================================================================
+
+View detailed guide:
+  cat /workspace/TERMINAL_COMMANDS_DEBUG.md
+
+View troubleshooting:
+  cat /workspace/SENSOR_DEBUG_GUIDE.md
+
+Check what sensors are available:
+  sudo i2cdetect -y 1    # I2C devices (temp, humidity, light)
+  arecord -l              # Audio input devices
+
+================================================================================
