@@ -78,14 +78,17 @@ def get_real_sensor_data():
         try:
             reading = bme280.read_sensor()
             if reading:
-                temp_f = reading.get("temperature_f", 0)
-                humidity = reading.get("humidity", 0)
-                if temp_f > 0:  # Only use if sensor has real data
+                temp_f = reading.get("temperature_f")
+                humidity = reading.get("humidity")
+                # Use sensor data if it exists (None means error, 0 might be valid but unlikely)
+                if temp_f is not None and temp_f != 0:
                     data["indoorTemp"] = round(temp_f, 1)
-                if humidity > 0:
+                    logger.debug(f"Temperature: {temp_f:.1f}°F")
+                if humidity is not None and humidity > 0:
                     data["humidity"] = int(humidity)
+                    logger.debug(f"Humidity: {humidity:.1f}%")
         except Exception as e:
-            logger.debug(f"BME280 read error: {e}")
+            logger.warning(f"BME280 read error: {e}")
     
     # Get light level (use get_light_level method)
     if light_sensor:
@@ -107,8 +110,23 @@ def get_real_sensor_data():
         except Exception as e:
             logger.debug(f"Audio monitor error: {e}")
     
-    # Get current song from database
-    if db:
+    # Get current song from audio monitor (real-time detection)
+    if audio_monitor:
+        try:
+            song_info = audio_monitor.get_current_song()
+            if song_info and song_info.get('title') != 'Unknown':
+                title = song_info.get('title', 'Unknown')
+                artist = song_info.get('artist', '')
+                if artist and artist != 'Unknown':
+                    data["song"] = f"{title} — {artist}"
+                else:
+                    data["song"] = title
+                logger.debug(f"Current song: {data['song']}")
+        except Exception as e:
+            logger.debug(f"Song detection error: {e}")
+    
+    # Fallback: Get current song from database if not detected
+    if data["song"] == "—" and db:
         try:
             with db.get_connection() as conn:
                 cur = conn.cursor()
