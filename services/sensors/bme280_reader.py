@@ -117,6 +117,19 @@ class BME280Reader:
             logger.warning("Reader already running")
             return
         
+        # CRITICAL: Do an initial synchronous read to populate the cache
+        # This ensures cached values are never None when hub queries them
+        logger.info("Performing initial BME280 reading...")
+        try:
+            initial_data = self.read_sensor()
+            if initial_data and initial_data.get("temperature_f") is not None:
+                logger.info(f"Initial reading: {initial_data['temperature_f']:.1f}°F, {initial_data['humidity']:.1f}%")
+            else:
+                logger.warning("Initial reading returned no data - sensor may not be working")
+        except Exception as e:
+            logger.error(f"Initial sensor read failed: {e}")
+            raise  # Re-raise to prevent starting with bad sensor
+        
         self.running = True
         self.stop_event.clear()
         
@@ -124,7 +137,7 @@ class BME280Reader:
         thread.daemon = True
         thread.start()
         
-        logger.info(f"Started BME280 reading (interval: {interval}s)")
+        logger.info(f"Started BME280 background reading (interval: {interval}s)")
     
     def _reading_loop(self, interval: int):
         """Main reading loop"""

@@ -112,14 +112,18 @@ def get_current_sensors():
                 "current_song": None,
             }
 
+            # Fallback to database if hub is not available
             env = db.get_latest_environment()
             if env:
-                data.update({
-                    "temperature_f": env.get("temperature"),
-                    "humidity": env.get("humidity"),
-                    "light_level": env.get("light_level"),
-                    "noise_db": env.get("noise_level"),
-                })
+                # Only update if database has more recent data than None
+                if data.get("temperature_f") is None and env.get("temperature") is not None:
+                    data["temperature_f"] = env.get("temperature")
+                if data.get("humidity") is None and env.get("humidity") is not None:
+                    data["humidity"] = env.get("humidity")
+                if data.get("light_level") is None and env.get("light_level") is not None:
+                    data["light_level"] = env.get("light_level")
+                if data.get("noise_db") is None and env.get("noise_level") is not None:
+                    data["noise_db"] = env.get("noise_level")
 
             # Last played song from music_log (if any)
             try:
@@ -537,14 +541,18 @@ def broadcast_sensor_data():
                     "noise_db": None,
                     "current_song": None,
                 }
+                # Fallback to database for environment data
                 env = db.get_latest_environment()
                 if env:
-                    data.update({
-                        "temperature_f": env.get("temperature"),
-                        "humidity": env.get("humidity"),
-                        "light_level": env.get("light_level"),
-                        "noise_db": env.get("noise_level"),
-                    })
+                    # Only update if we don't already have data
+                    if data.get("temperature_f") is None and env.get("temperature") is not None:
+                        data["temperature_f"] = env.get("temperature")
+                    if data.get("humidity") is None and env.get("humidity") is not None:
+                        data["humidity"] = env.get("humidity")
+                    if data.get("light_level") is None and env.get("light_level") is not None:
+                        data["light_level"] = env.get("light_level")
+                    if data.get("noise_db") is None and env.get("noise_level") is not None:
+                        data["noise_db"] = env.get("noise_level")
                 try:
                     with db.get_connection() as conn:
                         cur = conn.cursor()

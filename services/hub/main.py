@@ -107,20 +107,23 @@ class PulseHub:
         logger.info("\n🌡️  Initializing BME280 Sensor...")
         if modules.get('bme280'):
             try:
-                # Try default address first (0x76), then 0x77
-                # BME280Reader will automatically try both addresses
+                # BME280Reader will automatically try both 0x76 and 0x77
                 self.bme280 = BME280Reader(address=0x76)
-                self.health_monitor.register_test("bme280", lambda: True)
-                logger.info("  ✓ BME280 sensor initialized successfully")
-            except Exception as e:
-                logger.warning(f"  ⚠ BME280 at 0x76 failed, trying 0x77: {e}")
-                try:
-                    self.bme280 = BME280Reader(address=0x77)
-                    self.health_monitor.register_test("bme280", lambda: True)
-                    logger.info("  ✓ BME280 sensor initialized successfully at 0x77")
-                except Exception as e2:
-                    logger.error(f"  ✗ Could not initialize BME280 at any address: {e2}")
+                
+                # Verify sensor can actually read data
+                test_reading = self.bme280.read_sensor()
+                if test_reading and test_reading.get("temperature_f") is not None:
+                    logger.info(f"  ✓ BME280 initialized successfully at {hex(self.bme280.address)}")
+                    logger.info(f"    Current: {test_reading['temperature_f']:.1f}°F, {test_reading['humidity']:.1f}%")
+                    self.health_monitor.register_test("bme280", lambda: self.bme280.temperature is not None)
+                else:
+                    logger.error("  ✗ BME280 initialized but cannot read data")
                     self.bme280 = None
+            except Exception as e:
+                logger.error(f"  ✗ Could not initialize BME280: {e}")
+                logger.error("    → Check sensor connection: sudo i2cdetect -y 1")
+                logger.error("    → Expected I2C address: 0x76 or 0x77")
+                self.bme280 = None
         else:
             logger.info("  - Disabled in config")
         
@@ -351,24 +354,22 @@ class PulseHub:
                 pass
         
         if self.bme280:
-            # Try to get a fresh reading first, fall back to cached values
+            # Use cached values (background thread keeps these updated)
+            # Cache is guaranteed to be populated by initial sync read in start_reading()
             try:
-                readings = self.bme280.read_sensor()
-                if readings and readings.get("temperature_f") is not None:
-                    data["temperature_f"] = readings.get("temperature_f")
-                    data["humidity"] = readings.get("humidity")
-                    data["pressure"] = readings.get("pressure")
-                else:
-                    # Fall back to cached values if fresh read fails
-                    cached = self.bme280.get_all_readings()
-                    data["temperature_f"] = cached.get("temperature_f")
-                    data["humidity"] = cached.get("humidity")
-            except Exception as e:
-                logger.warning(f"Error reading BME280: {e}")
-                # Try cached values as last resort
                 cached = self.bme280.get_all_readings()
                 data["temperature_f"] = cached.get("temperature_f")
                 data["humidity"] = cached.get("humidity")
+                data["pressure"] = cached.get("pressure")
+                
+                # Warn if values become None (sensor failure)
+                if data["temperature_f"] is None:
+                    logger.warning("BME280 temperature is None - sensor may have failed")
+            except Exception as e:
+                logger.error(f"Error getting BME280 readings: {e}")
+                data["temperature_f"] = None
+                data["humidity"] = None
+                data["pressure"] = None
         
         if self.light_sensor:
             data["light_level"] = self.light_sensor.get_light_level()
