@@ -26,17 +26,38 @@ class PulseDB:
     
     @contextmanager
     def get_connection(self):
-        """Context manager for database connections"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            conn.close()
+        """Context manager for database connections with retry logic"""
+        max_retries = 3
+        retry_delay = 0.1
+        
+        for attempt in range(max_retries):
+            try:
+                conn = sqlite3.connect(self.db_path, timeout=10.0)
+                conn.row_factory = sqlite3.Row
+                # Enable WAL mode for better concurrency
+                conn.execute('PRAGMA journal_mode=WAL')
+                conn.execute('PRAGMA busy_timeout=10000')  # 10 second timeout
+                try:
+                    yield conn
+                    conn.commit()
+                    return
+                except Exception as e:
+                    conn.rollback()
+                    raise e
+                finally:
+                    conn.close()
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e).lower() and attempt < max_retries - 1:
+                    import time
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+                raise
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+                raise
     
     def _init_database(self):
         """Initialize database schema"""

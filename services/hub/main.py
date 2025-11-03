@@ -310,20 +310,33 @@ class PulseHub:
                 # Collect sensor data
                 sensor_data = self._collect_sensor_data()
                 
-                # Store in database
-                self._store_sensor_data(sensor_data)
+                # Store in database (continue even if this fails)
+                try:
+                    self._store_sensor_data(sensor_data)
+                except Exception as e:
+                    logger.error(f"Database write failed (will retry next cycle): {e}", exc_info=True)
                 
-                # Run automation rules
-                self._run_automation_rules(sensor_data)
+                # Run automation rules (continue even if this fails)
+                try:
+                    self._run_automation_rules(sensor_data)
+                except Exception as e:
+                    logger.error(f"Automation rules failed: {e}", exc_info=True)
                 
-                # Update learning data
-                self._update_learning_data(sensor_data)
+                # Update learning data (continue even if this fails)
+                try:
+                    self._update_learning_data(sensor_data)
+                except Exception as e:
+                    logger.error(f"Learning data update failed: {e}", exc_info=True)
                 
                 # Wait for next iteration
                 self.stop_event.wait(loop_interval)
                 
+            except KeyboardInterrupt:
+                logger.info("Received interrupt signal")
+                break
             except Exception as e:
-                logger.error(f"Error in main loop: {e}")
+                logger.error(f"Critical error in main loop: {e}", exc_info=True)
+                # Wait before retrying to avoid tight error loop
                 self.stop_event.wait(loop_interval)
     
     def _collect_sensor_data(self) -> dict:
@@ -425,44 +438,53 @@ class PulseHub:
         return data
     
     def _store_sensor_data(self, data: dict):
-        """Store sensor data in database"""
+        """Store sensor data in database with retry logic"""
         try:
             # Occupancy + traffic
             if data.get("occupancy") is not None:
-                self.db.log_occupancy(
-                    "Main Floor",
-                    int(data["occupancy"]),
-                    entry_count=int(data.get("entries", 0)),
-                    exit_count=int(data.get("exits", 0))
-                )
+                try:
+                    self.db.log_occupancy(
+                        "Main Floor",
+                        int(data["occupancy"]),
+                        entry_count=int(data.get("entries", 0)),
+                        exit_count=int(data.get("exits", 0))
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log occupancy: {e}")
             
             # Environment
-            self.db.log_environment(
-                temperature=data.get("temperature_f"),
-                humidity=data.get("humidity"),
-                light_level=data.get("light_level"),
-                noise_level=data.get("noise_db")
-            )
+            try:
+                self.db.log_environment(
+                    temperature=data.get("temperature_f"),
+                    humidity=data.get("humidity"),
+                    light_level=data.get("light_level"),
+                    noise_level=data.get("noise_db")
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log environment: {e}")
             
             # Music
             song = data.get("current_song")
             if song and song.get("title") != "Unknown":
-                volume = 0
-                if self.music_controller:
-                    try:
-                        current = self.music_controller.get_current_track()
-                        volume = current.get("volume_percent", 0)
-                    except:
-                        pass
-                
-                self.db.log_music(
-                    song["title"],
-                    song.get("artist", "Unknown"),
-                    volume
-                )
+                try:
+                    volume = 0
+                    if self.music_controller:
+                        try:
+                            current = self.music_controller.get_current_track()
+                            volume = current.get("volume_percent", 0)
+                        except:
+                            pass
+                    
+                    self.db.log_music(
+                        song["title"],
+                        song.get("artist", "Unknown"),
+                        volume
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log music: {e}")
             
         except Exception as e:
-            logger.error(f"Error storing sensor data: {e}")
+            logger.error(f"Error storing sensor data: {e}", exc_info=True)
     
     def _run_automation_rules(self, data: dict):
         """Run automation rules based on sensor data"""
@@ -604,20 +626,23 @@ class PulseHub:
             
             now = datetime.now()
             
-            self.db.log_learning_data(
-                avg_dwell_minutes=avg_dwell,
-                occupancy=data.get("occupancy", 0),
-                temperature=data.get("temperature_f", 0),
-                humidity=data.get("humidity", 0),
-                light_level=data.get("light_level", 0),
-                noise_level=data.get("noise_db", 0),
-                music_volume=0,  # Would get from controller
-                day_of_week=now.weekday(),
-                hour_of_day=now.hour
-            )
+            try:
+                self.db.log_learning_data(
+                    avg_dwell_minutes=avg_dwell,
+                    occupancy=data.get("occupancy", 0),
+                    temperature=data.get("temperature_f", 0),
+                    humidity=data.get("humidity", 0),
+                    light_level=data.get("light_level", 0),
+                    noise_level=data.get("noise_db", 0),
+                    music_volume=0,  # Would get from controller
+                    day_of_week=now.weekday(),
+                    hour_of_day=now.hour
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log learning data: {e}")
         
         except Exception as e:
-            logger.error(f"Error updating learning data: {e}")
+            logger.warning(f"Error updating learning data: {e}")
     
     def stop(self):
         """Stop the hub"""

@@ -92,20 +92,26 @@ class AudioMonitor:
         # Initialize song detector if available
         if SongDetector is not None:
             try:
-                # Pass enabled=False so it doesn't start its own recording thread
-                # We'll call detect_song_from_buffer() manually with our buffered audio
-                self.song_detector = SongDetector(
-                    enabled=False,  # Don't start background recording
-                    detection_interval=int(self._song_detect_interval)
-                )
-                logger.info("✅ Song detector initialized (using shared audio buffer)")
-                # Check if ShazamIO is actually available
+                # Check if ShazamIO is actually available before initializing
                 try:
                     from shazamio import Shazam
-                    logger.info("✅ ShazamIO library available - song detection will work")
+                    shazam_available = True
                 except ImportError:
+                    shazam_available = False
                     logger.warning("⚠️ ShazamIO not available - song detection will not work")
                     logger.warning("   Install with: pip install shazamio aiohttp")
+                
+                if shazam_available:
+                    # Pass enabled=False so it doesn't start its own recording thread
+                    # We'll call detect_song_from_buffer() manually with our buffered audio
+                    self.song_detector = SongDetector(
+                        enabled=False,  # Don't start background recording
+                        detection_interval=int(self._song_detect_interval)
+                    )
+                    logger.info("✅ Song detector initialized (using shared audio buffer)")
+                    logger.info("✅ ShazamIO library available - song detection will work")
+                else:
+                    self.song_detector = None
             except Exception as e:
                 logger.warning(f"Failed to initialize song detector: {e}")
                 logger.warning(f"   Error details: {type(e).__name__}: {str(e)}")
@@ -216,7 +222,7 @@ class AudioMonitor:
         except Exception as e:
             logger.error(f"Audio device validation failed: {e}")
     
-    def calculate_db(self, audio_data: np.ndarray) -> float:
+    def calculate_db(self, audio_data) -> float:
         """Calculate decibel level from audio data"""
         try:
             # Convert to float and normalize
@@ -237,7 +243,7 @@ class AudioMonitor:
             logger.error(f"Error calculating dB: {e}")
             return 0.0
     
-    def analyze_audio_spectrum(self, audio_data: np.ndarray) -> dict:
+    def analyze_audio_spectrum(self, audio_data) -> dict:
         """Analyze audio frequency spectrum"""
         try:
             # Perform FFT
@@ -473,6 +479,10 @@ class AudioMonitor:
         
         def detect_async():
             try:
+                # Check if song detector is still available
+                if self.song_detector is None:
+                    logger.warning("Song detector not available - skipping detection")
+                    return
                 # Save buffer to temporary WAV file
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                     temp_filename = temp_file.name
@@ -487,10 +497,11 @@ class AudioMonitor:
                 
                 # Process the audio file with ShazamIO (with overall timeout)
                 import asyncio
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
+                loop = None
                 try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
                     # Add 20 second overall timeout for entire song detection
                     result = loop.run_until_complete(
                         asyncio.wait_for(
@@ -501,8 +512,22 @@ class AudioMonitor:
                 except asyncio.TimeoutError:
                     logger.warning("Song detection timed out (20s) - skipping")
                     result = None
+                except Exception as e:
+                    logger.warning(f"Song detection error: {type(e).__name__}: {e}")
+                    result = None
                 finally:
-                    loop.close()
+                    if loop and not loop.is_closed():
+                        try:
+                            # Cancel any pending tasks
+                            pending = asyncio.all_tasks(loop)
+                            for task in pending:
+                                task.cancel()
+                            if pending:
+                                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        except Exception:
+                            pass
+                        finally:
+                            loop.close()
                 
                 # Process result
                 if result and 'track' in result:
