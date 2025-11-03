@@ -10,6 +10,12 @@
 curl -fsSL https://raw.githubusercontent.com/Opentab1/thefinale2/main/install.sh | sudo bash
 ```
 
+**⚠️ IMPORTANT:** After installation completes, you **MUST reboot** for I2C to be enabled:
+```bash
+sudo reboot
+```
+The BME280 temperature sensor requires I2C, which the installer enables but needs a reboot to activate.
+
 This will:
 - ✅ Install all dependencies
 - ✅ Set up the system with **all sensor fixes**
