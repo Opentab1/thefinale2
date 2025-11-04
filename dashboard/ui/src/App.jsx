@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom'
-import { Activity, BarChart2, Settings, Zap, AlertCircle } from 'lucide-react'
+import { Activity, BarChart2, Settings, Zap, AlertCircle, Wine } from 'lucide-react'
 import io from 'socket.io-client'
 import axios from 'axios'
 
@@ -10,6 +10,7 @@ import Analytics from './components/Analytics'
 import Controls from './components/Controls'
 import SystemHealth from './components/SystemHealth'
 import SettingsPage from './components/SettingsPage'
+import BartenderDashboard from './components/BartenderDashboard'
 
 const API_URL = window.location.origin
 
@@ -129,6 +130,7 @@ function App() {
             <div className="flex space-x-1">
               <NavLink to="/" icon={<Activity />} label="Live" />
               <NavLink to="/analytics" icon={<BarChart2 />} label="Analytics" />
+              <NavLink to="/bartender" icon={<Wine />} label="Bartender" />
               <NavLink to="/controls" icon={<Zap />} label="Controls" />
               <NavLink to="/health" icon={<AlertCircle />} label="Health" />
               <NavLink to="/settings" icon={<Settings />} label="Settings" />
@@ -141,6 +143,7 @@ function App() {
           <Routes>
             <Route path="/" element={<LiveOverview sensorData={sensorData} />} />
             <Route path="/analytics" element={<Analytics />} />
+            <Route path="/bartender" element={<BartenderDashboard />} />
             <Route path="/controls" element={<Controls />} />
             <Route path="/health" element={<SystemHealth systemStatus={systemStatus} />} />
             <Route path="/settings" element={<SettingsPage />} />
