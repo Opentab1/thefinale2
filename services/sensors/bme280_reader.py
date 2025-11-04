@@ -22,62 +22,76 @@ class BME280Reader:
         self.humidity = None
         self.pressure = None
         
+        self._last_success_reading: Dict[str, float] = {}
+        self._failure_count = 0
+        self._max_failures_before_reset = 3
+
         self._init_sensor()
     
-    def _init_sensor(self):
-        """Initialize BME280 sensor with robust error handling"""
+    def _init_sensor(self, retries: int = 3, delay_seconds: float = 1.0):
+        """Initialize BME280 sensor with retries and robust error handling"""
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, retries + 1):
+            try:
+                self._setup_sensor_once()
+                self._failure_count = 0
+                logger.info(f"BME280 sensor initialized at address {hex(self.address)} (attempt {attempt})")
+                return
+            except Exception as exc:
+                last_error = exc
+                logger.error(f"Failed to initialize BME280 sensor (attempt {attempt}/{retries}): {exc}")
+                logger.debug(f"Exception type: {type(exc).__name__}")
+                if attempt < retries:
+                    time.sleep(delay_seconds)
+                else:
+                    logger.error("All attempts to initialize BME280 failed")
+
+        # If we reach here, initialization never succeeded
+        if last_error:
+            raise last_error
+
+    def _setup_sensor_once(self):
+        """Perform a single attempt at wiring up the sensor hardware"""
+        # Use busio directly to avoid board pin mapping issues
+        import busio
+        import board
+        import adafruit_bme280.advanced as adafruit_bme280
+
+        logger.debug(f"Attempting to initialize BME280 at address {hex(self.address)}")
+
+        # Create I2C bus using busio (more reliable on Pi 5)
         try:
-            # Use busio directly to avoid board pin mapping issues
-            import busio
-            import board
-            import adafruit_bme280.advanced as adafruit_bme280
-            
-            logger.debug(f"Attempting to initialize BME280 at address {hex(self.address)}")
-            
-            # Create I2C bus using busio (more reliable on Pi 5)
-            try:
-                i2c = busio.I2C(board.SCL, board.SDA)
-                logger.debug("I2C bus created successfully using busio.I2C()")
-            except Exception as e:
-                logger.debug(f"busio.I2C() failed ({e}), falling back to board.I2C()")
-                # Fallback to board.I2C() if busio fails
-                i2c = board.I2C()
-            
-            # Try to initialize sensor at primary address
-            try:
-                logger.debug(f"Creating BME280 sensor object at {hex(self.address)}...")
-                self.sensor = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=self.address)
-                logger.debug(f"BME280 sensor object created at {hex(self.address)}")
-            except (ValueError, OSError) as e:
-                # Try alternate address (BME280 can be at 0x76 or 0x77)
-                alternate_addr = 0x77 if self.address == 0x76 else 0x76
-                logger.info(f"Sensor not found at {hex(self.address)} ({e}), trying {hex(alternate_addr)}")
-                try:
-                    self.sensor = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=alternate_addr)
-                    self.address = alternate_addr  # Update stored address
-                    logger.info(f"BME280 sensor initialized at alternate address {hex(alternate_addr)}")
-                except (ValueError, OSError) as e2:
-                    logger.error(f"I2C bus error - sensor not found at {hex(self.address)} or {hex(alternate_addr)}")
-                    logger.error("Check sensor connection and run: sudo i2cdetect -y 1")
-                    raise Exception(f"BME280 not found at either address") from e2
-            
-            # Configure sensor for indoor monitoring
-            logger.debug("Configuring BME280 sensor...")
-            self.sensor.sea_level_pressure = 1013.25
-            self.sensor.mode = adafruit_bme280.MODE_NORMAL
-            self.sensor.standby_period = adafruit_bme280.STANDBY_TC_500
-            self.sensor.iir_filter = adafruit_bme280.IIR_FILTER_X16
-            self.sensor.overscan_pressure = adafruit_bme280.OVERSCAN_X16
-            self.sensor.overscan_humidity = adafruit_bme280.OVERSCAN_X1
-            self.sensor.overscan_temperature = adafruit_bme280.OVERSCAN_X2
-            logger.debug("BME280 sensor configured")
-            
-            logger.info(f"BME280 sensor initialized at address {hex(self.address)}")
-            
+            i2c = busio.I2C(board.SCL, board.SDA)
+            logger.debug("I2C bus created successfully using busio.I2C()")
         except Exception as e:
-            logger.error(f"Failed to initialize BME280 sensor: {e}")
-            logger.error(f"Exception type: {type(e).__name__}")
-            raise
+            logger.debug(f"busio.I2C() failed ({e}), falling back to board.I2C()")
+            # Fallback to board.I2C() if busio fails
+            i2c = board.I2C()
+
+        # Try to initialize sensor at primary address
+        try:
+            logger.debug(f"Creating BME280 sensor object at {hex(self.address)}...")
+            self.sensor = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=self.address)
+            logger.debug(f"BME280 sensor object created at {hex(self.address)}")
+        except (ValueError, OSError) as e:
+            # Try alternate address (BME280 can be at 0x76 or 0x77)
+            alternate_addr = 0x77 if self.address == 0x76 else 0x76
+            logger.info(f"Sensor not found at {hex(self.address)} ({e}), trying {hex(alternate_addr)}")
+            self.sensor = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=alternate_addr)
+            self.address = alternate_addr  # Update stored address
+            logger.info(f"BME280 sensor initialized at alternate address {hex(alternate_addr)}")
+
+        # Configure sensor for indoor monitoring
+        logger.debug("Configuring BME280 sensor...")
+        self.sensor.sea_level_pressure = 1013.25
+        self.sensor.mode = adafruit_bme280.MODE_NORMAL
+        self.sensor.standby_period = adafruit_bme280.STANDBY_TC_500
+        self.sensor.iir_filter = adafruit_bme280.IIR_FILTER_X16
+        self.sensor.overscan_pressure = adafruit_bme280.OVERSCAN_X16
+        self.sensor.overscan_humidity = adafruit_bme280.OVERSCAN_X1
+        self.sensor.overscan_temperature = adafruit_bme280.OVERSCAN_X2
+        logger.debug("BME280 sensor configured")
     
     def read_sensor(self) -> Dict[str, float]:
         """Read current sensor values"""
@@ -92,13 +106,13 @@ class BME280Reader:
             
             # Convert temperature to Fahrenheit
             temp_f = (temp_c * 9/5) + 32
-            
+
             # Update stored values
             self.temperature = temp_f
             self.humidity = humidity
             self.pressure = pressure
-            
-            return {
+
+            reading = {
                 "temperature_f": round(temp_f, 1),
                 "temperature_c": round(temp_c, 1),
                 "humidity": round(humidity, 1),
@@ -106,10 +120,27 @@ class BME280Reader:
                 "altitude": round(self.sensor.altitude, 1),
                 "timestamp": datetime.now().isoformat()
             }
-            
+
+            self._last_success_reading = reading
+            self._failure_count = 0
+
+            return reading
+
         except Exception as e:
+            self._failure_count += 1
             logger.error(f"Error reading sensor: {e}")
-            return {}
+
+            if self._failure_count >= self._max_failures_before_reset:
+                logger.warning("BME280 consecutive read failures detected - attempting sensor reset")
+                try:
+                    self._init_sensor()
+                    logger.info("BME280 sensor reset successfully after read failures")
+                except Exception as reset_exc:
+                    logger.error(f"Failed to reset BME280 sensor: {reset_exc}")
+                finally:
+                    self._failure_count = 0
+
+            return self._last_success_reading or {}
     
     def start_reading(self, interval: int = 30):
         """Start continuous sensor reading"""
@@ -159,7 +190,7 @@ class BME280Reader:
                 except Exception as e:
                     logger.error(f"Error in reading loop: {e}")
                     self.stop_event.wait(interval)
-            
+
             logger.info("BME280 reading stopped")
             
         except Exception as e:
@@ -190,11 +221,15 @@ class BME280Reader:
     
     def get_all_readings(self) -> Dict:
         """Get all current readings"""
+        temperature_f = self.temperature if self.temperature is not None else self._last_success_reading.get("temperature_f") if self._last_success_reading else None
+        humidity = self.humidity if self.humidity is not None else self._last_success_reading.get("humidity") if self._last_success_reading else None
+        pressure = self.pressure if self.pressure is not None else self._last_success_reading.get("pressure") if self._last_success_reading else None
+
         return {
-            "temperature_f": self.temperature,
-            "temperature_c": (self.temperature - 32) * 5/9 if self.temperature else None,
-            "humidity": self.humidity,
-            "pressure": self.pressure,
+            "temperature_f": temperature_f,
+            "temperature_c": ((temperature_f - 32) * 5/9) if temperature_f is not None else None,
+            "humidity": humidity,
+            "pressure": pressure,
             "timestamp": datetime.now().isoformat()
         }
     

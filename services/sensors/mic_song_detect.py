@@ -299,7 +299,10 @@ class AudioMonitor:
         while self.running and not self.stop_event.is_set():
             try:
                 # Check if monitoring thread is alive
-                if not self._monitoring_thread.is_alive():
+                if self._monitoring_thread is None or not self._monitoring_thread.is_alive():
+                    if self.stop_event.is_set() or not self.running:
+                        # Shutdown requested; don't restart
+                        return
                     logger.error("Audio monitoring thread died! Restarting...")
                     self._start_monitoring_thread()
                 
@@ -402,7 +405,7 @@ class AudioMonitor:
 
                     if audio_data.size == 0:
                         continue
-                    
+
                     # Store audio in rolling buffer for song detection
                     chunk_len = min(len(audio_data), self._audio_buffer_size)
                     if self._buffer_index + chunk_len <= self._audio_buffer_size:
@@ -415,7 +418,7 @@ class AudioMonitor:
                         self._audio_buffer = np.roll(self._audio_buffer, -shift_amount)
                         self._audio_buffer[-shift_amount:] = audio_data[:chunk_len]
                         self._buffer_index = self._audio_buffer_size  # Buffer is full
-                    
+
                     # Calculate dB level more frequently for better responsiveness (every 2 seconds)
                     now_db = time.time()
                     if (now_db - self._last_db_ts) >= 2.0:  # Update every 2 seconds
@@ -425,7 +428,7 @@ class AudioMonitor:
                         self._last_db_ts = now_db
                         self._last_activity = now_db  # Update watchdog
                         logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
-                    
+
                     # Trigger song detection every 30 seconds using buffered audio
                     now_song = time.time()
                     if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
@@ -440,18 +443,28 @@ class AudioMonitor:
                         # Log occasionally if song detector is not available
                         if int(now_song) % 60 == 0:  # Log once per minute
                             logger.debug("Song detector not available - song detection disabled")
-                    
+
                 except Exception as e:
                     logger.error(f"Error in monitoring loop: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
-            
+
+                    message = str(e).lower()
+                    if "input overflowed" in message or "overrun" in message:
+                        logger.warning("Audio input overflow detected; clearing buffer and continuing")
+                        self.stop_event.wait(1.0)
+                        continue
+
+                    # For any other error, bail out so watchdog can restart
+                    raise
+
             logger.info("Audio monitoring stopped")
             
         except Exception as e:
             logger.error(f"Fatal error in monitoring loop: {e}")
-            self.running = False
+            logger.error("Audio monitoring thread encountered a fatal error; watchdog will attempt restart")
         finally:
+            self._monitoring_thread = None
             try:
                 if pa_stream:
                     pa_stream.stop_stream()
