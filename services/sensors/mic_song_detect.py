@@ -107,6 +107,11 @@ class AudioMonitor:
         self._health_thread = None
         self._health_check_interval = max(15.0, self._song_detect_interval / 2)
         self._last_db_restart_ts = 0.0
+        
+        # Stream health tracking - CRITICAL for detecting silent failures
+        self._stream_active = False
+        self._stream_last_successful_read = 0.0
+        self._stream_read_timeout = 5.0  # If no successful read in 5 seconds, stream is dead
 
         # Dedicated async event loop for song recognition to keep Shazam stable
         self._detection_loop = None
@@ -118,7 +123,8 @@ class AudioMonitor:
         self._monitoring_backend = None
         self._stream_restart_count = 0
         self._max_consecutive_read_errors = 3
-        self._watchdog_restart_threshold = max(60.0, self._song_detect_interval * 4)
+        # CRITICAL FIX: Reduced threshold from 60s to 15s for faster failure detection
+        self._watchdog_restart_threshold = max(15.0, self._song_detect_interval * 2)
         self._stream_restart_request = Event()
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
@@ -556,7 +562,7 @@ class AudioMonitor:
         self._stream_restart_request.clear()
     
     def _watchdog_loop(self):
-        """Watchdog to restart monitoring if it crashes"""
+        """Watchdog to restart monitoring if it crashes - CRITICAL FIX: More aggressive monitoring"""
         while self.running and not self.stop_event.is_set():
             try:
                 # Check if monitoring thread is alive
@@ -566,6 +572,21 @@ class AudioMonitor:
                 else:
                     now = time.time()
                     inactivity = now - self._last_activity
+                    
+                    # CRITICAL FIX: Check stream health - if no successful read in timeout period, restart
+                    stream_stale = (
+                        self._stream_last_successful_read > 0 and
+                        (now - self._stream_last_successful_read) > self._stream_read_timeout
+                    )
+                    
+                    if stream_stale:
+                        logger.warning(
+                            "Audio stream appears dead (no successful read for %.1fs) - forcing restart",
+                            now - self._stream_last_successful_read
+                        )
+                        self._stream_restart_request.set()
+                        self._stream_last_successful_read = 0.0
+                    
                     if inactivity > self._watchdog_restart_threshold and self._monitoring_backend is not None:
                         logger.warning(
                             "Audio monitoring stalled (no activity for %.1fs, backend=%s) - restarting stream",
@@ -577,10 +598,11 @@ class AudioMonitor:
                     elif inactivity > self._watchdog_restart_threshold:
                         self._last_activity = now  # Prevent repeated warnings when backend is inactive
                 
-                self.stop_event.wait(10)  # Check every 10 seconds
+                # CRITICAL FIX: Check more frequently (every 5 seconds instead of 10)
+                self.stop_event.wait(5)
             except Exception as e:
                 logger.error(f"Error in watchdog: {e}")
-                self.stop_event.wait(10)
+                self.stop_event.wait(5)
     
     def _healthcheck_loop(self):
         """Periodic health checks for the audio monitor and song detection."""
@@ -589,8 +611,9 @@ class AudioMonitor:
             try:
                 now = time.time()
 
-                # Guard against stale dB readings (e.g., backend stuck returning silence)
-                if self._last_db_ts and (now - self._last_db_ts) > (self._watchdog_restart_threshold * 1.5):
+                # CRITICAL FIX: Guard against stale dB readings (e.g., backend stuck returning silence)
+                # Reduced threshold from 1.5x to 1.2x for faster detection
+                if self._last_db_ts and (now - self._last_db_ts) > (self._watchdog_restart_threshold * 1.2):
                     if self._monitoring_thread and self._monitoring_thread.is_alive():
                         if not self._stream_restart_request.is_set() and (now - self._last_db_restart_ts) > self._db_interval:
                             logger.warning(
@@ -599,6 +622,17 @@ class AudioMonitor:
                             )
                             self._stream_restart_request.set()
                             self._last_db_restart_ts = now
+                
+                # CRITICAL FIX: Check stream health - if no successful reads, force restart
+                if self._stream_last_successful_read > 0:
+                    time_since_read = now - self._stream_last_successful_read
+                    if time_since_read > self._stream_read_timeout:
+                        logger.error(
+                            "Stream health check failed - no successful reads for %.1fs - forcing restart",
+                            time_since_read
+                        )
+                        self._stream_restart_request.set()
+                        self._stream_last_successful_read = 0.0
 
                 # Validate the async song detection loop when detection not already running
                 if self.song_detector is not None and not self._song_detection_stats.get("active", False):
@@ -630,6 +664,9 @@ class AudioMonitor:
                 backend, pa_stream, sd_stream = self._open_audio_stream(self._stream_restart_count)
                 self._monitoring_backend = backend
                 self._stream_restart_count = 0
+                # CRITICAL FIX: Mark stream as active and reset tracking
+                self._stream_active = True
+                self._stream_last_successful_read = time.time()
                 logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
                 self._stream_restart_request.clear()
                 self._run_audio_loop(backend, pa_stream, sd_stream)
@@ -668,7 +705,10 @@ class AudioMonitor:
                     break
 
             finally:
+                # CRITICAL FIX: Mark stream as inactive when closing
                 self._monitoring_backend = None
+                self._stream_active = False
+                self._stream_last_successful_read = 0.0
                 self._close_audio_stream(pa_stream, sd_stream)
 
         logger.info("Audio monitoring stopped")
@@ -756,11 +796,20 @@ class AudioMonitor:
             pass
 
     def _run_audio_loop(self, backend: str, pa_stream, sd_stream):
-        """Consume audio data, compute dB, and trigger song detection."""
+        """Consume audio data, compute dB, and trigger song detection.
+        
+        CRITICAL FIX: Enhanced error detection and recovery.
+        """
         consecutive_errors = 0
+        last_successful_read_time = time.time()
 
         while self.running and not self.stop_event.is_set():
             try:
+                # CRITICAL FIX: Check stream health before attempting read
+                if not self._stream_active:
+                    logger.warning("Stream marked as inactive - restarting")
+                    raise self.StreamRuntimeError("Stream marked as inactive")
+                
                 audio_data = self._read_audio_chunk(backend, pa_stream, sd_stream)
 
                 if audio_data is None or audio_data.size == 0:
@@ -769,9 +818,23 @@ class AudioMonitor:
                         raise self.StreamRuntimeError("Audio stream returned empty buffers repeatedly")
                     self.stop_event.wait(0.05)
                     continue
+                
+                # CRITICAL FIX: Reset error counter and update success timestamp on successful read
+                consecutive_errors = 0
+                last_successful_read_time = time.time()
 
             except self.StreamRuntimeError as stream_error:
                 consecutive_errors += 1
+                # CRITICAL FIX: Check if too much time has passed since last successful read
+                time_since_last_success = time.time() - last_successful_read_time
+                if time_since_last_success > self._stream_read_timeout:
+                    logger.error(
+                        "Audio stream read failure - no successful reads for %.1fs: %s",
+                        time_since_last_success,
+                        stream_error,
+                    )
+                    raise  # Force restart immediately
+                
                 logger.warning(
                     "Audio stream read failure (%d/%d): %s",
                     consecutive_errors,
@@ -786,6 +849,16 @@ class AudioMonitor:
 
             except Exception as e:
                 consecutive_errors += 1
+                # CRITICAL FIX: Check if too much time has passed since last successful read
+                time_since_last_success = time.time() - last_successful_read_time
+                if time_since_last_success > self._stream_read_timeout:
+                    logger.error(
+                        "Audio stream error - no successful reads for %.1fs: %s",
+                        time_since_last_success,
+                        e,
+                    )
+                    raise self.StreamRuntimeError(f"Stream timeout: {e}") from e
+                
                 logger.error(f"Error in monitoring loop: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
@@ -794,9 +867,6 @@ class AudioMonitor:
                 if self.stop_event.wait(0.2):
                     break
                 continue
-
-            # Successful read resets error counter
-            consecutive_errors = 0
 
             # Store audio in rolling buffer for song detection
             chunk_len = min(len(audio_data), self._audio_buffer_size)
@@ -837,7 +907,7 @@ class AudioMonitor:
             elif self.song_detector is None and int(now_song) % 60 == 0:
                 logger.debug("Song detector not available - song detection disabled")
 
-            # Update activity timestamp for watchdog
+            # CRITICAL FIX: Update activity timestamp for watchdog on successful processing
             self._last_activity = time.time()
 
             if self._stream_restart_request.is_set():
@@ -845,27 +915,86 @@ class AudioMonitor:
                 self._stream_restart_request.clear()
                 raise self.StreamRuntimeError("Watchdog requested audio stream restart")
 
-            # If dB readings have stopped updating, trigger a restart
+            # CRITICAL FIX: If dB readings have stopped updating, trigger a restart faster
             if self._last_db_ts and (self._last_activity - self._last_db_ts) > self._watchdog_restart_threshold:
+                logger.error(
+                    "No decibel readings emitted for %.1fs - forcing stream restart",
+                    self._last_activity - self._last_db_ts
+                )
                 raise self.StreamRuntimeError(
                     f"No decibel readings emitted for {(self._last_activity - self._last_db_ts):.1f}s"
                 )
+            
+            # CRITICAL FIX: Double-check stream health periodically
+            if int(self._last_activity) % 30 == 0:  # Every 30 seconds
+                if not self._stream_active:
+                    logger.warning("Stream health check failed - stream marked inactive")
+                    raise self.StreamRuntimeError("Stream health check failed")
 
     def _read_audio_chunk(self, backend: str, pa_stream, sd_stream):
-        """Read a chunk of audio data from the active backend."""
+        """Read a chunk of audio data from the active backend.
+        
+        CRITICAL FIX: Added stream health checks to detect silent failures.
+        """
         try:
+            # CRITICAL FIX: Validate stream is still active before reading
             if backend == "pyaudio" and pa_stream is not None:
+                # Check if PyAudio stream is still active
+                if not pa_stream.is_active():
+                    raise self.StreamRuntimeError("PyAudio stream is no longer active")
+                
                 audio_bytes = pa_stream.read(self.chunk_size, exception_on_overflow=False)
-                return np.frombuffer(audio_bytes, dtype=np.int16)
+                
+                # CRITICAL FIX: Validate we got actual data
+                if audio_bytes is None or len(audio_bytes) == 0:
+                    raise self.StreamRuntimeError("PyAudio stream returned empty data")
+                
+                audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
+                
+                # CRITICAL FIX: Update successful read timestamp
+                self._stream_last_successful_read = time.time()
+                
+                return audio_data
 
             if backend == "sounddevice" and sd_stream is not None:
-                audio_data, _ = sd_stream.read(self.chunk_size)  # type: ignore[union-attr]
+                # Check if sounddevice stream is still active
+                if not sd_stream.active:
+                    raise self.StreamRuntimeError("sounddevice stream is no longer active")
+                
+                # CRITICAL FIX: sounddevice read() returns (data, overflowed) tuple
+                try:
+                    read_result = sd_stream.read(self.chunk_size)  # type: ignore[union-attr]
+                    if isinstance(read_result, tuple):
+                        audio_data, overflowed = read_result
+                    else:
+                        audio_data = read_result
+                        overflowed = False
+                except Exception as e:
+                    raise self.StreamRuntimeError(f"sounddevice read failed: {e}")
+                
+                # CRITICAL FIX: Validate we got actual data
+                if audio_data is None or (hasattr(audio_data, 'size') and audio_data.size == 0):
+                    raise self.StreamRuntimeError("sounddevice stream returned empty data")
+                
                 if isinstance(audio_data, np.ndarray) and audio_data.ndim > 1:
                     audio_data = audio_data[:, 0]
-                return audio_data.astype(np.int16, copy=False)
+                
+                audio_data = audio_data.astype(np.int16, copy=False)
+                
+                # CRITICAL FIX: Update successful read timestamp
+                self._stream_last_successful_read = time.time()
+                
+                # Warn about overflow but don't fail
+                if overflowed:
+                    logger.warning("Audio stream overflow detected - may indicate performance issues")
+                
+                return audio_data
 
             raise self.StreamRuntimeError(f"No valid audio backend active (backend={backend})")
 
+        except self.StreamRuntimeError:
+            # Re-raise our own errors
+            raise
         except Exception as exc:  # noqa: BLE001 - we convert to StreamRuntimeError for handling upstream
             raise self.StreamRuntimeError(str(exc)) from exc
     
