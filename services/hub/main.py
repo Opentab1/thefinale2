@@ -362,6 +362,10 @@ class PulseHub:
                 data["humidity"] = cached.get("humidity")
                 data["pressure"] = cached.get("pressure")
                 
+                # Log temperature readings for debugging
+                if data["temperature_f"] is not None:
+                    logger.debug(f"BME280 cached temp: {data['temperature_f']:.1f}°F, humidity: {data.get('humidity', 0):.1f}%")
+                
                 # Fallback: if cached values are None, try a direct read
                 if data["temperature_f"] is None:
                     logger.warning("BME280 cached temperature is None - attempting direct read")
@@ -385,6 +389,7 @@ class PulseHub:
                         data["temperature_f"] = direct_read.get("temperature_f")
                         data["humidity"] = direct_read.get("humidity")
                         data["pressure"] = direct_read.get("pressure")
+                        logger.info(f"Last resort BME280 read: {data['temperature_f']:.1f}°F")
                     else:
                         data["temperature_f"] = None
                         data["humidity"] = None
@@ -425,44 +430,75 @@ class PulseHub:
         return data
     
     def _store_sensor_data(self, data: dict):
-        """Store sensor data in database"""
-        try:
-            # Occupancy + traffic
-            if data.get("occupancy") is not None:
-                self.db.log_occupancy(
-                    "Main Floor",
-                    int(data["occupancy"]),
-                    entry_count=int(data.get("entries", 0)),
-                    exit_count=int(data.get("exits", 0))
-                )
-            
-            # Environment
-            self.db.log_environment(
-                temperature=data.get("temperature_f"),
-                humidity=data.get("humidity"),
-                light_level=data.get("light_level"),
-                noise_level=data.get("noise_db")
-            )
-            
-            # Music
-            song = data.get("current_song")
-            if song and song.get("title") != "Unknown":
-                volume = 0
-                if self.music_controller:
-                    try:
-                        current = self.music_controller.get_current_track()
-                        volume = current.get("volume_percent", 0)
-                    except:
-                        pass
+        """Store sensor data in database with retry logic"""
+        max_retries = 3
+        retry_delay = 1  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                # Occupancy + traffic
+                if data.get("occupancy") is not None:
+                    self.db.log_occupancy(
+                        "Main Floor",
+                        int(data["occupancy"]),
+                        entry_count=int(data.get("entries", 0)),
+                        exit_count=int(data.get("exits", 0))
+                    )
                 
-                self.db.log_music(
-                    song["title"],
-                    song.get("artist", "Unknown"),
-                    volume
+                # Environment - ensure temperature is logged even if None
+                temp_f = data.get("temperature_f")
+                humidity = data.get("humidity")
+                light = data.get("light_level")
+                noise = data.get("noise_db")
+                
+                # Log what we're about to store
+                logger.debug(f"Storing environment data: temp={temp_f}, humidity={humidity}, light={light}, noise={noise}")
+                
+                self.db.log_environment(
+                    temperature=temp_f,
+                    humidity=humidity,
+                    light_level=light,
+                    noise_level=noise
                 )
-            
-        except Exception as e:
-            logger.error(f"Error storing sensor data: {e}")
+                
+                # Verify it was stored by reading it back
+                if temp_f is not None:
+                    latest_env = self.db.get_latest_environment()
+                    if latest_env:
+                        stored_temp = latest_env.get("temperature")
+                        if stored_temp != temp_f:
+                            logger.warning(f"Temperature mismatch: stored {stored_temp}, expected {temp_f}")
+                        else:
+                            logger.debug(f"Temperature verified in DB: {stored_temp}°F")
+                
+                # Music
+                song = data.get("current_song")
+                if song and song.get("title") not in (None, "Unknown", ""):
+                    volume = 0
+                    if self.music_controller:
+                        try:
+                            current = self.music_controller.get_current_track()
+                            volume = current.get("volume_percent", 0)
+                        except:
+                            pass
+                    
+                    self.db.log_music(
+                        song["title"],
+                        song.get("artist", "Unknown"),
+                        volume
+                    )
+                
+                # If we got here, storage was successful
+                break
+                
+            except Exception as e:
+                logger.error(f"Error storing sensor data (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                else:
+                    logger.error("Failed to store sensor data after all retries")
+                    import traceback
+                    logger.error(traceback.format_exc())
     
     def _run_automation_rules(self, data: dict):
         """Run automation rules based on sensor data"""

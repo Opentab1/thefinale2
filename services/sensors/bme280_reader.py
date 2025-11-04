@@ -140,30 +140,52 @@ class BME280Reader:
         logger.info(f"Started BME280 background reading (interval: {interval}s)")
     
     def _reading_loop(self, interval: int):
-        """Main reading loop"""
+        """Main reading loop with error recovery"""
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
         try:
             while self.running and not self.stop_event.is_set():
                 try:
                     data = self.read_sensor()
                     
-                    if data:
+                    if data and data.get("temperature_f") is not None:
                         logger.debug(
                             f"Temp: {data['temperature_f']:.1f}°F, "
                             f"Humidity: {data['humidity']:.1f}%, "
                             f"Pressure: {data['pressure']:.2f} hPa"
                         )
+                        # Reset error counter on successful read
+                        consecutive_errors = 0
+                    else:
+                        logger.warning("BME280 read returned no data")
+                        consecutive_errors += 1
+                    
+                    # If too many consecutive errors, try to reinitialize sensor
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.error(f"BME280 has failed {consecutive_errors} times, attempting to reinitialize...")
+                        try:
+                            self._init_sensor()
+                            consecutive_errors = 0
+                            logger.info("BME280 reinitialized successfully")
+                        except Exception as reinit_error:
+                            logger.error(f"Failed to reinitialize BME280: {reinit_error}")
+                            # Continue anyway, maybe it will recover
                     
                     # Wait for next reading
                     self.stop_event.wait(interval)
                     
                 except Exception as e:
                     logger.error(f"Error in reading loop: {e}")
+                    consecutive_errors += 1
                     self.stop_event.wait(interval)
             
             logger.info("BME280 reading stopped")
             
         except Exception as e:
             logger.error(f"Fatal error in reading loop: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             self.running = False
     
     def stop_reading(self):
