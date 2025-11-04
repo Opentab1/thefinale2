@@ -28,35 +28,55 @@ class PulseDB:
     @contextmanager
     def get_connection(self):
         """Context manager for database connections with timeout and retry"""
-        max_retries = 3
-        retry_delay = 0.5
+        max_retries = 5  # Increased from 3 to 5 for better resilience
+        retry_delay = 0.3  # Reduced from 0.5 for faster recovery
         conn = None
         
         for attempt in range(max_retries):
             try:
-                # Use timeout to prevent indefinite blocking
-                conn = sqlite3.connect(self.db_path, timeout=10.0)
+                # Use shorter timeout to fail fast and retry
+                conn = sqlite3.connect(self.db_path, timeout=5.0, check_same_thread=False)
                 conn.row_factory = sqlite3.Row
                 # Enable WAL mode for better concurrent access
                 conn.execute('PRAGMA journal_mode=WAL')
                 # Set busy timeout to handle lock contention
-                conn.execute('PRAGMA busy_timeout=5000')
+                conn.execute('PRAGMA busy_timeout=3000')  # Reduced from 5000 for faster detection
+                # Enable synchronous mode for reliability
+                conn.execute('PRAGMA synchronous=NORMAL')
+                # Optimize for concurrent reads
+                conn.execute('PRAGMA cache_size=-4000')  # 4MB cache
                 break
             except sqlite3.OperationalError as e:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                
                 if attempt < max_retries - 1:
                     import logging
                     logger = logging.getLogger(__name__)
-                    logger.warning(f"Database connection attempt {attempt + 1} failed: {e}, retrying...")
+                    logger.warning(f"Database connection attempt {attempt + 1}/{max_retries} failed: {e}, retrying in {retry_delay}s...")
                     time.sleep(retry_delay)
+                    # Exponential backoff for subsequent retries
+                    retry_delay = min(retry_delay * 1.5, 2.0)
                 else:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Database connection failed after {max_retries} attempts: {e}")
                     raise
         
         try:
             yield conn
-            conn.commit()
+            if conn:
+                conn.commit()
         except Exception as e:
             if conn:
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             raise e
         finally:
             if conn:
