@@ -103,6 +103,11 @@ class AudioMonitor:
             "last_error": None,
             "active": False,
         }
+        self._song_detection_last_attempt_started_ts = 0.0
+        self._song_detection_watchdog_threshold = max(60.0, self._song_detect_interval * 4)
+        self._active_detection_thread = None
+        self._device_rescan_threshold = 3
+        self._max_stream_restart_before_backend_reset = 5
 
         # Dedicated async event loop for song recognition to keep Shazam stable
         self._detection_loop = None
@@ -188,7 +193,7 @@ class AudioMonitor:
             "source": "mic_shazam"
         }
 
-    def _validate_device(self):
+    def _validate_device(self, force_rescan: bool = False):
         """Validate and pick the best audio input device automatically.
 
         Preference order:
@@ -197,6 +202,41 @@ class AudioMonitor:
         3) First available input-capable device from either backend
         """
         try:
+            if force_rescan:
+                logger.info("Rescanning audio input devices (force_rescan=True)")
+                self.device_index = None
+                if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None:
+                    try:
+                        self.pyaudio_instance.terminate()
+                    except Exception:
+                        pass
+                    self.pyaudio_instance = None
+
+            if PYAUDIO_AVAILABLE and self.pyaudio_instance is None:
+                try:
+                    self.pyaudio_instance = pyaudio.PyAudio()  # type: ignore[arg-type]
+                    logger.info("PyAudio instance initialized for device validation")
+                except Exception as init_error:
+                    logger.warning(f"PyAudio initialization failed during validation: {init_error}")
+                    self.pyaudio_instance = None
+
+            if self.device_index is not None and self.pyaudio_instance is not None:
+                try:
+                    device_info = self.pyaudio_instance.get_device_info_by_index(self.device_index)
+                    if device_info.get('maxInputChannels', 0) <= 0:
+                        logger.warning(
+                            "Stored audio device index %s no longer has input channels; forcing rescan",
+                            self.device_index,
+                        )
+                        self.device_index = None
+                except Exception as index_error:
+                    logger.warning(
+                        "Stored audio device index %s is not accessible: %s",
+                        self.device_index,
+                        index_error,
+                    )
+                    self.device_index = None
+
             # 1) ALSA default via sounddevice
             if SOUNDDEVICE_AVAILABLE and self.device_index is None:
                 try:
@@ -272,15 +312,118 @@ class AudioMonitor:
                 logger.warning("No input audio device found; audio monitoring will be disabled")
         except Exception as e:
             logger.error(f"Audio device validation failed: {e}")
+
+    def _reset_audio_backends(self, reason: str, drop_device: bool = False):
+        """Reset audio backend state to recover from persistent failures."""
+        logger.warning("Resetting audio backend (%s)", reason)
+        if drop_device:
+            self.device_index = None
+
+        if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None:
+            try:
+                self.pyaudio_instance.terminate()
+            except Exception:
+                logger.debug("PyAudio terminate during backend reset raised", exc_info=True)
+            finally:
+                self.pyaudio_instance = None
+
+        self._validate_device(force_rescan=True)
+        self._stream_restart_request.clear()
+        self._stream_restart_count = 0
+
+    @staticmethod
+    def _should_force_device_rescan(error: Exception) -> bool:
+        message = str(error).lower()
+        rescan_keywords = (
+            "invalid input device",
+            "no such device",
+            "device unavailable",
+            "bad file descriptor",
+            "errno -9996",
+            "errno -9997",
+            "i/o error",
+        )
+        return any(keyword in message for keyword in rescan_keywords)
+
+    def _recover_song_detection_if_stuck(self):
+        """Reset song detection pipeline if an attempt stalls for too long."""
+        if not self._song_detection_stats.get("active"):
+            return
+        if self._song_detection_last_attempt_started_ts <= 0:
+            return
+
+        elapsed = time.time() - self._song_detection_last_attempt_started_ts
+        if elapsed < self._song_detection_watchdog_threshold:
+            return
+
+        logger.warning(
+            "Song detection attempt has been active for %.1fs (threshold %.1fs) - resetting detection pipeline",
+            elapsed,
+            self._song_detection_watchdog_threshold,
+        )
+
+        thread = self._active_detection_thread
+        if thread and thread.is_alive():
+            logger.debug("Waiting briefly for stuck song detection thread to exit")
+            thread.join(timeout=1.0)
+            if thread.is_alive():
+                logger.debug("Song detection thread still alive after watchdog wait")
+        self._active_detection_thread = None
+
+        try:
+            self._shutdown_detection_loop()
+        except Exception as loop_error:
+            logger.debug(
+                "Exception while shutting down detection loop during watchdog reset: %s",
+                loop_error,
+                exc_info=True,
+            )
+
+        if thread is None or not thread.is_alive():
+            try:
+                if self._song_detection_lock.locked():
+                    self._song_detection_lock.release()
+            except RuntimeError:
+                self._song_detection_lock = Lock()
+
+        self._song_detection_stats["active"] = False
+        self._song_detection_stats["last_error"] = "watchdog_reset"
+        self._song_detection_last_attempt_started_ts = 0.0
+        self._last_song_detect_ts = 0.0
+
+        self._ensure_detection_loop()
     
     def _ensure_detection_loop(self) -> bool:
         """Ensure the dedicated async loop for Shazam runs in a background thread."""
         if self._detection_loop is not None:
-            return True
+            loop = self._detection_loop
+            thread = self._detection_loop_thread
+            loop_closed = False
+            try:
+                loop_closed = loop.is_closed()
+            except Exception:
+                loop_closed = False
+
+            if loop_closed or (thread is not None and not thread.is_alive()):
+                logger.debug("Song detection loop appears inactive; resetting loop thread")
+                self._shutdown_detection_loop()
+            else:
+                return True
 
         with self._detection_loop_lock:
             if self._detection_loop is not None:
-                return True
+                loop = self._detection_loop
+                thread = self._detection_loop_thread
+                loop_closed = False
+                try:
+                    loop_closed = loop.is_closed()
+                except Exception:
+                    loop_closed = False
+
+                if not loop_closed and (thread is None or thread.is_alive()):
+                    return True
+                logger.debug("Song detection loop state invalid inside lock; recreating")
+                self._shutdown_detection_loop()
 
             try:
                 loop = asyncio.new_event_loop()
@@ -444,6 +587,7 @@ class AudioMonitor:
                     elif inactivity > self._watchdog_restart_threshold:
                         self._last_activity = now  # Prevent repeated warnings when backend is inactive
                 
+                self._recover_song_detection_if_stuck()
                 self.stop_event.wait(10)  # Check every 10 seconds
             except Exception as e:
                 logger.error(f"Error in watchdog: {e}")
@@ -476,6 +620,10 @@ class AudioMonitor:
                     self._stream_restart_count,
                     init_error,
                 )
+                if self._stream_restart_count >= self._max_stream_restart_before_backend_reset:
+                    self._reset_audio_backends("stream initialization failures", drop_device=True)
+                    self._stream_restart_count = 0
+                    wait_time = 2.0
                 if self.stop_event.wait(wait_time):
                     break
 
@@ -487,6 +635,10 @@ class AudioMonitor:
                     runtime_error,
                     self._stream_restart_count,
                 )
+                if self._stream_restart_count >= self._max_stream_restart_before_backend_reset:
+                    self._reset_audio_backends("stream runtime failures", drop_device=True)
+                    self._stream_restart_count = 0
+                    wait_time = 2.0
                 if self.stop_event.wait(wait_time):
                     break
                 continue
@@ -495,6 +647,10 @@ class AudioMonitor:
                 self._stream_restart_count += 1
                 wait_time = min(5.0, 1.5 * self._stream_restart_count)
                 logger.error("Unexpected audio monitoring error: %s", unexpected, exc_info=True)
+                if self._stream_restart_count >= self._max_stream_restart_before_backend_reset:
+                    self._reset_audio_backends("unexpected stream errors", drop_device=True)
+                    self._stream_restart_count = 0
+                    wait_time = 2.0
                 if self.stop_event.wait(wait_time):
                     break
 
@@ -507,13 +663,13 @@ class AudioMonitor:
     def _open_audio_stream(self, restart_attempt: int):
         """Open the best available audio input stream."""
         errors = []
+        rescan_next = restart_attempt >= self._device_rescan_threshold or self.device_index is None
 
-        if self.device_index is None:
-            # Re-validate devices in case hardware becomes available later
-            self._validate_device()
+        for rescan_attempt in range(2):
+            self._validate_device(force_rescan=rescan_next)
+            rescan_next = False
 
-        if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None:
-            if self.device_index is not None:
+            if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None and self.device_index is not None:
                 try:
                     pa_stream = self.pyaudio_instance.open(
                         format=pyaudio.paInt16,  # type: ignore[attr-defined]
@@ -530,13 +686,13 @@ class AudioMonitor:
                     log_fn(f"Failed to open PyAudio stream: {e}")
                     log_fn(f"  Error details: {type(e).__name__}: {str(e)}")
                     errors.append(f"PyAudio: {type(e).__name__}: {e}")
-            else:
-                message = "No audio input device found; cannot open PyAudio stream"
-                logger.warning(message)
-                errors.append(message)
+                    if self._should_force_device_rescan(e) and rescan_attempt == 0:
+                        logger.info("PyAudio error indicates device rescan is required")
+                        self.device_index = None
+                        rescan_next = True
+                        continue
 
-        if SOUNDDEVICE_AVAILABLE:
-            if self.device_index is not None:
+            if SOUNDDEVICE_AVAILABLE and self.device_index is not None:
                 try:
                     sd_stream = sd.InputStream(  # type: ignore[call-arg]
                         samplerate=self.sample_rate,
@@ -553,10 +709,19 @@ class AudioMonitor:
                     log_fn(f"Failed to open sounddevice stream: {e}")
                     log_fn(f"  Error details: {type(e).__name__}: {str(e)}")
                     errors.append(f"sounddevice: {type(e).__name__}: {e}")
-            else:
-                message = "No audio input device found; cannot open sounddevice stream"
-                logger.warning(message)
-                errors.append(message)
+                    if self._should_force_device_rescan(e) and rescan_attempt == 0:
+                        logger.info("sounddevice error indicates device rescan is required")
+                        self.device_index = None
+                        rescan_next = True
+                        continue
+
+            if not rescan_next:
+                break
+
+        if self.device_index is None:
+            errors.append("No audio input device found; cannot open audio stream")
+        if not errors:
+            errors.append("No usable audio backend available")
 
         if restart_attempt == 0:
             logger.error("=" * 80)
@@ -706,17 +871,21 @@ class AudioMonitor:
         import wave
         import threading
 
+        self._recover_song_detection_if_stuck()
+
         if not self._song_detection_lock.acquire(blocking=False):
             logger.debug("Song detection skipped (previous attempt still running)")
             return False
 
         start_monotonic = time.time()
         started_at_iso = datetime.now().isoformat()
+        self._song_detection_last_attempt_started_ts = start_monotonic
         self._song_detection_stats.update({
             "interval_sec": self._song_detect_interval,
             "last_attempt_started_at": started_at_iso,
             "active": True,
             "last_error": None,
+            "last_attempt_duration_sec": None,
         })
 
         def detect_async():
@@ -813,17 +982,28 @@ class AudioMonitor:
 
                 self._song_detection_stats["last_attempt_duration_sec"] = duration_sec
                 self._song_detection_stats["active"] = False
-                self._song_detection_lock.release()
+                self._active_detection_thread = None
+                self._song_detection_last_attempt_started_ts = 0.0
+                try:
+                    self._song_detection_lock.release()
+                except RuntimeError:
+                    self._song_detection_lock = Lock()
 
             # End detect_async
 
         try:
             thread = threading.Thread(target=detect_async, daemon=True)
+            self._active_detection_thread = thread
             thread.start()
         except Exception as start_error:
             self._song_detection_stats["active"] = False
             self._song_detection_stats["last_error"] = f"thread_start_error:{start_error}"
-            self._song_detection_lock.release()
+            self._song_detection_last_attempt_started_ts = 0.0
+            self._active_detection_thread = None
+            try:
+                self._song_detection_lock.release()
+            except RuntimeError:
+                self._song_detection_lock = Lock()
             logger.error(f"Failed to start song detection thread: {start_error}")
             return False
 
