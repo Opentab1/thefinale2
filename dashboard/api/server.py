@@ -98,7 +98,22 @@ def get_current_sensors():
     try:
         if hub_instance:
             data = hub_instance._collect_sensor_data()
-            logger.debug(f"Sensor data from hub: temp={data.get('temperature_f')}, humidity={data.get('humidity')}")
+            temp_value = data.get('temperature_f')
+            logger.debug(f"Sensor data from hub: temp={temp_value}, humidity={data.get('humidity')}")
+            
+            # Enhanced logging for temperature debugging
+            if temp_value is None:
+                logger.warning("⚠️ Temperature is None from hub - attempting DB fallback")
+                # Try DB fallback even when hub exists
+                try:
+                    env = db.get_latest_environment()
+                    if env and env.get("temperature") is not None:
+                        data["temperature_f"] = env.get("temperature")
+                        logger.info(f"✅ Temperature from DB fallback: {data['temperature_f']}°F")
+                except Exception as e:
+                    logger.error(f"DB fallback for temperature failed: {e}")
+            else:
+                logger.debug(f"✅ Temperature from hub: {temp_value}°F")
         else:
             # Fallback: derive current snapshot from database
             data = {
@@ -117,16 +132,19 @@ def get_current_sensors():
             try:
                 env = db.get_latest_environment()
                 if env:
-                    # Only update if database has more recent data than None
-                    if data.get("temperature_f") is None and env.get("temperature") is not None:
+                    # Always use DB values when hub is not available
+                    if env.get("temperature") is not None:
                         data["temperature_f"] = env.get("temperature")
-                    if data.get("humidity") is None and env.get("humidity") is not None:
+                        logger.info(f"✅ Temperature from DB: {data['temperature_f']}°F")
+                    if env.get("humidity") is not None:
                         data["humidity"] = env.get("humidity")
-                    if data.get("light_level") is None and env.get("light_level") is not None:
+                    if env.get("light_level") is not None:
                         data["light_level"] = env.get("light_level")
-                    if data.get("noise_db") is None and env.get("noise_level") is not None:
+                    if env.get("noise_level") is not None:
                         data["noise_db"] = env.get("noise_level")
                     logger.debug(f"Sensor data from DB: temp={data.get('temperature_f')}, humidity={data.get('humidity')}")
+                else:
+                    logger.warning("⚠️ No environment data found in database")
             except Exception as e:
                 logger.error(f"Error reading environment from DB: {e}")
 
@@ -143,6 +161,13 @@ def get_current_sensors():
             except Exception as e:
                 logger.debug(f"Error reading music log: {e}")
                 data["current_song"] = {"title": None, "artist": None}
+        
+        # Final check: log what we're sending
+        final_temp = data.get('temperature_f')
+        if final_temp is not None:
+            logger.debug(f"📤 Sending temperature to client: {final_temp}°F")
+        else:
+            logger.warning("⚠️ WARNING: Sending temperature_f=None to client - dashboard will show '-'")
         
         return jsonify(data)
     except Exception as e:
@@ -540,7 +565,19 @@ def broadcast_sensor_data():
         try:
             if hub_instance:
                 data = hub_instance._collect_sensor_data()
-                logger.debug(f"Broadcasting data from hub: temp={data.get('temperature_f')}, humidity={data.get('humidity')}")
+                temp_value = data.get('temperature_f')
+                logger.debug(f"Broadcasting data from hub: temp={temp_value}, humidity={data.get('humidity')}")
+                
+                # Enhanced temperature fallback for broadcasts
+                if temp_value is None:
+                    logger.debug("Temperature is None from hub in broadcast - trying DB fallback")
+                    try:
+                        env = db.get_latest_environment()
+                        if env and env.get("temperature") is not None:
+                            data["temperature_f"] = env.get("temperature")
+                            logger.debug(f"Broadcast: Using DB fallback temp: {data['temperature_f']}°F")
+                    except Exception:
+                        pass
             else:
                 # Fallback to current snapshot from DB so UI still updates
                 data = {
@@ -555,14 +592,14 @@ def broadcast_sensor_data():
                 try:
                     env = db.get_latest_environment()
                     if env:
-                        # Only update if we don't already have data
-                        if data.get("temperature_f") is None and env.get("temperature") is not None:
+                        # Always use DB values when hub is not available
+                        if env.get("temperature") is not None:
                             data["temperature_f"] = env.get("temperature")
-                        if data.get("humidity") is None and env.get("humidity") is not None:
+                        if env.get("humidity") is not None:
                             data["humidity"] = env.get("humidity")
-                        if data.get("light_level") is None and env.get("light_level") is not None:
+                        if env.get("light_level") is not None:
                             data["light_level"] = env.get("light_level")
-                        if data.get("noise_db") is None and env.get("noise_level") is not None:
+                        if env.get("noise_level") is not None:
                             data["noise_db"] = env.get("noise_level")
                         logger.debug(f"Broadcasting data from DB: temp={data.get('temperature_f')}, humidity={data.get('humidity')}")
                 except Exception as e:
@@ -584,10 +621,11 @@ def broadcast_sensor_data():
 
             socketio.emit('sensor_update', data)
             
-            # Log every 12 broadcasts (1 minute at 5 second intervals)
+            # Log every 12 broadcasts (1 minute at 5 second intervals) with temperature status
             broadcast_count += 1
             if broadcast_count % 12 == 0:
-                logger.info(f"Dashboard broadcast #{broadcast_count}: temp={data.get('temperature_f')}, occupancy={data.get('occupancy')}")
+                temp_status = f"{data.get('temperature_f')}°F" if data.get('temperature_f') is not None else "None"
+                logger.info(f"Dashboard broadcast #{broadcast_count}: temp={temp_status}, occupancy={data.get('occupancy')}, song={data.get('current_song', {}).get('title', 'None')}")
             
             time.sleep(5)  # Update every 5 seconds
         except Exception as e:

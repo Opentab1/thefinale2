@@ -362,9 +362,14 @@ class PulseHub:
                 data["humidity"] = cached.get("humidity")
                 data["pressure"] = cached.get("pressure")
                 
-                # Log temperature readings for debugging
+                # Log temperature readings for debugging (less verbose, only when None or on first read)
                 if data["temperature_f"] is not None:
-                    logger.debug(f"BME280 cached temp: {data['temperature_f']:.1f}°F, humidity: {data.get('humidity', 0):.1f}%")
+                    # Only log occasionally to avoid spam (every 12th call = ~1 minute)
+                    import random
+                    if random.random() < 0.08:  # ~8% chance = ~every 12th call
+                        logger.debug(f"BME280 cached temp: {data['temperature_f']:.1f}°F, humidity: {data.get('humidity', 0):.1f}%")
+                else:
+                    logger.warning("⚠️ BME280 cached temperature is None - cache may not be initialized")
                 
                 # Fallback: if cached values are None, try a direct read
                 if data["temperature_f"] is None:
@@ -375,13 +380,18 @@ class PulseHub:
                             data["temperature_f"] = direct_read.get("temperature_f")
                             data["humidity"] = direct_read.get("humidity")
                             data["pressure"] = direct_read.get("pressure")
-                            logger.info(f"Direct BME280 read successful: {data['temperature_f']:.1f}°F")
+                            logger.info(f"✅ Direct BME280 read successful: {data['temperature_f']:.1f}°F")
                         else:
-                            logger.error("BME280 direct read returned no data - sensor may have failed")
+                            logger.error("❌ BME280 direct read returned no data - sensor may have failed")
+                            logger.error("   Check: sensor wiring, I2C connection, and sensor initialization")
                     except Exception as e2:
-                        logger.error(f"BME280 direct read failed: {e2}")
+                        logger.error(f"❌ BME280 direct read failed: {e2}")
+                        import traceback
+                        logger.debug(traceback.format_exc())
             except Exception as e:
-                logger.error(f"Error getting BME280 readings: {e}")
+                logger.error(f"❌ Error getting BME280 readings: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
                 # Try direct read as last resort
                 try:
                     direct_read = self.bme280.read_sensor()
@@ -389,15 +399,22 @@ class PulseHub:
                         data["temperature_f"] = direct_read.get("temperature_f")
                         data["humidity"] = direct_read.get("humidity")
                         data["pressure"] = direct_read.get("pressure")
-                        logger.info(f"Last resort BME280 read: {data['temperature_f']:.1f}°F")
+                        logger.info(f"✅ Last resort BME280 read: {data['temperature_f']:.1f}°F")
                     else:
+                        logger.error("❌ Last resort BME280 read returned no data")
                         data["temperature_f"] = None
                         data["humidity"] = None
                         data["pressure"] = None
-                except Exception:
+                except Exception as e2:
+                    logger.error(f"❌ Last resort BME280 read exception: {e2}")
                     data["temperature_f"] = None
                     data["humidity"] = None
                     data["pressure"] = None
+        else:
+            logger.debug("BME280 sensor not available (self.bme280 is None)")
+            data["temperature_f"] = None
+            data["humidity"] = None
+            data["pressure"] = None
         
         if self.light_sensor:
             data["light_level"] = self.light_sensor.get_light_level()
