@@ -101,6 +101,13 @@ class AudioMonitor:
         self._audio_buffer_size = int(5 * self.sample_rate)  # 5 seconds
         self._audio_buffer = np.zeros(self._audio_buffer_size, dtype=np.int16)
         self._buffer_index = 0
+        
+        # Reusable Shazam instance to prevent resource leaks
+        # Creating a new Shazam() for each detection causes unclosed ClientSession leaks
+        self._shazam_instance = None
+        self._shazam_lock = Lock()
+        self._shazam_created_at = 0.0  # Track when instance was created
+        self._shazam_refresh_interval = 3600.0  # Refresh every hour to prevent stale sessions
 
         # Initialize song detector if available
         if SongDetector is not None:
@@ -631,7 +638,31 @@ class AudioMonitor:
             import asyncio
             from shazamio import Shazam
             
-            shazam = Shazam()
+            # Use a single reusable Shazam instance to prevent resource leaks
+            # Creating new instances for each call causes unclosed ClientSession leaks
+            # Refresh the instance periodically to prevent stale sessions
+            with self._shazam_lock:
+                current_time = time.time()
+                needs_refresh = (
+                    self._shazam_instance is None or
+                    (current_time - self._shazam_created_at) > self._shazam_refresh_interval
+                )
+                
+                if needs_refresh:
+                    # Close old instance if it exists
+                    if self._shazam_instance is not None:
+                        try:
+                            if hasattr(self._shazam_instance, 'client') and hasattr(self._shazam_instance.client, 'close'):
+                                await self._shazam_instance.client.close()
+                        except Exception as e:
+                            logger.debug(f"Error closing old Shazam instance: {e}")
+                    
+                    # Create new instance
+                    self._shazam_instance = Shazam()
+                    self._shazam_created_at = current_time
+                    logger.info("Created new Shazam instance for song detection")
+                
+                shazam = self._shazam_instance
             
             # Add 15 second timeout to prevent hanging
             result = await asyncio.wait_for(
@@ -697,6 +728,26 @@ class AudioMonitor:
     def cleanup(self):
         """Cleanup resources"""
         self.stop_monitoring()
+        
+        # Cleanup Shazam instance and its ClientSession
+        try:
+            with self._shazam_lock:
+                if self._shazam_instance is not None:
+                    # ShazamIO's Shazam class uses aiohttp ClientSession internally
+                    # We need to properly close it to prevent resource leaks
+                    if hasattr(self._shazam_instance, 'client') and hasattr(self._shazam_instance.client, 'close'):
+                        import asyncio
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            loop.run_until_complete(self._shazam_instance.client.close())
+                        finally:
+                            loop.close()
+                    self._shazam_instance = None
+                    logger.info("Shazam instance cleaned up")
+        except Exception as e:
+            logger.warning(f"Error cleaning up Shazam instance: {e}")
+        
         try:
             if self.pyaudio_instance:
                 self.pyaudio_instance.terminate()
