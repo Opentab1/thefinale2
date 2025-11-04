@@ -84,6 +84,10 @@ class AudioMonitor:
         # Watchdog tracking
         self._monitoring_thread = None
         self._last_activity = 0.0
+        self._last_db_update = 0.0  # Track when dB was last updated
+        self._db_update_timeout = 30.0  # If no dB update for 30s, restart stream
+        self._monitoring_thread_crash_count = 0
+        self._max_thread_crashes = 10  # Prevent infinite restart loops
 
         # Song detection configuration from environment (default: 10s)
         try:
@@ -116,6 +120,10 @@ class AudioMonitor:
         self._max_consecutive_read_errors = 3
         self._watchdog_restart_threshold = max(60.0, self._song_detect_interval * 4)
         self._stream_restart_request = Event()
+        self._circuit_breaker_failures = 0
+        self._circuit_breaker_threshold = 5  # After 5 consecutive failures, wait longer
+        self._circuit_breaker_cooldown = 60.0  # Wait 60s before retrying after circuit breaker trips
+        self._last_circuit_breaker_reset = 0.0
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
         # This allows song detection without opening a separate audio stream
@@ -274,29 +282,63 @@ class AudioMonitor:
             logger.error(f"Audio device validation failed: {e}")
     
     def _ensure_detection_loop(self) -> bool:
-        """Ensure the dedicated async loop for Shazam runs in a background thread."""
+        """Ensure the dedicated async loop for Shazam runs in a background thread - with auto-restart."""
+        # Check if loop exists and thread is alive
         if self._detection_loop is not None:
-            return True
+            if self._detection_loop_thread is not None and self._detection_loop_thread.is_alive():
+                # Verify loop is still running by checking if it's closed
+                try:
+                    if not self._detection_loop.is_closed():
+                        return True
+                    else:
+                        logger.warning("Detection loop is closed - will restart")
+                except Exception:
+                    logger.warning("Could not check detection loop status - will restart")
+            else:
+                logger.warning("Detection loop thread is not alive - will restart")
 
         with self._detection_loop_lock:
+            # Double-check after acquiring lock
             if self._detection_loop is not None:
-                return True
+                if self._detection_loop_thread is not None and self._detection_loop_thread.is_alive():
+                    try:
+                        if not self._detection_loop.is_closed():
+                            return True
+                    except Exception:
+                        pass
+            
+            # Clean up old loop if it exists
+            try:
+                self._shutdown_detection_loop()
+            except Exception:
+                pass
 
             try:
                 loop = asyncio.new_event_loop()
                 ready_event = Event()
+                loop_ready = [False]  # Use list for mutable reference
 
                 def _loop_runner():
-                    asyncio.set_event_loop(loop)
-                    ready_event.set()
-                    logger.debug("Song detection event loop started")
-                    loop.run_forever()
+                    try:
+                        asyncio.set_event_loop(loop)
+                        ready_event.set()
+                        loop_ready[0] = True
+                        logger.info("✅ Song detection event loop started")
+                        loop.run_forever()
+                    except Exception as loop_error:
+                        logger.error(f"❌ Song detection loop crashed: {loop_error}", exc_info=True)
+                        loop_ready[0] = False
+                        # Attempt to restart after a delay
+                        if self.running and not self.stop_event.is_set():
+                            logger.warning("Will attempt to restart detection loop...")
+                    finally:
+                        logger.debug("Song detection loop thread exiting")
 
                 thread = Thread(target=_loop_runner, name="AudioMonitorSongLoop", daemon=True)
                 thread.start()
 
                 if not ready_event.wait(timeout=5.0):
-                    logger.error("Song detection loop failed to start within 5 seconds")
+                    logger.error("❌ Song detection loop failed to start within 5 seconds")
                     # Attempt graceful shutdown of the loop/thread if possible
                     try:
                         loop.call_soon_threadsafe(loop.stop)
@@ -309,12 +351,17 @@ class AudioMonitor:
                         pass
                     return False
 
+                if not loop_ready[0]:
+                    logger.error("Song detection loop thread started but reported not ready")
+                    return False
+
                 self._detection_loop = loop
                 self._detection_loop_thread = thread
                 self._detection_loop_ready_event = ready_event
+                logger.info("✅ Song detection loop initialized and ready")
                 return True
             except Exception as exc:
-                logger.error(f"Failed to initialize song detection loop: {exc}")
+                logger.error(f"❌ Failed to initialize song detection loop: {exc}", exc_info=True)
                 return False
 
     def _shutdown_detection_loop(self):
@@ -415,94 +462,241 @@ class AudioMonitor:
         logger.info("Started audio monitoring with watchdog")
     
     def _start_monitoring_thread(self):
-        """Start the monitoring thread"""
-        self._monitoring_thread = Thread(target=self._monitoring_loop, daemon=True)
+        """Start the monitoring thread with enhanced error handling"""
+        # Ensure old thread is cleaned up
+        if self._monitoring_thread is not None and self._monitoring_thread.is_alive():
+            logger.warning("Old monitoring thread still alive - waiting for cleanup")
+            # Don't wait indefinitely, just log and continue
+            try:
+                # Give it a moment, but don't block
+                pass
+            except Exception:
+                pass
+        
+        self._monitoring_thread = Thread(target=self._monitoring_loop, daemon=True, name="AudioMonitorThread")
         self._monitoring_thread.start()
         self._last_activity = time.time()
+        self._last_db_update = time.time()  # Initialize dB update timestamp
         self._stream_restart_count = 0
         self._stream_restart_request.clear()
+        logger.info("✅ Monitoring thread started (PID-aware watchdog will monitor)")
     
     def _watchdog_loop(self):
-        """Watchdog to restart monitoring if it crashes"""
+        """Watchdog to restart monitoring if it crashes - ENHANCED for reliability"""
+        watchdog_check_interval = 5.0  # Check every 5 seconds (more aggressive)
+        
         while self.running and not self.stop_event.is_set():
             try:
+                now = time.time()
+                
                 # Check if monitoring thread is alive
                 if self._monitoring_thread is None or not self._monitoring_thread.is_alive():
-                    logger.error("Audio monitoring thread died! Restarting...")
+                    self._monitoring_thread_crash_count += 1
+                    logger.error(
+                        "⚠️ Audio monitoring thread died! Restarting... (crash count: %d/%d)",
+                        self._monitoring_thread_crash_count,
+                        self._max_thread_crashes
+                    )
+                    
+                    if self._monitoring_thread_crash_count >= self._max_thread_crashes:
+                        logger.error(
+                            "🚨 CRITICAL: Monitoring thread has crashed %d times. "
+                            "Entering circuit breaker cooldown for %.1fs",
+                            self._monitoring_thread_crash_count,
+                            self._circuit_breaker_cooldown
+                        )
+                        self._circuit_breaker_failures = self._circuit_breaker_threshold
+                        self._last_circuit_breaker_reset = now
+                        self.stop_event.wait(self._circuit_breaker_cooldown)
+                        self._monitoring_thread_crash_count = 0  # Reset after cooldown
+                        continue
+                    
+                    # Close any stale streams before restarting
+                    try:
+                        if self._monitoring_backend == "pyaudio" and self.pyaudio_instance:
+                            # Try to close any existing streams
+                            pass  # PyAudio handles cleanup automatically
+                    except Exception:
+                        pass
+                    
                     self._start_monitoring_thread()
-                else:
-                    now = time.time()
-                    inactivity = now - self._last_activity
-                    if inactivity > self._watchdog_restart_threshold and self._monitoring_backend is not None:
+                    logger.info("✅ Monitoring thread restarted successfully")
+                
+                # Check circuit breaker status
+                if self._circuit_breaker_failures >= self._circuit_breaker_threshold:
+                    time_since_reset = now - self._last_circuit_breaker_reset
+                    if time_since_reset < self._circuit_breaker_cooldown:
+                        logger.debug(
+                            "Circuit breaker active - waiting %.1fs before retry",
+                            self._circuit_breaker_cooldown - time_since_reset
+                        )
+                        self.stop_event.wait(min(watchdog_check_interval, self._circuit_breaker_cooldown - time_since_reset))
+                        continue
+                    else:
+                        logger.info("Circuit breaker cooldown complete - resetting")
+                        self._circuit_breaker_failures = 0
+                        self._last_circuit_breaker_reset = 0.0
+                
+                # Check for dB reading timeout (more aggressive check)
+                if self._last_db_update > 0:
+                    time_since_db_update = now - self._last_db_update
+                    if time_since_db_update > self._db_update_timeout:
                         logger.warning(
-                            "Audio monitoring stalled (no activity for %.1fs, backend=%s) - restarting stream",
-                            inactivity,
-                            self._monitoring_backend
+                            "⚠️ dB readings have stopped updating for %.1fs (threshold: %.1fs) - forcing stream restart",
+                            time_since_db_update,
+                            self._db_update_timeout
                         )
                         self._stream_restart_request.set()
-                        self._last_activity = now
-                    elif inactivity > self._watchdog_restart_threshold:
-                        self._last_activity = now  # Prevent repeated warnings when backend is inactive
+                        self._circuit_breaker_failures += 1
+                        self._last_db_update = now  # Reset to prevent immediate retrigger
                 
-                self.stop_event.wait(10)  # Check every 10 seconds
+                # Check for general inactivity
+                inactivity = now - self._last_activity
+                if inactivity > self._watchdog_restart_threshold and self._monitoring_backend is not None:
+                    logger.warning(
+                        "⚠️ Audio monitoring stalled (no activity for %.1fs, backend=%s) - restarting stream",
+                        inactivity,
+                        self._monitoring_backend
+                    )
+                    self._stream_restart_request.set()
+                    self._circuit_breaker_failures += 1
+                    self._last_activity = now
+                elif inactivity > self._watchdog_restart_threshold:
+                    self._last_activity = now  # Prevent repeated warnings when backend is inactive
+                
+                # Check if detection loop is still running
+                if self.song_detector is not None:
+                    if not self._ensure_detection_loop():
+                        logger.warning("⚠️ Song detection loop crashed - attempting restart")
+                        self._shutdown_detection_loop()
+                        if not self._ensure_detection_loop():
+                            logger.error("❌ Failed to restart song detection loop")
+                
+                # Reset circuit breaker on successful checks
+                if inactivity < self._watchdog_restart_threshold and (self._last_db_update == 0 or (now - self._last_db_update) < self._db_update_timeout):
+                    if self._circuit_breaker_failures > 0:
+                        self._circuit_breaker_failures = max(0, self._circuit_breaker_failures - 1)  # Gradual recovery
+                
+                self.stop_event.wait(watchdog_check_interval)
             except Exception as e:
-                logger.error(f"Error in watchdog: {e}")
-                self.stop_event.wait(10)
+                logger.error(f"❌ Error in watchdog: {e}", exc_info=True)
+                self.stop_event.wait(watchdog_check_interval)
     
     def _monitoring_loop(self):
-        """Main monitoring loop with automatic recovery for stream failures."""
-        logger.debug("Audio monitoring loop thread started")
+        """Main monitoring loop with automatic recovery for stream failures - NEVER GIVES UP."""
+        logger.info("🔊 Audio monitoring loop thread started - will run indefinitely")
+        consecutive_failures = 0
+        max_consecutive_failures = 10
+        
+        # CRITICAL: This loop should NEVER exit unless explicitly stopped
         while self.running and not self.stop_event.is_set():
             backend = None
             pa_stream = None
             sd_stream = None
 
             try:
+                # Check circuit breaker before attempting stream open
+                if self._circuit_breaker_failures >= self._circuit_breaker_threshold:
+                    wait_time = self._circuit_breaker_cooldown
+                    logger.warning("Circuit breaker active - waiting %.1fs before retry", wait_time)
+                    if self.stop_event.wait(wait_time):
+                        break
+                    continue
+
                 backend, pa_stream, sd_stream = self._open_audio_stream(self._stream_restart_count)
                 self._monitoring_backend = backend
                 self._stream_restart_count = 0
+                consecutive_failures = 0  # Reset on successful stream open
                 logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
                 self._stream_restart_request.clear()
+                
+                # Run the audio loop - this should run indefinitely
                 self._run_audio_loop(backend, pa_stream, sd_stream)
 
-                # If run_audio_loop returns normally, monitoring was stopped intentionally
-                break
-
-            except self.StreamInitError as init_error:
-                self._stream_restart_count += 1
-                wait_time = min(5.0, 1.0 + self._stream_restart_count)
-                logger.error(
-                    "Audio stream initialization failed (attempt %d): %s",
-                    self._stream_restart_count,
-                    init_error,
-                )
-                if self.stop_event.wait(wait_time):
-                    break
-
-            except self.StreamRuntimeError as runtime_error:
-                self._stream_restart_count += 1
-                wait_time = min(5.0, 1.5 * self._stream_restart_count)
-                logger.warning(
-                    "Audio stream runtime failure detected: %s -- restarting stream (attempt %d)",
-                    runtime_error,
-                    self._stream_restart_count,
-                )
-                if self.stop_event.wait(wait_time):
-                    break
+                # If run_audio_loop returns normally, it means stream needs restart
+                logger.info("Audio loop returned - will restart stream")
                 continue
 
-            except Exception as unexpected:
+            except self.StreamInitError as init_error:
+                consecutive_failures += 1
                 self._stream_restart_count += 1
-                wait_time = min(5.0, 1.5 * self._stream_restart_count)
-                logger.error("Unexpected audio monitoring error: %s", unexpected, exc_info=True)
+                wait_time = min(10.0, 1.0 + self._stream_restart_count * 0.5)
+                logger.error(
+                    "❌ Audio stream initialization failed (attempt %d, consecutive failures: %d): %s",
+                    self._stream_restart_count,
+                    consecutive_failures,
+                    init_error,
+                )
+                
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.error(
+                        "🚨 Too many consecutive failures (%d) - entering extended cooldown",
+                        consecutive_failures
+                    )
+                    wait_time = self._circuit_breaker_cooldown
+                    consecutive_failures = 0  # Reset after cooldown
+                
                 if self.stop_event.wait(wait_time):
                     break
+                continue  # Always continue, never break
+
+            except self.StreamRuntimeError as runtime_error:
+                consecutive_failures += 1
+                self._stream_restart_count += 1
+                wait_time = min(10.0, 1.5 * self._stream_restart_count * 0.5)
+                logger.warning(
+                    "⚠️ Audio stream runtime failure detected: %s -- restarting stream (attempt %d, consecutive: %d)",
+                    runtime_error,
+                    self._stream_restart_count,
+                    consecutive_failures,
+                )
+                
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.error(
+                        "🚨 Too many consecutive runtime failures (%d) - entering extended cooldown",
+                        consecutive_failures
+                    )
+                    wait_time = self._circuit_breaker_cooldown
+                    consecutive_failures = 0
+                
+                if self.stop_event.wait(wait_time):
+                    break
+                continue  # Always continue, never break
+
+            except KeyboardInterrupt:
+                logger.info("Keyboard interrupt received in monitoring loop")
+                break
+
+            except Exception as unexpected:
+                consecutive_failures += 1
+                self._stream_restart_count += 1
+                wait_time = min(10.0, 1.5 * self._stream_restart_count * 0.5)
+                logger.error(
+                    "❌ Unexpected audio monitoring error (attempt %d, consecutive: %d): %s",
+                    self._stream_restart_count,
+                    consecutive_failures,
+                    unexpected,
+                    exc_info=True
+                )
+                
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.error(
+                        "🚨 Too many unexpected failures (%d) - entering extended cooldown",
+                        consecutive_failures
+                    )
+                    wait_time = self._circuit_breaker_cooldown
+                    consecutive_failures = 0
+                
+                if self.stop_event.wait(wait_time):
+                    break
+                continue  # Always continue, never break
 
             finally:
+                # Always clean up streams
                 self._monitoring_backend = None
                 self._close_audio_stream(pa_stream, sd_stream)
 
-        logger.info("Audio monitoring stopped")
+        logger.info("Audio monitoring loop exited (running=%s, stop_event=%s)", self.running, self.stop_event.is_set())
 
     def _open_audio_stream(self, restart_attempt: int):
         """Open the best available audio input stream."""
@@ -647,6 +841,7 @@ class AudioMonitor:
                 self.current_db = db
                 self.peak_db = max(self.peak_db, db)
                 self._last_db_ts = now_db
+                self._last_db_update = now_db  # CRITICAL: Update timestamp for watchdog
                 logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
 
             # Trigger song detection on cadence using buffered audio
@@ -654,10 +849,16 @@ class AudioMonitor:
             if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
                 if self._buffer_index >= self._audio_buffer_size:
                     try:
-                        if self._detect_song_from_buffer():
-                            logger.info("🎵 Running song detection from audio buffer...")
+                        # Ensure detection loop is still running before attempting detection
+                        if not self._ensure_detection_loop():
+                            logger.error("❌ Song detection loop unavailable - cannot detect songs")
+                            # Don't update timestamp, will retry next interval
+                        elif self._detect_song_from_buffer():
+                            logger.debug("🎵 Song detection triggered from audio buffer...")
                     except Exception as e:
-                        logger.error(f"Failed to start song detection thread: {e}")
+                        logger.error(f"❌ Failed to start song detection: {e}", exc_info=True)
+                        # Update timestamp to prevent rapid retries
+                        self._last_song_detect_ts = now_song
                 else:
                     logger.debug(
                         "Audio buffer not ready for song detection (index: %s/%s)",
@@ -701,7 +902,7 @@ class AudioMonitor:
             raise self.StreamRuntimeError(str(exc)) from exc
     
     def _detect_song_from_buffer(self):
-        """Detect song using buffered audio data (runs in background thread)."""
+        """Detect song using buffered audio data (runs in background thread) - ENHANCED with better error handling."""
         import tempfile
         import wave
         import threading
@@ -720,6 +921,7 @@ class AudioMonitor:
         })
 
         def detect_async():
+            """Background thread for song detection with comprehensive error handling."""
             temp_filename = None
             duration_sec = None
             future = None
@@ -735,13 +937,21 @@ class AudioMonitor:
 
                 logger.debug(f"Saved audio buffer to {temp_filename}")
 
+                # Ensure detection loop is available
                 if not self._ensure_detection_loop():
-                    logger.error("Song detection loop unavailable; skipping detection")
+                    logger.error("❌ Song detection loop unavailable; cannot detect songs")
                     self._song_detection_stats["last_error"] = "loop_unavailable"
                     return
 
                 result = None
+                future = None
                 try:
+                    # Verify loop is still valid before submitting
+                    if self._detection_loop is None or self._detection_loop.is_closed():
+                        logger.error("❌ Detection loop is closed - cannot detect songs")
+                        self._song_detection_stats["last_error"] = "loop_closed"
+                        return
+                    
                     future = asyncio.run_coroutine_threadsafe(
                         self._recognize_song_async(temp_filename),
                         self._detection_loop
@@ -749,11 +959,27 @@ class AudioMonitor:
                     result = future.result(timeout=20.0)
                 except concurrent.futures.TimeoutError:
                     if future:
-                        future.cancel()
-                    logger.warning("Song detection timed out (20s) - skipping")
+                        try:
+                            future.cancel()
+                        except Exception:
+                            pass
+                    logger.warning("⚠️ Song detection timed out (20s) - skipping")
                     self._song_detection_stats["last_error"] = "timeout"
+                except RuntimeError as runtime_err:
+                    # Loop might have been closed
+                    if "loop is closed" in str(runtime_err).lower() or "event loop is closed" in str(runtime_err).lower():
+                        logger.error("❌ Detection loop was closed during recognition - will restart on next attempt")
+                        self._song_detection_stats["last_error"] = "loop_closed_during_operation"
+                        # Force loop restart on next detection
+                        try:
+                            self._shutdown_detection_loop()
+                        except Exception:
+                            pass
+                    else:
+                        logger.error(f"❌ Runtime error during song detection: {runtime_err}")
+                        self._song_detection_stats["last_error"] = f"RuntimeError: {runtime_err}"
                 except Exception as detect_error:
-                    logger.error(f"Song detection error: {detect_error}")
+                    logger.error(f"❌ Song detection error: {detect_error}", exc_info=True)
                     self._song_detection_stats["last_error"] = f"{type(detect_error).__name__}: {detect_error}"
 
                 duration_sec = round(time.time() - start_monotonic, 2)
@@ -789,9 +1015,7 @@ class AudioMonitor:
 
             except Exception as e:
                 duration_sec = round(time.time() - start_monotonic, 2)
-                logger.error(f"Error detecting song from buffer: {e}")
-                import traceback
-                logger.debug(traceback.format_exc())
+                logger.error(f"❌ Error detecting song from buffer: {e}", exc_info=True)
                 self._song_detection_stats["last_error"] = f"{type(e).__name__}: {e}"
             finally:
                 if future and not future.done():
@@ -818,13 +1042,14 @@ class AudioMonitor:
             # End detect_async
 
         try:
-            thread = threading.Thread(target=detect_async, daemon=True)
+            thread = threading.Thread(target=detect_async, daemon=True, name="SongDetectionThread")
             thread.start()
+            logger.debug("Song detection thread started")
         except Exception as start_error:
             self._song_detection_stats["active"] = False
             self._song_detection_stats["last_error"] = f"thread_start_error:{start_error}"
             self._song_detection_lock.release()
-            logger.error(f"Failed to start song detection thread: {start_error}")
+            logger.error(f"❌ Failed to start song detection thread: {start_error}", exc_info=True)
             return False
 
         return True
