@@ -362,26 +362,28 @@ class PulseHub:
                 data["humidity"] = cached.get("humidity")
                 data["pressure"] = cached.get("pressure")
                 
-                # Log temperature readings for debugging
+                # Log temperature readings for debugging (always log, not just debug)
                 if data["temperature_f"] is not None:
-                    logger.debug(f"BME280 cached temp: {data['temperature_f']:.1f}°F, humidity: {data.get('humidity', 0):.1f}%")
+                    logger.info(f"🌡️  BME280: {data['temperature_f']:.1f}°F, 💧 {data.get('humidity', 0):.1f}% humidity")
+                else:
+                    logger.warning("⚠️ BME280 cached temperature is None!")
                 
                 # Fallback: if cached values are None, try a direct read
                 if data["temperature_f"] is None:
-                    logger.warning("BME280 cached temperature is None - attempting direct read")
+                    logger.warning("⚠️ BME280 cached temperature is None - attempting direct read")
                     try:
                         direct_read = self.bme280.read_sensor()
                         if direct_read and direct_read.get("temperature_f") is not None:
                             data["temperature_f"] = direct_read.get("temperature_f")
                             data["humidity"] = direct_read.get("humidity")
                             data["pressure"] = direct_read.get("pressure")
-                            logger.info(f"Direct BME280 read successful: {data['temperature_f']:.1f}°F")
+                            logger.info(f"✓ Direct BME280 read successful: {data['temperature_f']:.1f}°F")
                         else:
-                            logger.error("BME280 direct read returned no data - sensor may have failed")
+                            logger.error("✗ BME280 direct read returned no data - sensor may have failed")
                     except Exception as e2:
-                        logger.error(f"BME280 direct read failed: {e2}")
+                        logger.error(f"✗ BME280 direct read failed: {e2}")
             except Exception as e:
-                logger.error(f"Error getting BME280 readings: {e}")
+                logger.error(f"✗ Error getting BME280 readings: {e}")
                 # Try direct read as last resort
                 try:
                     direct_read = self.bme280.read_sensor()
@@ -389,12 +391,14 @@ class PulseHub:
                         data["temperature_f"] = direct_read.get("temperature_f")
                         data["humidity"] = direct_read.get("humidity")
                         data["pressure"] = direct_read.get("pressure")
-                        logger.info(f"Last resort BME280 read: {data['temperature_f']:.1f}°F")
+                        logger.info(f"✓ Last resort BME280 read: {data['temperature_f']:.1f}°F")
                     else:
+                        logger.error("✗ All BME280 read attempts failed - no temperature data")
                         data["temperature_f"] = None
                         data["humidity"] = None
                         data["pressure"] = None
                 except Exception:
+                    logger.error("✗ Last resort BME280 read failed")
                     data["temperature_f"] = None
                     data["humidity"] = None
                     data["pressure"] = None
@@ -409,9 +413,9 @@ class PulseHub:
             
             # Log song detection status for debugging
             if song_data and song_data.get("title") not in (None, "Unknown"):
-                logger.debug(f"Song detected via audio monitor: {song_data.get('title')} - {song_data.get('artist')}")
+                logger.info(f"🎵 Current song: '{song_data.get('title')}' by {song_data.get('artist')}")
             else:
-                logger.debug("No song detected via audio monitor (title: Unknown or None)")
+                logger.debug("🎵 No song currently detected")
 
         # Fallback: if no song detected via mic, use music controller's current track
         if (not data.get("current_song") or data["current_song"].get("title") in (None, "Unknown")) and self.music_controller:

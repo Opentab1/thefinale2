@@ -98,7 +98,7 @@ def get_current_sensors():
     try:
         if hub_instance:
             data = hub_instance._collect_sensor_data()
-            logger.debug(f"Sensor data from hub: temp={data.get('temperature_f')}, humidity={data.get('humidity')}")
+            logger.info(f"📊 API sensor data from hub: temp={data.get('temperature_f')}, humidity={data.get('humidity')}, song={data.get('current_song', {}).get('title', 'None')}")
         else:
             # Fallback: derive current snapshot from database
             data = {
@@ -540,7 +540,9 @@ def broadcast_sensor_data():
         try:
             if hub_instance:
                 data = hub_instance._collect_sensor_data()
-                logger.debug(f"Broadcasting data from hub: temp={data.get('temperature_f')}, humidity={data.get('humidity')}")
+                # Log broadcasts less frequently to avoid spam (every 12th broadcast = ~1 minute)
+                if broadcast_count % 12 == 0:
+                    logger.info(f"📡 Broadcasting from hub: temp={data.get('temperature_f')}°F, song='{data.get('current_song', {}).get('title', 'None')}'")
             else:
                 # Fallback to current snapshot from DB so UI still updates
                 data = {

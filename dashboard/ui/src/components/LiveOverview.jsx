@@ -13,10 +13,10 @@ export default function LiveOverview({ sensorData }) {
     occupancy = 0,
     entries = 0,
     exits = 0,
-    temperature_f = 0,
-    humidity = 0,
-    light_level = 0,
-    noise_db = 0,
+    temperature_f = null,
+    humidity = null,
+    light_level = null,
+    noise_db = null,
     current_song = {}
   } = sensorData
 

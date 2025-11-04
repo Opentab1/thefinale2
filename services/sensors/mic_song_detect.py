@@ -77,8 +77,8 @@ class AudioMonitor:
         self._monitoring_thread = None
         self._last_activity = 0.0
 
-        # Song detection configuration from environment (default: 30s)
-        self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '30'))
+        # Song detection configuration from environment (default: 10s for faster detection)
+        self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '10'))
         self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '2.0'))
         self._last_db_ts = 0.0
         self._last_song_detect_ts = 0.0
@@ -426,25 +426,26 @@ class AudioMonitor:
                         self._last_activity = now_db  # Update watchdog
                         logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
                     
-                    # Trigger song detection every 30 seconds using buffered audio
+                    # Trigger song detection every 10 seconds (configurable) using buffered audio
                     # Run in non-blocking way to prevent hanging
                     now_song = time.time()
                     if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
                         if self._buffer_index >= self._audio_buffer_size:  # Buffer is full (5 seconds)
-                            logger.info("🎵 Running song detection from audio buffer...")
+                            elapsed = now_song - self._last_song_detect_ts
+                            logger.info(f"🎵 Running song detection from audio buffer (interval: {elapsed:.1f}s)...")
                             # Run in separate thread to prevent blocking even if it hangs
                             try:
                                 self._detect_song_from_buffer()
                             except Exception as e:
                                 logger.error(f"Failed to start song detection thread: {e}")
                         else:
-                            logger.debug(f"Audio buffer not ready for song detection (index: {self._buffer_index}/{self._audio_buffer_size})")
+                            logger.info(f"Audio buffer filling for song detection ({self._buffer_index}/{self._audio_buffer_size} samples)...")
                         self._last_song_detect_ts = now_song
                         self._last_activity = now_song  # Update watchdog
                     elif self.song_detector is None:
                         # Log occasionally if song detector is not available
                         if int(now_song) % 60 == 0:  # Log once per minute
-                            logger.debug("Song detector not available - song detection disabled")
+                            logger.info("⚠️ Song detector not available - song detection disabled")
                     
                     # CRITICAL: Always update last_activity even if no song detection
                     # This prevents watchdog from thinking we're stuck
@@ -556,16 +557,18 @@ class AudioMonitor:
                     
                     # Only log if it's a new song
                     if not self.current_song or self.current_song.get("title") != title:
-                        logger.info(f"✅ Song detected: {title} - {artist}")
+                        logger.info(f"🎵 ✅ NEW SONG DETECTED: '{title}' by {artist}")
+                    else:
+                        logger.debug(f"Same song still playing: {title}")
                     
                     self.current_song = new_song
                 else:
-                    logger.debug("No song detected from buffer (Shazam returned no match)")
+                    logger.info("🎵 No song detected from buffer (Shazam returned no match)")
                     # Log reason if available
                     if result:
-                        logger.debug(f"Shazam result: {list(result.keys())}")
+                        logger.debug(f"Shazam result keys: {list(result.keys())}")
                     else:
-                        logger.debug("Shazam returned None (may be network issue or timeout)")
+                        logger.info("Shazam returned None (may be network issue, timeout, or no music playing)")
                 
             except TimeoutError as e:
                 logger.error(f"Song detection hard timeout exceeded: {e}")
