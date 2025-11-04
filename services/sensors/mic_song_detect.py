@@ -9,7 +9,6 @@ from threading import Thread, Event
 from datetime import datetime
 import os
 import time
-import time
 
 # NumPy is required
 try:
@@ -68,6 +67,7 @@ class AudioMonitor:
         self.chunk_size = chunk_size
         self.running = False
         self.stop_event = Event()
+        self._restart_event = Event()
 
         self.current_db = 0.0
         self.peak_db = 0.0
@@ -82,6 +82,8 @@ class AudioMonitor:
         self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '2.0'))
         self._last_db_ts = 0.0
         self._last_song_detect_ts = 0.0
+        self._watchdog_timeout_sec = float(os.getenv('AUDIO_WATCHDOG_TIMEOUT_SEC', '90'))
+        self._stale_song_timeout_sec = float(os.getenv('SONG_STALE_TIMEOUT_SEC', '300'))
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
         # This allows song detection without opening a separate audio stream
@@ -278,6 +280,8 @@ class AudioMonitor:
         
         self.running = True
         self.stop_event.clear()
+        self._restart_event.clear()
+        self._last_activity = time.time()
         
         # Start monitoring thread
         self._start_monitoring_thread()
@@ -290,26 +294,61 @@ class AudioMonitor:
     
     def _start_monitoring_thread(self):
         """Start the monitoring thread"""
+        self._restart_event.clear()
         self._monitoring_thread = Thread(target=self._monitoring_loop, daemon=True)
         self._monitoring_thread.start()
         self._last_activity = time.time()
+
+    def _request_restart(self):
+        """Signal the monitoring thread to restart safely."""
+        if not self.running or self.stop_event.is_set():
+            return
+
+        thread = self._monitoring_thread
+        if thread is None:
+            self._start_monitoring_thread()
+            return
+
+        if self._restart_event.is_set():
+            logger.debug("Audio monitoring restart already in progress")
+            return
+
+        logger.info("Restarting audio monitoring thread")
+        self._restart_event.set()
+
+        thread.join(timeout=5.0)
+
+        if thread.is_alive():
+            logger.error("Audio monitoring thread did not stop cleanly; retrying later")
+            self._restart_event.clear()
+            return
+
+        self._restart_event.clear()
+
+        if self.running and not self.stop_event.is_set():
+            self._start_monitoring_thread()
     
     def _watchdog_loop(self):
         """Watchdog to restart monitoring if it crashes"""
         while self.running and not self.stop_event.is_set():
             try:
-                # Check if monitoring thread is alive
-                if not self._monitoring_thread.is_alive():
+                thread = self._monitoring_thread
+                if thread is None or not thread.is_alive():
                     logger.error("Audio monitoring thread died! Restarting...")
                     self._start_monitoring_thread()
+                    self.stop_event.wait(2)
+                    continue
+
+                inactive_for = time.time() - self._last_activity
+                if inactive_for > self._watchdog_timeout_sec:
+                    logger.warning(
+                        "Audio monitoring inactive for %.1fs – restarting stream",
+                        inactive_for
+                    )
+                    self._request_restart()
+                    self._last_activity = time.time()
                 
-                # Check if monitoring is stuck (no activity for 60 seconds)
-                if time.time() - self._last_activity > 60:
-                    logger.warning("Audio monitoring appears stuck (no activity for 60s)")
-                    logger.warning("This is normal if no audio is detected, continuing...")
-                    self._last_activity = time.time()  # Reset to prevent spam
-                
-                self.stop_event.wait(10)  # Check every 10 seconds
+                self.stop_event.wait(10)
             except Exception as e:
                 logger.error(f"Error in watchdog: {e}")
                 self.stop_event.wait(10)
@@ -380,6 +419,9 @@ class AudioMonitor:
                 logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
 
             while self.running and not self.stop_event.is_set():
+                if self._restart_event.is_set():
+                    logger.debug("Audio monitoring restart requested; exiting loop")
+                    break
                 try:
                     # Read audio data
                     if pa_stream is not None:
@@ -440,6 +482,8 @@ class AudioMonitor:
                         # Log occasionally if song detector is not available
                         if int(now_song) % 60 == 0:  # Log once per minute
                             logger.debug("Song detector not available - song detection disabled")
+
+                    self._prune_stale_song(now_song)
                     
                 except Exception as e:
                     logger.error(f"Error in monitoring loop: {e}")
@@ -464,6 +508,23 @@ class AudioMonitor:
                     sd_stream.close()
             except Exception:
                 pass
+
+            # Mark thread as stopped so watchdog can spawn a new one
+            self._monitoring_thread = None
+
+    def _prune_stale_song(self, now_ts: float):
+        """Clear current song if we haven't refreshed it recently."""
+        if not self.current_song:
+            return
+
+        song_ts = self._to_epoch(self.current_song.get("timestamp"))
+        if song_ts is None:
+            return
+
+        if now_ts - song_ts > self._stale_song_timeout_sec:
+            elapsed = now_ts - song_ts
+            logger.debug("Song detection stale for %.1fs – clearing current song", elapsed)
+            self.current_song = None
     
     def _detect_song_from_buffer(self):
         """Detect song using buffered audio data (runs in background thread)"""
@@ -573,6 +634,14 @@ class AudioMonitor:
         """Stop audio monitoring"""
         self.running = False
         self.stop_event.set()
+        self._restart_event.set()
+
+        thread = self._monitoring_thread
+        if thread is not None and thread.is_alive():
+            try:
+                thread.join(timeout=5.0)
+            except Exception:
+                pass
     
     def get_current_db(self) -> float:
         """Get current decibel level"""
@@ -588,6 +657,9 @@ class AudioMonitor:
     
     def get_current_song(self) -> dict:
         """Get currently detected song from party_box detector"""
+        now = time.time()
+        self._prune_stale_song(now)
+
         if self.current_song:
             return self.current_song
         return {
@@ -596,6 +668,28 @@ class AudioMonitor:
             "confidence": 0.0,
             "timestamp": None
         }
+
+    def _to_epoch(self, value):
+        """Convert timestamps to epoch seconds for stale detection."""
+        if value is None:
+            return None
+
+        if isinstance(value, (int, float)):
+            try:
+                return float(value)
+            except Exception:
+                return None
+
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                try:
+                    return datetime.fromisoformat(value).timestamp()
+                except ValueError:
+                    return None
+
+        return None
     
     def get_stats(self) -> dict:
         """Get all audio statistics"""

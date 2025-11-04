@@ -3,6 +3,7 @@ Pulse 1.0 - BME280 Temperature/Humidity/Pressure Sensor
 """
 
 import logging
+import math
 import time
 import numpy as np
 from threading import Thread, Event
@@ -21,12 +22,21 @@ class BME280Reader:
         self.temperature = None
         self.humidity = None
         self.pressure = None
+
+        # Track health for automatic recovery
+        self._last_success_ts = 0.0
+        self._last_reinit_attempt = 0.0
+        self._reinit_backoff_sec = 30.0
+        self._max_stale_interval_sec = 180.0
         
         self._init_sensor()
     
     def _init_sensor(self):
         """Initialize BME280 sensor with robust error handling"""
         try:
+            # Reset sensor state so we don't reuse a bad reference
+            self.sensor = None
+
             # Use busio directly to avoid board pin mapping issues
             import busio
             import board
@@ -78,38 +88,83 @@ class BME280Reader:
             logger.error(f"Failed to initialize BME280 sensor: {e}")
             logger.error(f"Exception type: {type(e).__name__}")
             raise
+
+    def _attempt_reinit(self, force: bool = False) -> bool:
+        """Attempt to reinitialize the sensor with simple backoff."""
+        now = time.time()
+        if not force and (now - self._last_reinit_attempt) < self._reinit_backoff_sec:
+            return False
+
+        self._last_reinit_attempt = now
+        try:
+            logger.warning("Re-initializing BME280 sensor after read failure")
+            self._init_sensor()
+            logger.info("BME280 sensor reinitialized successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Reinitialization attempt failed: {e}")
+            return False
     
     def read_sensor(self) -> Dict[str, float]:
         """Read current sensor values"""
         try:
             if self.sensor is None:
-                raise Exception("Sensor not initialized")
+                if not self._attempt_reinit(force=True):
+                    raise Exception("Sensor not initialized")
             
             # Read values
-            temp_c = self.sensor.temperature
-            humidity = self.sensor.humidity
-            pressure = self.sensor.pressure
+            temp_c = float(self.sensor.temperature)
+            humidity = float(self.sensor.humidity)
+            pressure = float(self.sensor.pressure)
             
             # Convert temperature to Fahrenheit
             temp_f = (temp_c * 9/5) + 32
+
+            if math.isnan(temp_c) or math.isnan(temp_f):
+                raise ValueError("Temperature reading returned NaN")
+            if math.isnan(humidity):
+                raise ValueError("Humidity reading returned NaN")
+            if math.isnan(pressure):
+                raise ValueError("Pressure reading returned NaN")
             
             # Update stored values
             self.temperature = temp_f
             self.humidity = humidity
             self.pressure = pressure
+
+            self._last_success_ts = time.time()
             
             return {
                 "temperature_f": round(temp_f, 1),
                 "temperature_c": round(temp_c, 1),
                 "humidity": round(humidity, 1),
                 "pressure": round(pressure, 2),
-                "altitude": round(self.sensor.altitude, 1),
+                "altitude": self._safe_altitude(),
                 "timestamp": datetime.now().isoformat()
             }
             
         except Exception as e:
             logger.error(f"Error reading sensor: {e}")
+            # First attempt a soft reinitialization with backoff
+            self._attempt_reinit(force=False)
+            # Attempt automatic recovery if readings have been stale for a while
+            last_ok = self._last_success_ts or 0.0
+            if (time.time() - last_ok) > self._max_stale_interval_sec:
+                self._attempt_reinit(force=True)
             return {}
+
+    def _safe_altitude(self) -> Optional[float]:
+        """Safely fetch altitude without letting library issues bubble up."""
+        if self.sensor is None:
+            return None
+        try:
+            altitude = float(self.sensor.altitude)
+            if math.isnan(altitude):
+                return None
+            return round(altitude, 1)
+        except Exception as e:
+            logger.debug(f"Altitude read failed: {e}")
+            return None
     
     def start_reading(self, interval: int = 30):
         """Start continuous sensor reading"""
@@ -192,7 +247,7 @@ class BME280Reader:
         """Get all current readings"""
         return {
             "temperature_f": self.temperature,
-            "temperature_c": (self.temperature - 32) * 5/9 if self.temperature else None,
+            "temperature_c": ((self.temperature - 32) * 5/9) if self.temperature is not None else None,
             "humidity": self.humidity,
             "pressure": self.pressure,
             "timestamp": datetime.now().isoformat()
