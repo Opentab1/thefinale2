@@ -9,7 +9,6 @@ from threading import Thread, Event
 from datetime import datetime
 import os
 import time
-import time
 
 # NumPy is required
 try:
@@ -72,50 +71,46 @@ class AudioMonitor:
         self.current_db = 0.0
         self.peak_db = 0.0
         self.current_song = None
-        
+
+        # Song detection state tracking
+        self.song_detector = None
+        self._song_detection_enabled = False
+        self._shazam_class = None
+        self._last_song_detect_attempt_ts = None
+        self._last_song_detect_success_ts = None
+        self._last_song_detect_duration = None
+        self._last_song_detect_error = None
+        self._last_song_detect_status = "idle"
+        self._last_song_disabled_log_ts = 0.0
+
         # Watchdog tracking
         self._monitoring_thread = None
         self._last_activity = 0.0
 
-        # Song detection configuration from environment (default: 30s)
-        self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '30'))
-        self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '2.0'))
+        # Song detection + dB cadence configuration
+        try:
+            song_interval_env = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '10'))
+        except (TypeError, ValueError):
+            song_interval_env = 10.0
+        self._song_detect_interval = max(5.0, min(song_interval_env, 120.0))
+
+        try:
+            db_interval_env = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '2.0'))
+        except (TypeError, ValueError):
+            db_interval_env = 2.0
+        self._db_interval = max(0.5, min(db_interval_env, 10.0))
+
         self._last_db_ts = 0.0
         self._last_song_detect_ts = 0.0
-        
+
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
         # This allows song detection without opening a separate audio stream
         self._audio_buffer_size = int(5 * self.sample_rate)  # 5 seconds
         self._audio_buffer = np.zeros(self._audio_buffer_size, dtype=np.int16)
         self._buffer_index = 0
 
-        # Initialize song detector if available
-        if SongDetector is not None:
-            try:
-                # Pass enabled=False so it doesn't start its own recording thread
-                # We'll call detect_song_from_buffer() manually with our buffered audio
-                self.song_detector = SongDetector(
-                    enabled=False,  # Don't start background recording
-                    detection_interval=int(self._song_detect_interval)
-                )
-                logger.info("✅ Song detector initialized (using shared audio buffer)")
-                # Check if ShazamIO is actually available
-                try:
-                    from shazamio import Shazam
-                    logger.info("✅ ShazamIO library available - song detection will work")
-                except ImportError:
-                    logger.warning("⚠️ ShazamIO not available - song detection will not work")
-                    logger.warning("   Install with: pip install shazamio aiohttp")
-            except Exception as e:
-                logger.warning(f"Failed to initialize song detector: {e}")
-                logger.warning(f"   Error details: {type(e).__name__}: {str(e)}")
-                import traceback
-                logger.debug(traceback.format_exc())
-                self.song_detector = None
-        else:
-            self.song_detector = None
-            logger.warning("⚠️ Song detector disabled (SongDetector class not available)")
-            logger.warning("   Check if song_detector.py is properly imported")
+        # Initialize song detection pipeline (Shazam + compatibility layer)
+        self._initialize_song_detection()
 
         # Audio interfaces (optional)
         self.pyaudio_instance = None
@@ -131,6 +126,58 @@ class AudioMonitor:
         self._validate_device()
         logger.info(f"Audio monitor initialized (device: {self.device_index}, backend: {'PyAudio' if PYAUDIO_AVAILABLE and self.pyaudio_instance else 'sounddevice'})")
     
+    def _initialize_song_detection(self):
+        """Set up song detection helpers and availability flags."""
+        disable_env = os.getenv('PULSE_DISABLE_SONG_DETECTION', '').strip().lower()
+        disabled_markers = {'1', 'true', 'yes', 'on', 'disable', 'disabled'}
+        detection_allowed = disable_env not in disabled_markers
+
+        # Initialize legacy SongDetector wrapper if available for compatibility/logging
+        if SongDetector is not None:
+            try:
+                self.song_detector = SongDetector(
+                    enabled=False,
+                    detection_interval=int(self._song_detect_interval)
+                )
+                logger.info("✅ Song detector compatibility layer initialized (shared audio buffer)")
+            except Exception as e:
+                logger.warning(f"Failed to initialize SongDetector wrapper: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+                self.song_detector = None
+        else:
+            self.song_detector = None
+            logger.warning("⚠️ Song detector wrapper unavailable (song_detector.py import failed)")
+
+        if not detection_allowed:
+            logger.info("Song detection disabled via PULSE_DISABLE_SONG_DETECTION environment flag")
+            self._song_detection_enabled = False
+            self._last_song_detect_status = "disabled"
+            return
+
+        try:
+            from shazamio import Shazam
+
+            self._shazam_class = Shazam
+            self._song_detection_enabled = True
+            self._last_song_detect_status = "idle"
+            logger.info(
+                "✅ ShazamIO library available - song detection enabled (interval %.1fs)",
+                self._song_detect_interval
+            )
+        except ImportError:
+            self._song_detection_enabled = False
+            self._last_song_detect_status = "dependency_missing"
+            logger.warning("⚠️ ShazamIO not available - song detection disabled")
+            logger.warning("   Install with: pip install shazamio aiohttp")
+        except Exception as e:
+            self._song_detection_enabled = False
+            self._last_song_detect_status = "error"
+            logger.warning(f"Failed to initialize ShazamIO for song detection: {e}")
+
+        if not self._song_detection_enabled:
+            logger.info("Song detection disabled; continuing with dB monitoring only")
+
     def _validate_device(self):
         """Validate and pick the best audio input device automatically.
 
@@ -416,35 +463,47 @@ class AudioMonitor:
                         self._audio_buffer[-shift_amount:] = audio_data[:chunk_len]
                         self._buffer_index = self._audio_buffer_size  # Buffer is full
                     
-                    # Calculate dB level more frequently for better responsiveness (every 2 seconds)
+                    # Calculate dB level at configured cadence
                     now_db = time.time()
-                    if (now_db - self._last_db_ts) >= 2.0:  # Update every 2 seconds
+                    if (now_db - self._last_db_ts) >= self._db_interval:
                         db = self.calculate_db(audio_data)
                         self.current_db = db
                         self.peak_db = max(self.peak_db, db)
                         self._last_db_ts = now_db
                         self._last_activity = now_db  # Update watchdog
                         logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
-                    
-                    # Trigger song detection every 30 seconds using buffered audio
+
+                    # Trigger song detection at configured interval using buffered audio
                     # Run in non-blocking way to prevent hanging
                     now_song = time.time()
-                    if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
+                    if self._song_detection_enabled and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
                         if self._buffer_index >= self._audio_buffer_size:  # Buffer is full (5 seconds)
                             logger.info("🎵 Running song detection from audio buffer...")
                             # Run in separate thread to prevent blocking even if it hangs
                             try:
+                                self._last_song_detect_attempt_ts = now_song
+                                self._last_song_detect_status = "running"
                                 self._detect_song_from_buffer()
                             except Exception as e:
                                 logger.error(f"Failed to start song detection thread: {e}")
+                                self._last_song_detect_status = "error"
+                                self._last_song_detect_error = str(e)
                         else:
-                            logger.debug(f"Audio buffer not ready for song detection (index: {self._buffer_index}/{self._audio_buffer_size})")
+                            logger.debug(
+                                "Audio buffer not ready for song detection (index: %d/%d)",
+                                self._buffer_index,
+                                self._audio_buffer_size
+                            )
                         self._last_song_detect_ts = now_song
                         self._last_activity = now_song  # Update watchdog
-                    elif self.song_detector is None:
-                        # Log occasionally if song detector is not available
-                        if int(now_song) % 60 == 0:  # Log once per minute
-                            logger.debug("Song detector not available - song detection disabled")
+                    elif not self._song_detection_enabled:
+                        # Log occasionally if song detection is disabled so operators know why
+                        if now_song - self._last_song_disabled_log_ts >= 60:
+                            logger.debug(
+                                "Song detection disabled (status: %s)",
+                                self._last_song_detect_status
+                            )
+                            self._last_song_disabled_log_ts = now_song
                     
                     # CRITICAL: Always update last_activity even if no song detection
                     # This prevents watchdog from thinking we're stuck
@@ -476,48 +535,64 @@ class AudioMonitor:
     
     def _detect_song_from_buffer(self):
         """Detect song using buffered audio data (runs in background thread with hard timeout)"""
+
+        if not self._song_detection_enabled or self._shazam_class is None:
+            logger.debug(
+                "Song detection skipped (enabled=%s, shazam=%s)",
+                self._song_detection_enabled,
+                bool(self._shazam_class)
+            )
+            if not self._song_detection_enabled:
+                self._last_song_detect_status = "disabled"
+            else:
+                self._last_song_detect_status = "dependency_missing"
+                self._last_song_detect_error = "ShazamIO class not available"
+            return
+
         import tempfile
         import wave
         import threading
         import signal
-        
+        import asyncio
+        import platform
+
         def timeout_handler(signum, frame):
             raise TimeoutError("Song detection exceeded hard timeout")
-        
+
         def detect_async():
             temp_filename = None
+            local_status = "running"
+            local_error = None
+            local_result = None
+            start_ts = time.time()
+            self._last_song_detect_attempt_ts = start_ts
+            self._last_song_detect_error = None
             try:
                 # Save buffer to temporary WAV file
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                     temp_filename = temp_file.name
-                
+
                 with wave.open(temp_filename, 'wb') as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)  # 16-bit audio
                     wf.setframerate(self.sample_rate)
                     wf.writeframes(self._audio_buffer.tobytes())
-                
+
                 logger.debug(f"Saved audio buffer to {temp_filename}")
-                
-                # Set up hard timeout using signal (only works on Unix)
-                import platform
+
                 use_signal_timeout = platform.system() != 'Windows'
-                
-                result = None
+
                 try:
                     if use_signal_timeout:
                         # Set alarm for 25 seconds (hard kill)
                         signal.signal(signal.SIGALRM, timeout_handler)
                         signal.alarm(25)
-                    
-                    # Process the audio file with ShazamIO (with asyncio timeout)
-                    import asyncio
+
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
-                    
+
                     try:
-                        # Add 20 second overall timeout for entire song detection
-                        result = loop.run_until_complete(
+                        local_result, local_status, local_error = loop.run_until_complete(
                             asyncio.wait_for(
                                 self._recognize_song_async(temp_filename),
                                 timeout=20.0
@@ -525,10 +600,11 @@ class AudioMonitor:
                         )
                     except asyncio.TimeoutError:
                         logger.warning("Song detection timed out (20s) - skipping")
-                        result = None
+                        local_result = None
+                        local_status = "timeout"
+                        local_error = "Song detection exceeded 20 second timeout"
                     finally:
                         try:
-                            # Clean up any pending tasks
                             pending = asyncio.all_tasks(loop)
                             for task in pending:
                                 task.cancel()
@@ -538,82 +614,112 @@ class AudioMonitor:
                         loop.close()
                 finally:
                     if use_signal_timeout:
-                        # Cancel alarm
                         signal.alarm(0)
-                
-                # Process result
-                if result and 'track' in result:
-                    track = result['track']
+
+                if local_status == "success" and local_result and 'track' in local_result:
+                    track = local_result['track']
                     title = track.get('title', 'Unknown')
                     artist = track.get('subtitle', 'Unknown')
-                    
+
+                    detected_ts = time.time()
+                    confidence = None
+                    try:
+                        matches = local_result.get('matches') or []
+                        if matches:
+                            confidence = matches[0].get('score')
+                    except Exception:
+                        confidence = None
+
                     new_song = {
                         "title": title,
                         "artist": artist,
-                        "timestamp": time.time(),
-                        "confidence": 1.0
+                        "timestamp": detected_ts,
+                        "detected_at": datetime.fromtimestamp(detected_ts).isoformat(),
+                        "confidence": float(confidence) if confidence is not None else 1.0,
+                        "source": "shazam"
                     }
-                    
-                    # Only log if it's a new song
-                    if not self.current_song or self.current_song.get("title") != title:
-                        logger.info(f"✅ Song detected: {title} - {artist}")
-                    
-                    self.current_song = new_song
-                else:
-                    logger.debug("No song detected from buffer (Shazam returned no match)")
-                    # Log reason if available
-                    if result:
-                        logger.debug(f"Shazam result: {list(result.keys())}")
+
+                    if self.current_song and self.current_song.get("title") == title and self.current_song.get("artist") == artist:
+                        logger.debug(f"✅ Song confirmed: {title} - {artist}")
                     else:
-                        logger.debug("Shazam returned None (may be network issue or timeout)")
-                
+                        logger.info(f"✅ Song detected: {title} - {artist}")
+
+                    self.current_song = new_song
+                    local_status = "match"
+                    local_error = None
+                else:
+                    if local_status == "success":
+                        local_status = "no_match"
+                        local_error = None
+
+                    if local_status == "no_match":
+                        logger.debug("No song detected from buffer (Shazam returned no match)")
+                        if local_result:
+                            logger.debug(f"Shazam result keys: {list(local_result.keys())}")
+                        else:
+                            logger.debug("Shazam returned None (may be network issue or timeout)")
+
             except TimeoutError as e:
+                local_status = "timeout"
+                local_error = str(e)
                 logger.error(f"Song detection hard timeout exceeded: {e}")
             except Exception as e:
+                local_status = "error"
+                local_error = f"{type(e).__name__}: {e}"
                 logger.error(f"Error detecting song from buffer: {e}")
                 import traceback
                 logger.debug(traceback.format_exc())
             finally:
-                # Clean up temp file
                 if temp_filename:
                     try:
                         import os
                         if os.path.exists(temp_filename):
                             os.remove(temp_filename)
-                    except Exception as e:
-                        logger.debug(f"Failed to remove temp file: {e}")
-        
-        # Run in background thread to not block audio monitoring
-        # Use a timeout wrapper to ensure thread doesn't hang forever
+                    except Exception as cleanup_error:
+                        logger.debug(f"Failed to remove temp file: {cleanup_error}")
+
+                duration = time.time() - start_ts
+                self._last_song_detect_duration = duration
+
+                if local_status == "match":
+                    self._last_song_detect_success_ts = time.time()
+                    if self.current_song is not None:
+                        self.current_song["latency_sec"] = duration
+                    self._last_song_detect_error = None
+                else:
+                    self._last_song_detect_error = local_error
+
+                self._last_song_detect_status = local_status
+
         thread = threading.Thread(target=detect_async, daemon=True)
         thread.start()
-        
+
         # Don't wait for thread - it runs independently
-    
+
     async def _recognize_song_async(self, audio_file):
         """Recognize song using ShazamIO (async with timeout)"""
+        import asyncio
+
+        if self._shazam_class is None:
+            return None, "dependency_missing", "ShazamIO class not initialized"
+
         try:
-            import asyncio
-            from shazamio import Shazam
-            
-            shazam = Shazam()
-            
-            # Add 15 second timeout to prevent hanging
+            shazam = self._shazam_class()
             result = await asyncio.wait_for(
                 shazam.recognize(audio_file),
                 timeout=15.0
             )
-            return result
+            return result, "success", None
+        except asyncio.TimeoutError:
+            logger.warning("Song recognition timed out after 15 seconds")
+            return None, "timeout", "Song recognition timed out after 15 seconds"
         except ImportError as e:
             logger.error(f"ShazamIO not available: {e}")
             logger.error("Install with: pip install shazamio aiohttp")
-            return None
-        except asyncio.TimeoutError:
-            logger.warning("Song recognition timed out after 15 seconds")
-            return None
+            return None, "dependency_missing", str(e)
         except Exception as e:
             logger.error(f"Shazam recognition error: {type(e).__name__}: {e}")
-            return None
+            return None, "error", f"{type(e).__name__}: {e}"
     
     def stop_monitoring(self):
         """Stop audio monitoring"""
@@ -635,20 +741,53 @@ class AudioMonitor:
     def get_current_song(self) -> dict:
         """Get currently detected song from party_box detector"""
         if self.current_song:
-            return self.current_song
+            song = dict(self.current_song)
+            if song.get("detected_at") is None and song.get("timestamp"):
+                try:
+                    song["detected_at"] = datetime.fromtimestamp(song["timestamp"]).isoformat()
+                except Exception:
+                    song["detected_at"] = None
+            song.setdefault("latency_sec", self._last_song_detect_duration)
+            song.setdefault("source", "shazam" if self._song_detection_enabled else None)
+            return song
         return {
             "title": "Unknown",
             "artist": "Unknown",
             "confidence": 0.0,
-            "timestamp": None
+            "timestamp": None,
+            "detected_at": None,
+            "latency_sec": None,
+            "source": None
         }
     
     def get_stats(self) -> dict:
         """Get all audio statistics"""
+        def _to_iso(ts):
+            if not ts:
+                return None
+            try:
+                return datetime.fromtimestamp(ts).isoformat()
+            except Exception:
+                return None
+
+        song_detection = {
+            "enabled": self._song_detection_enabled,
+            "interval_sec": self._song_detect_interval,
+            "last_attempt_ts": self._last_song_detect_attempt_ts,
+            "last_attempt_iso": _to_iso(self._last_song_detect_attempt_ts),
+            "last_success_ts": self._last_song_detect_success_ts,
+            "last_success_iso": _to_iso(self._last_song_detect_success_ts),
+            "last_duration_sec": self._last_song_detect_duration,
+            "last_status": self._last_song_detect_status,
+            "last_error": self._last_song_detect_error,
+            "backend": "shazam" if self._shazam_class is not None else None
+        }
+
         return {
             "current_db": self.current_db,
             "peak_db": self.peak_db,
             "current_song": self.get_current_song(),
+            "song_detection": song_detection,
             "timestamp": datetime.now().isoformat()
         }
     

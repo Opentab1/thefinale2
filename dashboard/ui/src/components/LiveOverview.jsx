@@ -17,9 +17,38 @@ export default function LiveOverview({ sensorData }) {
     humidity = 0,
     light_level = 0,
     noise_db = 0,
-    current_song = {}
+    current_song = {},
+    song_detection = {}
   } = sensorData
 
+  const formatSeconds = (value) => {
+    if (typeof value !== 'number' || Number.isNaN(value)) return '—'
+    if (value >= 60) {
+      const minutes = value / 60
+      return `${minutes.toFixed(1)} min`
+    }
+    return `${value.toFixed(1)} s`
+  }
+
+  const formatTime = (iso) => {
+    if (!iso) return '—'
+    const date = new Date(iso)
+    if (Number.isNaN(date.getTime())) return '—'
+    return date.toLocaleTimeString()
+  }
+
+  const prettifyStatus = (status) => {
+    if (!status) return 'Idle'
+    return status
+      .toString()
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase())
+  }
+
+  const detectionStatus = prettifyStatus(song_detection?.last_status)
+  const detectionLatency = formatSeconds(song_detection?.last_duration_sec)
+  const detectionInterval = formatSeconds(song_detection?.interval_sec)
+  const detectionLastSuccess = formatTime(song_detection?.last_success_iso)
   
 
   return (
@@ -90,6 +119,24 @@ export default function LiveOverview({ sensorData }) {
           <div className="space-y-1">
             <p className="font-medium">{current_song?.title || 'No song detected'}</p>
             <p className="text-sm text-gray-400">{current_song?.artist || ''}</p>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-gray-400">
+            <div>
+              <span className="block uppercase tracking-wide text-gray-500">Status</span>
+              <span className="text-white">{detectionStatus}</span>
+            </div>
+            <div>
+              <span className="block uppercase tracking-wide text-gray-500">Latency</span>
+              <span className="text-white">{detectionLatency}</span>
+            </div>
+            <div>
+              <span className="block uppercase tracking-wide text-gray-500">Last Success</span>
+              <span className="text-white">{detectionLastSuccess}</span>
+            </div>
+            <div>
+              <span className="block uppercase tracking-wide text-gray-500">Cadence</span>
+              <span className="text-white">{detectionInterval}</span>
+            </div>
           </div>
         </div>
 

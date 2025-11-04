@@ -403,15 +403,23 @@ class PulseHub:
             data["light_level"] = self.light_sensor.get_light_level()
         
         if self.audio_monitor:
-            data["noise_db"] = self.audio_monitor.get_current_db()
-            song_data = self.audio_monitor.get_current_song()
-            data["current_song"] = song_data
+            audio_stats = self.audio_monitor.get_stats()
+            data["noise_db"] = audio_stats.get("current_db")
+            data["current_song"] = audio_stats.get("current_song")
+            data["audio_monitor"] = {
+                "peak_db": audio_stats.get("peak_db"),
+                "song_detection": audio_stats.get("song_detection")
+            }
+            if audio_stats.get("song_detection"):
+                data["song_detection"] = audio_stats["song_detection"]
             
             # Log song detection status for debugging
-            if song_data and song_data.get("title") not in (None, "Unknown"):
+            song_data = data.get("current_song") or {}
+            if song_data.get("title") not in (None, "Unknown"):
                 logger.debug(f"Song detected via audio monitor: {song_data.get('title')} - {song_data.get('artist')}")
             else:
-                logger.debug("No song detected via audio monitor (title: Unknown or None)")
+                detection_status = audio_stats.get("song_detection", {}).get("last_status")
+                logger.debug(f"No song detected via audio monitor (status: {detection_status})")
 
         # Fallback: if no song detected via mic, use music controller's current track
         if (not data.get("current_song") or data["current_song"].get("title") in (None, "Unknown")) and self.music_controller:

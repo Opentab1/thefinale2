@@ -4,7 +4,7 @@ Pulse 1.0 - BME280 Temperature/Humidity/Pressure Sensor
 
 import logging
 import time
-import numpy as np
+import math
 from threading import Thread, Event
 from datetime import datetime
 from typing import Optional, Dict
@@ -21,6 +21,7 @@ class BME280Reader:
         self.temperature = None
         self.humidity = None
         self.pressure = None
+        self.last_read_ts = None
         
         self._init_sensor()
     
@@ -97,6 +98,7 @@ class BME280Reader:
             self.temperature = temp_f
             self.humidity = humidity
             self.pressure = pressure
+            self.last_read_ts = datetime.now()
             
             return {
                 "temperature_f": round(temp_f, 1),
@@ -104,7 +106,7 @@ class BME280Reader:
                 "humidity": round(humidity, 1),
                 "pressure": round(pressure, 2),
                 "altitude": round(self.sensor.altitude, 1),
-                "timestamp": datetime.now().isoformat()
+                "timestamp": self.last_read_ts.isoformat()
             }
             
         except Exception as e:
@@ -120,15 +122,35 @@ class BME280Reader:
         # CRITICAL: Do an initial synchronous read to populate the cache
         # This ensures cached values are never None when hub queries them
         logger.info("Performing initial BME280 reading...")
-        try:
-            initial_data = self.read_sensor()
-            if initial_data and initial_data.get("temperature_f") is not None:
-                logger.info(f"Initial reading: {initial_data['temperature_f']:.1f}°F, {initial_data['humidity']:.1f}%")
-            else:
-                logger.warning("Initial reading returned no data - sensor may not be working")
-        except Exception as e:
-            logger.error(f"Initial sensor read failed: {e}")
-            raise  # Re-raise to prevent starting with bad sensor
+        prime_attempts = 3
+        for attempt in range(1, prime_attempts + 1):
+            try:
+                initial_data = self.read_sensor()
+                if initial_data and initial_data.get("temperature_f") is not None:
+                    logger.info(
+                        f"Initial reading (attempt {attempt}): "
+                        f"{initial_data['temperature_f']:.1f}°F, "
+                        f"{initial_data['humidity']:.1f}%"
+                    )
+                    break
+                logger.warning(
+                    "Initial BME280 reading was empty (attempt %d/%d) - retrying...",
+                    attempt,
+                    prime_attempts
+                )
+                time.sleep(1.0)
+            except Exception as e:
+                logger.error(
+                    "Initial sensor read failed on attempt %d/%d: %s",
+                    attempt,
+                    prime_attempts,
+                    e
+                )
+                if attempt == prime_attempts:
+                    raise
+                time.sleep(1.0)
+        else:
+            raise RuntimeError("Initial BME280 reading failed after multiple attempts")
         
         self.running = True
         self.stop_event.clear()
@@ -212,12 +234,15 @@ class BME280Reader:
     
     def get_all_readings(self) -> Dict:
         """Get all current readings"""
+        temperature_c = None
+        if self.temperature is not None:
+            temperature_c = (self.temperature - 32) * 5/9
         return {
             "temperature_f": self.temperature,
-            "temperature_c": (self.temperature - 32) * 5/9 if self.temperature else None,
+            "temperature_c": temperature_c,
             "humidity": self.humidity,
             "pressure": self.pressure,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": self.last_read_ts.isoformat() if self.last_read_ts else None
         }
     
     def calculate_heat_index(self) -> Optional[float]:
@@ -251,8 +276,10 @@ class BME280Reader:
         # Magnus formula
         a = 17.27
         b = 237.7
-        
-        alpha = ((a * T) / (b + T)) + np.log(RH / 100.0)
+
+        # Use natural log from math module to avoid NumPy dependency
+        safe_humidity = max(min(RH, 100.0), 0.1)
+        alpha = ((a * T) / (b + T)) + math.log(safe_humidity / 100.0)
         dew_c = (b * alpha) / (a - alpha)
         dew_f = (dew_c * 9/5) + 32
         
