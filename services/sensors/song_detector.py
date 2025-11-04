@@ -146,9 +146,22 @@ class SongDetector:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            # Run Shazam recognition
-            result = loop.run_until_complete(self._recognize_song(audio_file))
-            loop.close()
+            try:
+                # Run Shazam recognition
+                result = loop.run_until_complete(self._recognize_song(audio_file))
+            finally:
+                # Properly cleanup event loop
+                try:
+                    # Cancel any pending tasks
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass
+                finally:
+                    loop.close()
             
             # Process result
             if result and 'track' in result:

@@ -107,7 +107,9 @@ class AudioMonitor:
         self._shazam_instance = None
         self._shazam_lock = Lock()
         self._shazam_created_at = 0.0  # Track when instance was created
-        self._shazam_refresh_interval = 3600.0  # Refresh every hour to prevent stale sessions
+        self._shazam_refresh_interval = 1800.0  # Refresh every 30 minutes to prevent connection exhaustion
+        self._shazam_detection_count = 0  # Track number of detections
+        self._shazam_max_detections = 20  # Force refresh after N detections
 
         # Initialize song detector if available
         if SongDetector is not None:
@@ -543,6 +545,7 @@ class AudioMonitor:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 result = None
+                force_shazam_refresh = False
                 try:
                     result = loop.run_until_complete(
                         asyncio.wait_for(
@@ -553,18 +556,49 @@ class AudioMonitor:
                 except asyncio.TimeoutError:
                     logger.warning("Song detection timed out (20s) - skipping")
                     self._song_detection_stats["last_error"] = "timeout"
+                    force_shazam_refresh = True  # Force refresh on timeout
                 except Exception as detect_error:
                     logger.error(f"Song detection error: {detect_error}")
                     self._song_detection_stats["last_error"] = f"{type(detect_error).__name__}: {detect_error}"
+                    # Check if this is a connection/session error that needs refresh
+                    if any(err in str(detect_error).lower() for err in ['connection', 'session', 'client', 'timeout']):
+                        force_shazam_refresh = True
+                        logger.warning("Detected connection/session error - will force Shazam refresh")
                 finally:
                     try:
+                        # Cancel all pending tasks
                         pending = asyncio.all_tasks(loop)
                         for task in pending:
                             task.cancel()
-                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                    except Exception:
-                        pass
-                    loop.close()
+                        # Wait for all tasks to complete cancellation
+                        if pending:
+                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    except Exception as cleanup_err:
+                        logger.debug(f"Event loop cleanup warning: {cleanup_err}")
+                    finally:
+                        try:
+                            loop.close()
+                        except Exception:
+                            pass
+                    
+                    # Force Shazam refresh if needed
+                    if force_shazam_refresh:
+                        with self._shazam_lock:
+                            if self._shazam_instance is not None:
+                                logger.info("Forcing Shazam instance refresh due to error")
+                                try:
+                                    temp_loop = asyncio.new_event_loop()
+                                    asyncio.set_event_loop(temp_loop)
+                                    try:
+                                        if hasattr(self._shazam_instance, 'client') and hasattr(self._shazam_instance.client, 'close'):
+                                            temp_loop.run_until_complete(self._shazam_instance.client.close())
+                                    finally:
+                                        temp_loop.close()
+                                except Exception as refresh_err:
+                                    logger.debug(f"Error during forced refresh: {refresh_err}")
+                                self._shazam_instance = None
+                                self._shazam_created_at = 0.0
+                                self._shazam_detection_count = 0
 
                 duration_sec = round(time.time() - start_monotonic, 2)
 
@@ -640,12 +674,13 @@ class AudioMonitor:
             
             # Use a single reusable Shazam instance to prevent resource leaks
             # Creating new instances for each call causes unclosed ClientSession leaks
-            # Refresh the instance periodically to prevent stale sessions
+            # Refresh the instance periodically to prevent stale sessions and connection exhaustion
             with self._shazam_lock:
                 current_time = time.time()
                 needs_refresh = (
                     self._shazam_instance is None or
-                    (current_time - self._shazam_created_at) > self._shazam_refresh_interval
+                    (current_time - self._shazam_created_at) > self._shazam_refresh_interval or
+                    self._shazam_detection_count >= self._shazam_max_detections
                 )
                 
                 if needs_refresh:
@@ -654,15 +689,18 @@ class AudioMonitor:
                         try:
                             if hasattr(self._shazam_instance, 'client') and hasattr(self._shazam_instance.client, 'close'):
                                 await self._shazam_instance.client.close()
+                                await asyncio.sleep(0.1)  # Give time for cleanup
                         except Exception as e:
                             logger.debug(f"Error closing old Shazam instance: {e}")
                     
                     # Create new instance
                     self._shazam_instance = Shazam()
                     self._shazam_created_at = current_time
-                    logger.info("Created new Shazam instance for song detection")
+                    self._shazam_detection_count = 0
+                    logger.info(f"Created new Shazam instance for song detection (refresh reason: {'time' if (current_time - self._shazam_created_at) > self._shazam_refresh_interval else 'count'})")
                 
                 shazam = self._shazam_instance
+                self._shazam_detection_count += 1
             
             # Add 15 second timeout to prevent hanging
             result = await asyncio.wait_for(
