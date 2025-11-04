@@ -57,3 +57,9 @@ package-lock.json
 *.tmp
 *.temp
 /tmp/
+
+# AWS Sync runtime files (local config and certs)
+/opt/pulse/aws_sync/certs/
+/opt/pulse/aws_sync/aws_config.env
+/opt/pulse/aws_sync/sync.log
+/opt/pulse/aws_sync/*.log
