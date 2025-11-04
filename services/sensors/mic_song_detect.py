@@ -105,7 +105,8 @@ class AudioMonitor:
         }
 
         self._health_thread = None
-        self._health_check_interval = max(15.0, self._song_detect_interval / 2)
+        # CRITICAL FIX: Check health more frequently (every 5 seconds)
+        self._health_check_interval = 5.0  # Fixed: Always 5 seconds
         self._last_db_restart_ts = 0.0
 
         # Dedicated async event loop for song recognition to keep Shazam stable
@@ -118,8 +119,14 @@ class AudioMonitor:
         self._monitoring_backend = None
         self._stream_restart_count = 0
         self._max_consecutive_read_errors = 3
-        self._watchdog_restart_threshold = max(60.0, self._song_detect_interval * 4)
+        # CRITICAL FIX: Reduce watchdog threshold to catch failures faster (was 60s, now 20s)
+        self._watchdog_restart_threshold = 20.0  # Fixed: Always 20 seconds
         self._stream_restart_request = Event()
+        
+        # CRITICAL FIX: Track song detection thread to force-kill if stuck
+        self._song_detection_thread = None
+        self._song_detection_started_at = 0.0
+        self._song_detection_max_duration = 30.0  # Kill if running longer than 30s
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
         # This allows song detection without opening a separate audio stream
@@ -577,10 +584,37 @@ class AudioMonitor:
                     elif inactivity > self._watchdog_restart_threshold:
                         self._last_activity = now  # Prevent repeated warnings when backend is inactive
                 
-                self.stop_event.wait(10)  # Check every 10 seconds
+                # CRITICAL FIX: Force-kill stuck song detection threads
+                if self._song_detection_thread is not None and self._song_detection_thread.is_alive():
+                    detection_duration = now - self._song_detection_started_at
+                    if detection_duration > self._song_detection_max_duration:
+                        logger.error(
+                            "⚠️ CRITICAL: Song detection thread stuck for %.1fs - forcing restart!",
+                            detection_duration
+                        )
+                        # Release the lock if held (this is safe because we're killing the thread)
+                        if self._song_detection_lock.locked():
+                            try:
+                                self._song_detection_lock.release()
+                            except RuntimeError:
+                                pass  # Already unlocked
+                        
+                        # Reset Shazam instance to clear any stuck connections
+                        self._reset_shazam_instance(reason="stuck_detection")
+                        
+                        # Restart the detection loop
+                        if not self._restart_detection_loop():
+                            logger.error("Failed to restart detection loop after stuck thread")
+                        
+                        self._song_detection_thread = None
+                        self._song_detection_started_at = 0.0
+                        self._song_detection_stats["active"] = False
+                        self._song_detection_stats["last_error"] = "force_killed_stuck_thread"
+                
+                self.stop_event.wait(5)  # CRITICAL FIX: Check every 5 seconds (was 10)
             except Exception as e:
                 logger.error(f"Error in watchdog: {e}")
-                self.stop_event.wait(10)
+                self.stop_event.wait(5)
     
     def _healthcheck_loop(self):
         """Periodic health checks for the audio monitor and song detection."""
@@ -589,12 +623,12 @@ class AudioMonitor:
             try:
                 now = time.time()
 
-                # Guard against stale dB readings (e.g., backend stuck returning silence)
-                if self._last_db_ts and (now - self._last_db_ts) > (self._watchdog_restart_threshold * 1.5):
+                # CRITICAL FIX: Guard against stale dB readings with shorter threshold
+                if self._last_db_ts and (now - self._last_db_ts) > self._watchdog_restart_threshold:
                     if self._monitoring_thread and self._monitoring_thread.is_alive():
                         if not self._stream_restart_request.is_set() and (now - self._last_db_restart_ts) > self._db_interval:
                             logger.warning(
-                                "dB readings stale for %.1fs - requesting audio stream restart",
+                                "⚠️ dB readings stale for %.1fs - requesting audio stream restart",
                                 now - self._last_db_ts,
                             )
                             self._stream_restart_request.set()
@@ -758,8 +792,13 @@ class AudioMonitor:
     def _run_audio_loop(self, backend: str, pa_stream, sd_stream):
         """Consume audio data, compute dB, and trigger song detection."""
         consecutive_errors = 0
+        # CRITICAL FIX: Track loop iterations to detect slow/hung reads
+        loop_iteration_count = 0
+        last_health_check = time.time()
+        health_check_interval = 5.0  # Check stream health every 5 seconds
 
         while self.running and not self.stop_event.is_set():
+            loop_iteration_count += 1
             try:
                 audio_data = self._read_audio_chunk(backend, pa_stream, sd_stream)
 
@@ -816,36 +855,62 @@ class AudioMonitor:
                 self.current_db = db
                 self.peak_db = max(self.peak_db, db)
                 self._last_db_ts = now_db
-                logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
+                # CRITICAL FIX: Add loop count to help diagnose hangs
+                logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB) [loop:{loop_iteration_count}]")
 
             # Trigger song detection on cadence using buffered audio
             now_song = time.time()
             if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
                 if self._buffer_index >= self._audio_buffer_size:
                     try:
-                        if self._detect_song_from_buffer():
-                            logger.info("🎵 Running song detection from audio buffer...")
+                        # CRITICAL FIX: Check if previous detection is stuck before starting new one
+                        if self._song_detection_thread is not None and self._song_detection_thread.is_alive():
+                            detection_age = now_song - self._song_detection_started_at
+                            if detection_age > 25.0:  # Give it 25s before warning
+                                logger.warning(
+                                    f"⚠️ Previous song detection still running ({detection_age:.1f}s) - skipping"
+                                )
+                                self._last_song_detect_ts = now_song
+                            else:
+                                logger.debug(f"Song detection in progress ({detection_age:.1f}s) - skipping")
+                        else:
+                            if self._detect_song_from_buffer():
+                                logger.info("🎵 Running song detection from audio buffer...")
+                            self._last_song_detect_ts = now_song
                     except Exception as e:
                         logger.error(f"Failed to start song detection thread: {e}")
+                        self._last_song_detect_ts = now_song
                 else:
                     logger.debug(
                         "Audio buffer not ready for song detection (index: %s/%s)",
                         self._buffer_index,
                         self._audio_buffer_size,
                     )
-                self._last_song_detect_ts = now_song
+                    self._last_song_detect_ts = now_song
             elif self.song_detector is None and int(now_song) % 60 == 0:
                 logger.debug("Song detector not available - song detection disabled")
 
             # Update activity timestamp for watchdog
             self._last_activity = time.time()
+            
+            # CRITICAL FIX: Periodic stream health check to detect issues early
+            if (self._last_activity - last_health_check) >= health_check_interval:
+                last_health_check = self._last_activity
+                # Log health metrics every 5 seconds
+                if loop_iteration_count % 50 == 0:  # Don't spam logs
+                    logger.debug(
+                        f"Audio loop health: {loop_iteration_count} iterations, "
+                        f"last_db={time.time() - self._last_db_ts:.1f}s ago, "
+                        f"backend={backend}"
+                    )
 
+            # CRITICAL FIX: Check for restart request more frequently
             if self._stream_restart_request.is_set():
                 logger.info("Audio stream restart requested by watchdog")
                 self._stream_restart_request.clear()
                 raise self.StreamRuntimeError("Watchdog requested audio stream restart")
 
-            # If dB readings have stopped updating, trigger a restart
+            # CRITICAL FIX: Shorter threshold for detecting stalled dB readings
             if self._last_db_ts and (self._last_activity - self._last_db_ts) > self._watchdog_restart_threshold:
                 raise self.StreamRuntimeError(
                     f"No decibel readings emitted for {(self._last_activity - self._last_db_ts):.1f}s"
@@ -892,6 +957,11 @@ class AudioMonitor:
             temp_filename = None
             duration_sec = None
             future = None
+            
+            # CRITICAL FIX: Mark this thread as active for watchdog monitoring
+            self._song_detection_thread = threading.current_thread()
+            self._song_detection_started_at = time.time()
+            
             try:
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                     temp_filename = temp_file.name
@@ -910,22 +980,39 @@ class AudioMonitor:
                     return
 
                 result = None
+                # CRITICAL FIX: Reduce timeout from 20s to 15s and add better error handling
                 try:
                     future = asyncio.run_coroutine_threadsafe(
                         self._recognize_song_async(temp_filename),
                         self._detection_loop
                     )
-                    result = future.result(timeout=20.0)
+                    result = future.result(timeout=15.0)  # Reduced from 20s
                 except concurrent.futures.TimeoutError:
                     if future:
                         future.cancel()
-                    logger.warning("Song detection timed out (20s) - skipping")
+                    logger.warning("⚠️ Song detection timed out (15s) - forcing Shazam reset")
                     self._song_detection_stats["last_error"] = "timeout"
+                    # CRITICAL FIX: Force reset of detection loop on timeout
+                    try:
+                        self._reset_shazam_instance(reason="detection_timeout")
+                    except Exception as reset_error:
+                        logger.error(f"Error resetting Shazam after timeout: {reset_error}")
                 except Exception as detect_error:
                     logger.error(f"Song detection error: {detect_error}")
                     self._song_detection_stats["last_error"] = f"{type(detect_error).__name__}: {detect_error}"
+                    # CRITICAL FIX: Reset on any detection error to prevent cascading failures
+                    try:
+                        self._reset_shazam_instance(reason="detection_error")
+                    except Exception:
+                        pass
 
                 duration_sec = round(time.time() - start_monotonic, 2)
+
+                # CRITICAL FIX: Check if we were killed by watchdog
+                if duration_sec > self._song_detection_max_duration:
+                    logger.warning(f"Song detection took too long ({duration_sec:.1f}s) - result may be stale")
+                    self._song_detection_stats["last_error"] = "detection_timeout"
+                    return  # Don't process stale results
 
                 if result and 'track' in result:
                     track = result['track']
@@ -982,6 +1069,11 @@ class AudioMonitor:
 
                 self._song_detection_stats["last_attempt_duration_sec"] = duration_sec
                 self._song_detection_stats["active"] = False
+                
+                # CRITICAL FIX: Clear thread tracking before releasing lock
+                self._song_detection_thread = None
+                self._song_detection_started_at = 0.0
+                
                 self._song_detection_lock.release()
 
             # End detect_async
@@ -1003,7 +1095,7 @@ class AudioMonitor:
         try:
             from shazamio import Shazam
             
-            # Use a single reusable Shazam instance to prevent resource leaks
+            # CRITICAL FIX: Use a single reusable Shazam instance to prevent resource leaks
             # Creating new instances for each call causes unclosed ClientSession leaks
             # Refresh the instance periodically to prevent stale sessions
             with self._shazam_lock:
@@ -1018,7 +1110,13 @@ class AudioMonitor:
                     if self._shazam_instance is not None:
                         try:
                             if hasattr(self._shazam_instance, 'client') and hasattr(self._shazam_instance.client, 'close'):
-                                await self._shazam_instance.client.close()
+                                # CRITICAL FIX: Timeout the close operation to prevent hangs
+                                await asyncio.wait_for(
+                                    self._shazam_instance.client.close(),
+                                    timeout=2.0
+                                )
+                        except asyncio.TimeoutError:
+                            logger.warning("Timeout closing old Shazam client - forcing new instance")
                         except Exception as e:
                             logger.debug(f"Error closing old Shazam instance: {e}")
                     
@@ -1029,10 +1127,10 @@ class AudioMonitor:
                 
                 shazam = self._shazam_instance
             
-            # Add 15 second timeout to prevent hanging
+            # CRITICAL FIX: Reduce timeout from 15s to 10s to catch hangs faster
             result = await asyncio.wait_for(
                 shazam.recognize(audio_file),
-                timeout=15.0
+                timeout=10.0
             )
             return result
         except ImportError as e:
@@ -1040,13 +1138,21 @@ class AudioMonitor:
             logger.error("Install with: pip install shazamio aiohttp")
             return None
         except asyncio.TimeoutError:
-            logger.warning("Song recognition timed out after 15 seconds")
+            logger.warning("⚠️ Song recognition timed out after 10 seconds - Shazam API may be slow")
+            # CRITICAL FIX: Reset Shazam instance on timeout to clear stuck connections
+            with self._shazam_lock:
+                self._shazam_instance = None
+                self._shazam_created_at = 0.0
             return None
         except asyncio.CancelledError:
             logger.debug("Song recognition coroutine cancelled")
             raise
         except Exception as e:
             logger.error(f"Shazam recognition error: {type(e).__name__}: {e}")
+            # CRITICAL FIX: Reset Shazam instance on error to prevent cascading failures
+            with self._shazam_lock:
+                self._shazam_instance = None
+                self._shazam_created_at = 0.0
             return None
     
     def stop_monitoring(self):
