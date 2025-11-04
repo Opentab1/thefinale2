@@ -532,81 +532,109 @@ class PulseHub:
                 data["pressure"] = pressure
 
     def _store_sensor_data(self, data: dict):
-        """Store sensor data in database with retry logic"""
+        """Store sensor data in database with retry logic and timeout protection"""
         max_retries = 3
         retry_delay = 1  # seconds
+        db_timeout = 5.0  # Maximum time to wait for DB operations
         
         for attempt in range(max_retries):
             try:
-                # Occupancy + traffic
-                if data.get("occupancy") is not None:
-                    self.db.log_occupancy(
-                        "Main Floor",
-                        int(data["occupancy"]),
-                        entry_count=int(data.get("entries", 0)),
-                        exit_count=int(data.get("exits", 0))
-                    )
+                # Use threading to add timeout protection to DB operations
+                import threading
+                db_result = {"success": False, "error": None, "completed": False}
                 
-                # Environment - ensure readings are finite before persisting
-                temp_f = self._sanitize_environment_value(data.get("temperature_f"))
-                humidity = self._sanitize_environment_value(data.get("humidity"))
-                pressure = self._sanitize_environment_value(data.get("pressure"))
-                light = self._sanitize_environment_value(data.get("light_level"))
-                noise = self._sanitize_environment_value(data.get("noise_db"))
+                def db_operation():
+                    try:
+                        # Occupancy + traffic
+                        if data.get("occupancy") is not None:
+                            self.db.log_occupancy(
+                                "Main Floor",
+                                int(data["occupancy"]),
+                                entry_count=int(data.get("entries", 0)),
+                                exit_count=int(data.get("exits", 0))
+                            )
+                        
+                        # Environment - ensure readings are finite before persisting
+                        temp_f = self._sanitize_environment_value(data.get("temperature_f"))
+                        humidity = self._sanitize_environment_value(data.get("humidity"))
+                        pressure = self._sanitize_environment_value(data.get("pressure"))
+                        light = self._sanitize_environment_value(data.get("light_level"))
+                        noise = self._sanitize_environment_value(data.get("noise_db"))
 
-                if any(value is not None for value in (temp_f, humidity, pressure, light, noise)):
-                    logger.debug(
-                        "Storing environment data: temp=%s, humidity=%s, pressure=%s, light=%s, noise=%s",
-                        temp_f,
-                        humidity,
-                        pressure,
-                        light,
-                        noise
-                    )
+                        if any(value is not None for value in (temp_f, humidity, pressure, light, noise)):
+                            logger.debug(
+                                "Storing environment data: temp=%s, humidity=%s, pressure=%s, light=%s, noise=%s",
+                                temp_f,
+                                humidity,
+                                pressure,
+                                light,
+                                noise
+                            )
 
-                    self.db.log_environment(
-                        temperature=temp_f,
-                        humidity=humidity,
-                        pressure=pressure,
-                        light_level=light,
-                        noise_level=noise
-                    )
-                else:
-                    logger.debug("Skipping environment log - no valid readings available")
+                            self.db.log_environment(
+                                temperature=temp_f,
+                                humidity=humidity,
+                                pressure=pressure,
+                                light_level=light,
+                                noise_level=noise
+                            )
+                        else:
+                            logger.debug("Skipping environment log - no valid readings available")
+                        
+                        # Skip verification to avoid extra DB calls that could hang
+                        
+                        # Music
+                        song = data.get("current_song")
+                        if song and song.get("title") not in (None, "Unknown", ""):
+                            volume = 0
+                            if self.music_controller:
+                                try:
+                                    current = self.music_controller.get_current_track()
+                                    volume = current.get("volume_percent", 0)
+                                except:
+                                    pass
+                            
+                            self.db.log_music(
+                                song["title"],
+                                song.get("artist", "Unknown"),
+                                volume
+                            )
+                        
+                        db_result["success"] = True
+                        db_result["completed"] = True
+                    except Exception as op_error:
+                        db_result["error"] = str(op_error)
+                        db_result["completed"] = True
                 
-                # Verify it was stored by reading it back
-                if temp_f is not None:
-                    latest_env = self.db.get_latest_environment()
-                    if latest_env:
-                        stored_temp = self._sanitize_environment_value(latest_env.get("temperature"))
-                        if stored_temp is not None:
-                            if abs(stored_temp - temp_f) > 0.5:
-                                logger.warning(f"Temperature mismatch: stored {stored_temp}, expected {temp_f}")
-                            else:
-                                logger.debug(f"Temperature verified in DB: {stored_temp}°F")
+                # Run DB operation in a thread with timeout
+                db_thread = threading.Thread(target=db_operation, daemon=True)
+                db_thread.start()
+                db_thread.join(timeout=db_timeout)
                 
-                # Music
-                song = data.get("current_song")
-                if song and song.get("title") not in (None, "Unknown", ""):
-                    volume = 0
-                    if self.music_controller:
-                        try:
-                            current = self.music_controller.get_current_track()
-                            volume = current.get("volume_percent", 0)
-                        except:
-                            pass
-                    
-                    self.db.log_music(
-                        song["title"],
-                        song.get("artist", "Unknown"),
-                        volume
-                    )
+                if not db_result["completed"]:
+                    logger.warning(f"Database operation timed out after {db_timeout}s (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        logger.error("Database operations timed out after all retries - skipping this write cycle")
+                        return  # Skip this write cycle rather than blocking indefinitely
                 
-                # If we got here, storage was successful
+                if not db_result["success"]:
+                    error_msg = db_result.get("error", "Unknown error")
+                    logger.error(f"Database operation failed: {error_msg} (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        logger.error("Failed to store sensor data after all retries")
+                        return  # Don't block on persistent DB errors
+                
+                # Success - exit retry loop
                 break
                 
             except Exception as e:
-                logger.error(f"Error storing sensor data (attempt {attempt + 1}/{max_retries}): {e}")
+                logger.error(f"Error in database storage wrapper (attempt {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
                 else:
