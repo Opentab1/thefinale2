@@ -104,6 +104,10 @@ class AudioMonitor:
             "active": False,
         }
 
+        self._health_thread = None
+        self._health_check_interval = max(15.0, self._song_detect_interval / 2)
+        self._last_db_restart_ts = 0.0
+
         # Dedicated async event loop for song recognition to keep Shazam stable
         self._detection_loop = None
         self._detection_loop_thread = None
@@ -276,7 +280,13 @@ class AudioMonitor:
     def _ensure_detection_loop(self) -> bool:
         """Ensure the dedicated async loop for Shazam runs in a background thread."""
         if self._detection_loop is not None:
-            return True
+            thread = self._detection_loop_thread
+            loop = self._detection_loop
+            if thread is None or not thread.is_alive() or (loop is not None and loop.is_closed()):
+                logger.warning("Song detection loop thread unhealthy - restarting")
+                self._shutdown_detection_loop()
+            else:
+                return True
 
         with self._detection_loop_lock:
             if self._detection_loop is not None:
@@ -342,6 +352,46 @@ class AudioMonitor:
             except Exception:
                 logger.debug("Song detection loop close raised", exc_info=True)
 
+    def _restart_detection_loop(self) -> bool:
+        """Restart the song detection event loop."""
+        self._shutdown_detection_loop()
+        if self._ensure_detection_loop():
+            logger.info("Song detection event loop restarted")
+            return True
+        return False
+
+    def _is_detection_loop_healthy(self, probe_timeout: float = 2.0) -> bool:
+        """Determine if the detection loop thread is alive and responsive."""
+        loop = self._detection_loop
+        thread = self._detection_loop_thread
+
+        if loop is None or thread is None:
+            return False
+
+        if loop.is_closed():
+            return False
+
+        if not thread.is_alive():
+            return False
+
+        future = None
+        try:
+            future = asyncio.run_coroutine_threadsafe(self._loop_ping(), loop)
+            future.result(timeout=probe_timeout)
+            return True
+        except concurrent.futures.TimeoutError:
+            if future is not None:
+                future.cancel()
+            logger.warning("Song detection event loop health probe timed out")
+            return False
+        except Exception as exc:
+            logger.debug("Song detection event loop health probe failed: %s", exc, exc_info=True)
+            return False
+
+    async def _loop_ping(self):
+        """Tiny coroutine used to ensure the detection loop is processing tasks."""
+        return True
+
     def calculate_db(self, audio_data: np.ndarray) -> float:
         """Calculate decibel level from audio data"""
         try:
@@ -404,6 +454,7 @@ class AudioMonitor:
         
         self.running = True
         self.stop_event.clear()
+        self._last_db_restart_ts = 0.0
         
         # Start monitoring thread
         self._start_monitoring_thread()
@@ -411,6 +462,15 @@ class AudioMonitor:
         # Start watchdog thread to restart if monitoring crashes
         watchdog_thread = Thread(target=self._watchdog_loop, daemon=True)
         watchdog_thread.start()
+
+        if self._health_thread is None or not self._health_thread.is_alive():
+            self._health_thread = Thread(
+                target=self._healthcheck_loop,
+                name="AudioMonitorHealth",
+                daemon=True,
+            )
+            self._health_thread.start()
+            logger.debug("Audio monitor healthcheck thread launched")
         
         logger.info("Started audio monitoring with watchdog")
     
@@ -449,6 +509,42 @@ class AudioMonitor:
                 logger.error(f"Error in watchdog: {e}")
                 self.stop_event.wait(10)
     
+    def _healthcheck_loop(self):
+        """Periodic health checks for the audio monitor and song detection."""
+        logger.debug("Audio monitor healthcheck thread started")
+        while self.running and not self.stop_event.is_set():
+            try:
+                now = time.time()
+
+                # Guard against stale dB readings (e.g., backend stuck returning silence)
+                if self._last_db_ts and (now - self._last_db_ts) > (self._watchdog_restart_threshold * 1.5):
+                    if self._monitoring_thread and self._monitoring_thread.is_alive():
+                        if not self._stream_restart_request.is_set() and (now - self._last_db_restart_ts) > self._db_interval:
+                            logger.warning(
+                                "dB readings stale for %.1fs - requesting audio stream restart",
+                                now - self._last_db_ts,
+                            )
+                            self._stream_restart_request.set()
+                            self._last_db_restart_ts = now
+
+                # Validate the async song detection loop when detection not already running
+                if self.song_detector is not None and not self._song_detection_stats.get("active", False):
+                    if not self._is_detection_loop_healthy():
+                        logger.warning("Song detection loop unresponsive - attempting restart")
+                        if not self._restart_detection_loop():
+                            logger.error("Failed to restart song detection loop - disabling detection")
+                            self._song_detection_stats["last_error"] = "loop_restart_failed"
+                            self._song_detection_stats["active"] = False
+                            self.song_detector = None
+
+                self.stop_event.wait(self._health_check_interval)
+            except Exception as exc:
+                logger.error(f"Error in audio monitor healthcheck: {exc}", exc_info=True)
+                self.stop_event.wait(self._health_check_interval)
+
+        logger.debug("Audio monitor healthcheck thread stopped")
+        self._health_thread = None
+
     def _monitoring_loop(self):
         """Main monitoring loop with automatic recovery for stream failures."""
         logger.debug("Audio monitoring loop thread started")
@@ -885,6 +981,13 @@ class AudioMonitor:
         self.running = False
         self.stop_event.set()
         self._stream_restart_request.clear()
+
+        if self._health_thread and self._health_thread.is_alive():
+            try:
+                self._health_thread.join(timeout=2.0)
+            except Exception:
+                pass
+        self._health_thread = None
     
     def get_current_db(self) -> float:
         """Get current decibel level"""
