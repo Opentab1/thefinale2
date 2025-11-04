@@ -51,7 +51,7 @@ $PIP install shazamio "aiohttp<4.0.0"
 echo ""
 
 echo "Installing temperature sensor packages..."
-$PIP install adafruit-blinka adafruit-circuitpython-bme280
+$PIP install adafruit-blinka adafruit-circuitpython-bme280 adafruit-extended-bus
 echo ""
 
 echo "✓ All Python packages installed"
@@ -71,6 +71,9 @@ $PYTHON -c "from shazamio import Shazam; print('✓ OK')" || echo "✗ FAILED"
 
 echo -n "BME280: "
 $PYTHON -c "import adafruit_bme280; print('✓ OK')" || echo "✗ FAILED"
+
+echo -n "adafruit_extended_bus: "
+$PYTHON -c "import adafruit_extended_bus; print('✓ OK')" || echo "✗ FAILED"
 
 echo ""
 

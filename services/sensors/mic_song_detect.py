@@ -69,6 +69,9 @@ class AudioMonitor:
         self.running = False
         self.stop_event = Event()
 
+        # Track which backend we ultimately open so that diagnostics/logs are clearer
+        self._active_backend = None  # "pyaudio", "sounddevice", or None
+
         self.current_db = 0.0
         self.peak_db = 0.0
         self.current_song = None
@@ -129,7 +132,15 @@ class AudioMonitor:
 
         # Validate and pick an input device
         self._validate_device()
-        logger.info(f"Audio monitor initialized (device: {self.device_index}, backend: {'PyAudio' if PYAUDIO_AVAILABLE and self.pyaudio_instance else 'sounddevice'})")
+        backend_label = (
+            "PyAudio" if PYAUDIO_AVAILABLE and self.pyaudio_instance
+            else ("sounddevice" if SOUNDDEVICE_AVAILABLE else "unknown")
+        )
+        logger.info(
+            "Audio monitor initialized (device: %s, backend preference: %s)",
+            "default" if self.device_index is None else self.device_index,
+            backend_label
+        )
     
     def _validate_device(self):
         """Validate and pick the best audio input device automatically.
@@ -212,9 +223,15 @@ class AudioMonitor:
                     logger.debug(f"sounddevice device scan failed: {e}")
 
             if self.device_index is None:
+                logger.warning("No specific audio input device chosen – default device will be used if available")
+                if SOUNDDEVICE_AVAILABLE or (PYAUDIO_AVAILABLE and self.pyaudio_instance):
+                    # Nothing else to do; we'll rely on backend defaults when opening the stream
+                    return
                 logger.warning("No input audio device found; audio monitoring will be disabled")
+                self.log_available_devices()
         except Exception as e:
             logger.error(f"Audio device validation failed: {e}")
+            self.log_available_devices()
     
     def calculate_db(self, audio_data: np.ndarray) -> float:
         """Calculate decibel level from audio data"""
@@ -323,49 +340,59 @@ class AudioMonitor:
         try:
             # Try PyAudio first
             if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None:
-                if self.device_index is None:
-                    logger.error("No audio input device found; cannot open audio stream")
-                    logger.warning("Audio monitoring will be disabled")
-                else:
-                    try:
-                        pa_stream = self.pyaudio_instance.open(
-                            format=pyaudio.paInt16,  # type: ignore[attr-defined]
-                            channels=1,
-                            rate=self.sample_rate,
-                            input=True,
-                            input_device_index=self.device_index,
-                            frames_per_buffer=self.chunk_size
-                        )
-                        stream_opened = True
-                        logger.info(f"✓ Audio stream opened successfully (PyAudio, device {self.device_index})")
-                    except Exception as e:
-                        logger.error(f"Failed to open PyAudio stream: {e}")
-                        logger.error(f"  Error details: {type(e).__name__}: {str(e)}")
-                        # Try sounddevice as fallback if available
-                        if SOUNDDEVICE_AVAILABLE:
-                            logger.info("Attempting fallback to sounddevice...")
-            
+                try:
+                    pa_kwargs = {
+                        "format": pyaudio.paInt16,  # type: ignore[attr-defined]
+                        "channels": 1,
+                        "rate": self.sample_rate,
+                        "input": True,
+                        "frames_per_buffer": self.chunk_size,
+                    }
+                    if self.device_index is not None:
+                        pa_kwargs["input_device_index"] = self.device_index
+                    else:
+                        logger.debug("Opening PyAudio stream using default input device")
+                    pa_stream = self.pyaudio_instance.open(**pa_kwargs)
+                    stream_opened = True
+                    self._active_backend = "pyaudio"
+                    logger.info(
+                        "✓ Audio stream opened successfully (PyAudio, device: %s)",
+                        self.device_index if self.device_index is not None else "default"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to open PyAudio stream: {e}")
+                    logger.error(f"  Error details: {type(e).__name__}: {str(e)}")
+                    # Try sounddevice as fallback if available
+                    if SOUNDDEVICE_AVAILABLE:
+                        logger.info("Attempting fallback to sounddevice...")
+
             # Try sounddevice if PyAudio didn't work or isn't available
             if not stream_opened and SOUNDDEVICE_AVAILABLE:
-                if self.device_index is None:
-                    logger.error("No audio input device found; cannot open audio stream")
-                    logger.warning("Audio monitoring will be disabled")
-                else:
-                    try:
-                        sd_stream = sd.InputStream(  # type: ignore[call-arg]
-                            samplerate=self.sample_rate,
-                            dtype='int16',
-                            channels=1,
-                            blocksize=self.chunk_size,
-                            device=self.device_index,
-                        )
-                        sd_stream.start()
-                        stream_opened = True
-                        logger.info(f"✓ Audio stream opened successfully (sounddevice, device {self.device_index})")
-                    except Exception as e:
-                        logger.error(f"Failed to open sounddevice stream: {e}")
-                        logger.error(f"  Error details: {type(e).__name__}: {str(e)}")
-            
+                try:
+                    sd_kwargs = {
+                        "samplerate": self.sample_rate,
+                        "dtype": "int16",
+                        "channels": 1,
+                        "blocksize": self.chunk_size,
+                    }
+                    if self.device_index is not None:
+                        sd_kwargs["device"] = self.device_index
+                    else:
+                        logger.debug("Opening sounddevice stream using default input device")
+                        # Explicitly set device=None to use default input while making intent clear
+                        sd_kwargs["device"] = None
+                    sd_stream = sd.InputStream(**sd_kwargs)  # type: ignore[call-arg]
+                    sd_stream.start()
+                    stream_opened = True
+                    self._active_backend = "sounddevice"
+                    logger.info(
+                        "✓ Audio stream opened successfully (sounddevice, device: %s)",
+                        self.device_index if self.device_index is not None else "default"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to open sounddevice stream: {e}")
+                    logger.error(f"  Error details: {type(e).__name__}: {str(e)}")
+
             if not stream_opened:
                 logger.error("="*80)
                 logger.error("CRITICAL: Could not open any audio stream!")
@@ -375,6 +402,7 @@ class AudioMonitor:
                 logger.error("  2. Device permissions: arecord -d 1 test.wav")
                 logger.error("  3. Dependencies installed: pip install pyaudio sounddevice")
                 logger.error("="*80)
+                self.log_available_devices()
                 # Still run the loop for song detection, but no dB readings
             else:
                 logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
@@ -402,7 +430,7 @@ class AudioMonitor:
 
                     if audio_data.size == 0:
                         continue
-                    
+
                     # Store audio in rolling buffer for song detection
                     chunk_len = min(len(audio_data), self._audio_buffer_size)
                     if self._buffer_index + chunk_len <= self._audio_buffer_size:
@@ -415,17 +443,17 @@ class AudioMonitor:
                         self._audio_buffer = np.roll(self._audio_buffer, -shift_amount)
                         self._audio_buffer[-shift_amount:] = audio_data[:chunk_len]
                         self._buffer_index = self._audio_buffer_size  # Buffer is full
-                    
+
                     # Calculate dB level more frequently for better responsiveness (every 2 seconds)
                     now_db = time.time()
-                    if (now_db - self._last_db_ts) >= 2.0:  # Update every 2 seconds
+                    if (now_db - self._last_db_ts) >= self._db_interval:
                         db = self.calculate_db(audio_data)
                         self.current_db = db
                         self.peak_db = max(self.peak_db, db)
                         self._last_db_ts = now_db
                         self._last_activity = now_db  # Update watchdog
                         logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
-                    
+
                     # Trigger song detection every 30 seconds using buffered audio
                     # Run in non-blocking way to prevent hanging
                     now_song = time.time()
@@ -438,18 +466,20 @@ class AudioMonitor:
                             except Exception as e:
                                 logger.error(f"Failed to start song detection thread: {e}")
                         else:
-                            logger.debug(f"Audio buffer not ready for song detection (index: {self._buffer_index}/{self._audio_buffer_size})")
+                            logger.debug(
+                                f"Audio buffer not ready for song detection (index: {self._buffer_index}/{self._audio_buffer_size})"
+                            )
                         self._last_song_detect_ts = now_song
                         self._last_activity = now_song  # Update watchdog
                     elif self.song_detector is None:
                         # Log occasionally if song detector is not available
                         if int(now_song) % 60 == 0:  # Log once per minute
                             logger.debug("Song detector not available - song detection disabled")
-                    
+
                     # CRITICAL: Always update last_activity even if no song detection
                     # This prevents watchdog from thinking we're stuck
                     self._last_activity = time.time()
-                    
+
                 except Exception as e:
                     logger.error(f"Error in monitoring loop: {e}")
                     import traceback
@@ -660,6 +690,35 @@ class AudioMonitor:
                 self.pyaudio_instance.terminate()
         except Exception:
             pass
+
+    def log_available_devices(self):
+        """Log detected audio input devices to help field diagnostics."""
+        try:
+            if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None:
+                try:
+                    device_count = self.pyaudio_instance.get_device_count()
+                except Exception:
+                    device_count = 0
+                logger.info("PyAudio reports %s devices", device_count)
+                for idx in range(device_count):
+                    try:
+                        info = self.pyaudio_instance.get_device_info_by_index(idx)
+                        if info.get('maxInputChannels', 0) > 0:
+                            logger.info("  • Input %s: %s (channels: %s)", idx, info.get('name'), info.get('maxInputChannels'))
+                    except Exception:
+                        continue
+            if SOUNDDEVICE_AVAILABLE:
+                try:
+                    devices = sd.query_devices()  # type: ignore[attr-defined]
+                    logger.info("sounddevice shows %s devices", len(devices))
+                    for idx, info in enumerate(devices):
+                        max_in = info.get('max_input_channels', 0)
+                        if max_in and int(max_in) > 0:
+                            logger.info("  • Input %s: %s (channels: %s)", idx, info.get('name'), max_in)
+                except Exception as e:
+                    logger.debug(f"Failed to query sounddevice devices: {e}")
+        except Exception as outer:
+            logger.debug(f"Device enumeration failed: {outer}")
 
 
 if __name__ == "__main__":

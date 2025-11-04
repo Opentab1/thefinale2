@@ -9,6 +9,13 @@ from threading import Thread, Event
 from datetime import datetime
 from typing import Optional, Dict
 
+try:
+    from adafruit_extended_bus import ExtendedI2C  # type: ignore
+    EXTENDED_I2C_AVAILABLE = True
+except ImportError:
+    ExtendedI2C = None  # type: ignore
+    EXTENDED_I2C_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 class BME280Reader:
@@ -21,6 +28,8 @@ class BME280Reader:
         self.temperature = None
         self.humidity = None
         self.pressure = None
+        self._i2c_bus = None
+        self._last_success_read = None
         
         self._init_sensor()
     
@@ -34,14 +43,27 @@ class BME280Reader:
             
             logger.debug(f"Attempting to initialize BME280 at address {hex(self.address)}")
             
-            # Create I2C bus using busio (more reliable on Pi 5)
-            try:
-                i2c = busio.I2C(board.SCL, board.SDA)
-                logger.debug("I2C bus created successfully using busio.I2C()")
-            except Exception as e:
-                logger.debug(f"busio.I2C() failed ({e}), falling back to board.I2C()")
-                # Fallback to board.I2C() if busio fails
-                i2c = board.I2C()
+            i2c = self._i2c_bus
+            if i2c is None:
+                # Create I2C bus using busio (more reliable on Pi 5)
+                try:
+                    i2c = busio.I2C(board.SCL, board.SDA)
+                    logger.debug("I2C bus created successfully using busio.I2C()")
+                except Exception as e:
+                    logger.debug(f"busio.I2C() failed ({e}), attempting ExtendedI2C fallback")
+                    i2c = None
+                    if EXTENDED_I2C_AVAILABLE:
+                        try:
+                            i2c = ExtendedI2C(1)  # type: ignore[call-arg]
+                            logger.debug("ExtendedI2C(1) created successfully")
+                        except Exception as e_ext:
+                            logger.debug(f"ExtendedI2C fallback failed: {e_ext}")
+                    if i2c is None:
+                        logger.debug("Falling back to board.I2C()")
+                        i2c = board.I2C()
+                self._i2c_bus = i2c
+            else:
+                logger.debug("Reusing cached I2C bus for BME280")
             
             # Try to initialize sensor at primary address
             try:
@@ -97,6 +119,7 @@ class BME280Reader:
             self.temperature = temp_f
             self.humidity = humidity
             self.pressure = pressure
+            self._last_success_read = time.time()
             
             return {
                 "temperature_f": round(temp_f, 1),
@@ -109,6 +132,12 @@ class BME280Reader:
             
         except Exception as e:
             logger.error(f"Error reading sensor: {e}")
+            # Attempt reinitialization once if sensor appears to have dropped
+            try:
+                logger.debug("Attempting to reinitialize BME280 after read failure")
+                self._init_sensor()
+            except Exception as reinit_error:
+                logger.error(f"Reinitialization after read failure also failed: {reinit_error}")
             return {}
     
     def start_reading(self, interval: int = 30):
@@ -214,7 +243,7 @@ class BME280Reader:
         """Get all current readings"""
         return {
             "temperature_f": self.temperature,
-            "temperature_c": (self.temperature - 32) * 5/9 if self.temperature else None,
+            "temperature_c": (self.temperature - 32) * 5/9 if self.temperature is not None else None,
             "humidity": self.humidity,
             "pressure": self.pressure,
             "timestamp": datetime.now().isoformat()
