@@ -1,0 +1,9 @@
+{
+  "endpoint": "YOUR_IOT_ENDPOINT.ats.iot.us-east-1.amazonaws.com",
+  "thing_name": "pulse-rpi5",
+  "certificate_path": "/opt/pulse/aws/certificates/device-certificate.pem",
+  "private_key_path": "/opt/pulse/aws/certificates/device-private-key.pem.key",
+  "root_ca_path": "/opt/pulse/aws/certificates/AmazonRootCA1.pem",
+  "upload_interval_seconds": 30,
+  "topic": "pulse/sensors/data"
+}
