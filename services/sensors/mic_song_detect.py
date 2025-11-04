@@ -120,6 +120,18 @@ class AudioMonitor:
         self._max_consecutive_read_errors = 3
         self._watchdog_restart_threshold = max(60.0, self._song_detect_interval * 4)
         self._stream_restart_request = Event()
+
+        try:
+            poll_interval = float(os.getenv('AUDIO_INPUT_POLL_INTERVAL_SEC', '0.1'))
+        except (TypeError, ValueError):
+            poll_interval = 0.1
+        self._input_poll_interval = max(0.01, poll_interval)
+
+        try:
+            input_timeout = float(os.getenv('AUDIO_INPUT_TIMEOUT_SEC', '5.0'))
+        except (TypeError, ValueError):
+            input_timeout = 5.0
+        self._input_timeout_sec = max(self._input_poll_interval, input_timeout)
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
         # This allows song detection without opening a separate audio stream
@@ -855,13 +867,69 @@ class AudioMonitor:
         """Read a chunk of audio data from the active backend."""
         try:
             if backend == "pyaudio" and pa_stream is not None:
+                deadline = time.time() + self._input_timeout_sec
+                while True:
+                    try:
+                        if hasattr(pa_stream, "is_active") and not pa_stream.is_active():
+                            raise self.StreamRuntimeError("PyAudio stream inactive")
+                        available = pa_stream.get_read_available()
+                    except Exception as read_exc:  # noqa: BLE001
+                        logger.debug("PyAudio get_read_available failed: %s", read_exc, exc_info=True)
+                        if hasattr(pa_stream, "is_stopped") and pa_stream.is_stopped():
+                            raise self.StreamRuntimeError("PyAudio stream stopped unexpectedly") from read_exc
+                        available = 0
+
+                    if available >= self.chunk_size:
+                        break
+
+                    if self._stream_restart_request.is_set():
+                        raise self.StreamRuntimeError("Watchdog requested audio stream restart")
+
+                    if time.time() >= deadline:
+                        raise self.StreamRuntimeError(
+                            f"PyAudio input timed out after {self._input_timeout_sec:.1f}s without frames"
+                        )
+
+                    if self.stop_event.wait(self._input_poll_interval):
+                        return None
+
                 audio_bytes = pa_stream.read(self.chunk_size, exception_on_overflow=False)
+                if not audio_bytes:
+                    raise self.StreamRuntimeError("PyAudio returned empty audio buffer")
                 return np.frombuffer(audio_bytes, dtype=np.int16)
 
             if backend == "sounddevice" and sd_stream is not None:
-                audio_data, _ = sd_stream.read(self.chunk_size)  # type: ignore[union-attr]
+                deadline = time.time() + self._input_timeout_sec
+                while True:
+                    try:
+                        if hasattr(sd_stream, "active") and not sd_stream.active:
+                            raise self.StreamRuntimeError("sounddevice stream inactive")
+                        available = int(getattr(sd_stream, "read_available", 0))
+                    except Exception as read_exc:  # noqa: BLE001
+                        logger.debug("sounddevice read_available failed: %s", read_exc, exc_info=True)
+                        available = 0
+
+                    if available >= self.chunk_size:
+                        break
+
+                    if self._stream_restart_request.is_set():
+                        raise self.StreamRuntimeError("Watchdog requested audio stream restart")
+
+                    if time.time() >= deadline:
+                        raise self.StreamRuntimeError(
+                            f"sounddevice input timed out after {self._input_timeout_sec:.1f}s without frames"
+                        )
+
+                    if self.stop_event.wait(self._input_poll_interval):
+                        return None
+
+                audio_data, overflowed = sd_stream.read(self.chunk_size)  # type: ignore[union-attr]
+                if overflowed:
+                    logger.warning("sounddevice input overflow detected")
                 if isinstance(audio_data, np.ndarray) and audio_data.ndim > 1:
                     audio_data = audio_data[:, 0]
+                if isinstance(audio_data, np.ndarray) and audio_data.dtype != np.int16:
+                    audio_data = (audio_data.astype(np.float32) * 32768.0).clip(-32768, 32767).astype(np.int16)
                 return audio_data.astype(np.int16, copy=False)
 
             raise self.StreamRuntimeError(f"No valid audio backend active (backend={backend})")
