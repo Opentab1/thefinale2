@@ -287,10 +287,16 @@ class AudioMonitor:
                 ready_event = Event()
 
                 def _loop_runner():
-                    asyncio.set_event_loop(loop)
-                    ready_event.set()
-                    logger.debug("Song detection event loop started")
-                    loop.run_forever()
+                    try:
+                        asyncio.set_event_loop(loop)
+                        ready_event.set()
+                        logger.debug("Song detection event loop started")
+                        loop.run_forever()
+                    except Exception as loop_error:
+                        logger.error(f"FATAL: Song detection event loop crashed: {loop_error}", exc_info=True)
+                        logger.error("Event loop will exit - watchdog will restart it")
+                    finally:
+                        logger.info("Song detection event loop runner exited")
 
                 thread = Thread(target=_loop_runner, name="AudioMonitorSongLoop", daemon=True)
                 thread.start()
@@ -317,6 +323,28 @@ class AudioMonitor:
                 logger.error(f"Failed to initialize song detection loop: {exc}")
                 return False
 
+    def _restart_detection_loop(self):
+        """Restart the song detection event loop after a crash"""
+        try:
+            logger.info("Restarting song detection event loop...")
+            
+            # Shutdown old loop
+            self._shutdown_detection_loop()
+            
+            # Small delay to ensure cleanup
+            time.sleep(0.5)
+            
+            # Restart the loop
+            if self._ensure_detection_loop():
+                logger.info("✅ Song detection event loop restarted successfully")
+            else:
+                logger.error("❌ Failed to restart song detection event loop")
+                
+        except Exception as e:
+            logger.error(f"Error restarting detection loop: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
     def _shutdown_detection_loop(self):
         """Stop and clean up the dedicated song detection loop."""
         with self._detection_loop_lock:
@@ -428,14 +456,14 @@ class AudioMonitor:
             try:
                 # Check if monitoring thread is alive
                 if self._monitoring_thread is None or not self._monitoring_thread.is_alive():
-                    logger.error("Audio monitoring thread died! Restarting...")
+                    logger.error("🚨 Audio monitoring thread died! Restarting...")
                     self._start_monitoring_thread()
                 else:
                     now = time.time()
                     inactivity = now - self._last_activity
                     if inactivity > self._watchdog_restart_threshold and self._monitoring_backend is not None:
                         logger.warning(
-                            "Audio monitoring stalled (no activity for %.1fs, backend=%s) - restarting stream",
+                            "🚨 Audio monitoring stalled (no activity for %.1fs, backend=%s) - restarting stream",
                             inactivity,
                             self._monitoring_backend
                         )
@@ -444,65 +472,82 @@ class AudioMonitor:
                     elif inactivity > self._watchdog_restart_threshold:
                         self._last_activity = now  # Prevent repeated warnings when backend is inactive
                 
+                # CRITICAL: Check if song detection event loop is still alive
+                if self.song_detector is not None and self._detection_loop is not None:
+                    loop_thread = self._detection_loop_thread
+                    if loop_thread is None or not loop_thread.is_alive():
+                        logger.error("🚨 Song detection event loop died! Restarting...")
+                        self._restart_detection_loop()
+                
                 self.stop_event.wait(10)  # Check every 10 seconds
             except Exception as e:
                 logger.error(f"Error in watchdog: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 self.stop_event.wait(10)
     
     def _monitoring_loop(self):
         """Main monitoring loop with automatic recovery for stream failures."""
         logger.debug("Audio monitoring loop thread started")
-        while self.running and not self.stop_event.is_set():
-            backend = None
-            pa_stream = None
-            sd_stream = None
+        
+        try:
+            while self.running and not self.stop_event.is_set():
+                backend = None
+                pa_stream = None
+                sd_stream = None
 
-            try:
-                backend, pa_stream, sd_stream = self._open_audio_stream(self._stream_restart_count)
-                self._monitoring_backend = backend
-                self._stream_restart_count = 0
-                logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
-                self._stream_restart_request.clear()
-                self._run_audio_loop(backend, pa_stream, sd_stream)
+                try:
+                    backend, pa_stream, sd_stream = self._open_audio_stream(self._stream_restart_count)
+                    self._monitoring_backend = backend
+                    self._stream_restart_count = 0
+                    logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
+                    self._stream_restart_request.clear()
+                    self._run_audio_loop(backend, pa_stream, sd_stream)
 
-                # If run_audio_loop returns normally, monitoring was stopped intentionally
-                break
-
-            except self.StreamInitError as init_error:
-                self._stream_restart_count += 1
-                wait_time = min(5.0, 1.0 + self._stream_restart_count)
-                logger.error(
-                    "Audio stream initialization failed (attempt %d): %s",
-                    self._stream_restart_count,
-                    init_error,
-                )
-                if self.stop_event.wait(wait_time):
+                    # If run_audio_loop returns normally, monitoring was stopped intentionally
                     break
 
-            except self.StreamRuntimeError as runtime_error:
-                self._stream_restart_count += 1
-                wait_time = min(5.0, 1.5 * self._stream_restart_count)
-                logger.warning(
-                    "Audio stream runtime failure detected: %s -- restarting stream (attempt %d)",
-                    runtime_error,
-                    self._stream_restart_count,
-                )
-                if self.stop_event.wait(wait_time):
-                    break
-                continue
+                except self.StreamInitError as init_error:
+                    self._stream_restart_count += 1
+                    wait_time = min(5.0, 1.0 + self._stream_restart_count)
+                    logger.error(
+                        "Audio stream initialization failed (attempt %d): %s",
+                        self._stream_restart_count,
+                        init_error,
+                    )
+                    if self.stop_event.wait(wait_time):
+                        break
 
-            except Exception as unexpected:
-                self._stream_restart_count += 1
-                wait_time = min(5.0, 1.5 * self._stream_restart_count)
-                logger.error("Unexpected audio monitoring error: %s", unexpected, exc_info=True)
-                if self.stop_event.wait(wait_time):
-                    break
+                except self.StreamRuntimeError as runtime_error:
+                    self._stream_restart_count += 1
+                    wait_time = min(5.0, 1.5 * self._stream_restart_count)
+                    logger.warning(
+                        "Audio stream runtime failure detected: %s -- restarting stream (attempt %d)",
+                        runtime_error,
+                        self._stream_restart_count,
+                    )
+                    if self.stop_event.wait(wait_time):
+                        break
+                    continue
 
-            finally:
-                self._monitoring_backend = None
-                self._close_audio_stream(pa_stream, sd_stream)
+                except Exception as unexpected:
+                    self._stream_restart_count += 1
+                    wait_time = min(5.0, 1.5 * self._stream_restart_count)
+                    logger.error("Unexpected audio monitoring error: %s", unexpected, exc_info=True)
+                    if self.stop_event.wait(wait_time):
+                        break
 
-        logger.info("Audio monitoring stopped")
+                finally:
+                    self._monitoring_backend = None
+                    self._close_audio_stream(pa_stream, sd_stream)
+
+            logger.info("Audio monitoring stopped")
+            
+        except Exception as fatal_error:
+            logger.error("FATAL: Audio monitoring loop crashed with unhandled exception: %s", fatal_error, exc_info=True)
+            logger.error("Audio monitoring thread will exit - watchdog will restart it")
+        finally:
+            self._monitoring_thread = None
 
     def _open_audio_stream(self, restart_attempt: int):
         """Open the best available audio input stream."""
@@ -724,17 +769,29 @@ class AudioMonitor:
             duration_sec = None
             future = None
             try:
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                    temp_filename = temp_file.name
+                # Create temp file with extra error handling
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                        temp_filename = temp_file.name
+                except Exception as temp_error:
+                    logger.error(f"Failed to create temp file: {temp_error}")
+                    self._song_detection_stats["last_error"] = f"temp_file_error:{temp_error}"
+                    return
 
-                with wave.open(temp_filename, 'wb') as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)  # 16-bit audio
-                    wf.setframerate(self.sample_rate)
-                    wf.writeframes(self._audio_buffer.tobytes())
+                # Write audio buffer to WAV file
+                try:
+                    with wave.open(temp_filename, 'wb') as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)  # 16-bit audio
+                        wf.setframerate(self.sample_rate)
+                        wf.writeframes(self._audio_buffer.tobytes())
+                    logger.debug(f"Saved audio buffer to {temp_filename}")
+                except Exception as wav_error:
+                    logger.error(f"Failed to write WAV file: {wav_error}")
+                    self._song_detection_stats["last_error"] = f"wav_write_error:{wav_error}"
+                    return
 
-                logger.debug(f"Saved audio buffer to {temp_filename}")
-
+                # Ensure detection loop is alive
                 if not self._ensure_detection_loop():
                     logger.error("Song detection loop unavailable; skipping detection")
                     self._song_detection_stats["last_error"] = "loop_unavailable"
@@ -749,11 +806,16 @@ class AudioMonitor:
                     result = future.result(timeout=20.0)
                 except concurrent.futures.TimeoutError:
                     if future:
-                        future.cancel()
+                        try:
+                            future.cancel()
+                        except Exception:
+                            pass
                     logger.warning("Song detection timed out (20s) - skipping")
                     self._song_detection_stats["last_error"] = "timeout"
                 except Exception as detect_error:
                     logger.error(f"Song detection error: {detect_error}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
                     self._song_detection_stats["last_error"] = f"{type(detect_error).__name__}: {detect_error}"
 
                 duration_sec = round(time.time() - start_monotonic, 2)
@@ -789,10 +851,10 @@ class AudioMonitor:
 
             except Exception as e:
                 duration_sec = round(time.time() - start_monotonic, 2)
-                logger.error(f"Error detecting song from buffer: {e}")
+                logger.error(f"CRITICAL ERROR in song detection: {e}")
                 import traceback
-                logger.debug(traceback.format_exc())
-                self._song_detection_stats["last_error"] = f"{type(e).__name__}: {e}"
+                logger.error(traceback.format_exc())
+                self._song_detection_stats["last_error"] = f"critical:{type(e).__name__}: {e}"
             finally:
                 if future and not future.done():
                     future.cancel()
@@ -818,13 +880,15 @@ class AudioMonitor:
             # End detect_async
 
         try:
-            thread = threading.Thread(target=detect_async, daemon=True)
+            thread = threading.Thread(target=detect_async, daemon=True, name="SongDetection")
             thread.start()
         except Exception as start_error:
             self._song_detection_stats["active"] = False
             self._song_detection_stats["last_error"] = f"thread_start_error:{start_error}"
             self._song_detection_lock.release()
             logger.error(f"Failed to start song detection thread: {start_error}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
 
         return True
@@ -853,31 +917,60 @@ class AudioMonitor:
                         except Exception as e:
                             logger.debug(f"Error closing old Shazam instance: {e}")
                     
-                    # Create new instance
-                    self._shazam_instance = Shazam()
-                    self._shazam_created_at = current_time
-                    logger.info("Created new Shazam instance for song detection")
+                    # Create new instance with protection
+                    try:
+                        self._shazam_instance = Shazam()
+                        self._shazam_created_at = current_time
+                        logger.info("Created new Shazam instance for song detection")
+                    except Exception as shazam_init_error:
+                        logger.error(f"Failed to create Shazam instance: {shazam_init_error}")
+                        self._shazam_instance = None
+                        return None
                 
                 shazam = self._shazam_instance
             
+            # Verify we have a valid Shazam instance
+            if shazam is None:
+                logger.error("Shazam instance is None, cannot recognize song")
+                return None
+            
             # Add 15 second timeout to prevent hanging
-            result = await asyncio.wait_for(
-                shazam.recognize(audio_file),
-                timeout=15.0
-            )
-            return result
+            try:
+                result = await asyncio.wait_for(
+                    shazam.recognize(audio_file),
+                    timeout=15.0
+                )
+                return result
+            except asyncio.TimeoutError:
+                logger.warning("Song recognition timed out after 15 seconds")
+                # Mark instance for refresh on next attempt
+                with self._shazam_lock:
+                    self._shazam_created_at = 0.0
+                return None
+            except Exception as recognize_error:
+                logger.error(f"Shazam recognize() failed: {type(recognize_error).__name__}: {recognize_error}")
+                # Mark instance for refresh on next attempt
+                with self._shazam_lock:
+                    self._shazam_created_at = 0.0
+                return None
+                
         except ImportError as e:
             logger.error(f"ShazamIO not available: {e}")
             logger.error("Install with: pip install shazamio aiohttp")
-            return None
-        except asyncio.TimeoutError:
-            logger.warning("Song recognition timed out after 15 seconds")
             return None
         except asyncio.CancelledError:
             logger.debug("Song recognition coroutine cancelled")
             raise
         except Exception as e:
-            logger.error(f"Shazam recognition error: {type(e).__name__}: {e}")
+            logger.error(f"CRITICAL: Shazam recognition error: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Mark instance for refresh on next attempt
+            try:
+                with self._shazam_lock:
+                    self._shazam_created_at = 0.0
+            except Exception:
+                pass
             return None
     
     def stop_monitoring(self):

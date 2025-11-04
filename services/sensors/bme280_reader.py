@@ -28,6 +28,11 @@ class BME280Reader:
         self.altitude = None
         self.last_update = None
         
+        # Watchdog to detect and recover from thread failures
+        self._watchdog_thread = None
+        self._watchdog_enabled = False
+        self._last_successful_read = None
+        
         self._init_sensor()
 
     @staticmethod
@@ -152,7 +157,7 @@ class BME280Reader:
             return {}
     
     def start_reading(self, interval: int = 30):
-        """Start continuous sensor reading"""
+        """Start continuous sensor reading with watchdog protection"""
         if self.running:
             logger.warning("Reader already running")
             return
@@ -165,6 +170,7 @@ class BME280Reader:
             initial_data = self.read_sensor()
             if initial_data and initial_data.get("temperature_f") is not None:
                 logger.info(f"Initial reading: {initial_data['temperature_f']:.1f}°F, {initial_data['humidity']:.1f}%")
+                self._last_successful_read = time.time()
             else:
                 logger.warning("Initial reading returned no data - sensor may not be working")
         except Exception as e:
@@ -174,12 +180,15 @@ class BME280Reader:
         self.running = True
         self.stop_event.clear()
         
-        thread = Thread(target=self._reading_loop, args=(interval,))
+        thread = Thread(target=self._reading_loop, args=(interval,), name="BME280-Reader")
         thread.daemon = True
         thread.start()
         self._thread = thread
         
-        logger.info(f"Started BME280 background reading (interval: {interval}s)")
+        # Start watchdog to monitor thread health
+        self._start_watchdog()
+        
+        logger.info(f"Started BME280 background reading with watchdog (interval: {interval}s)")
     
     def _reading_loop(self, interval: int):
         """Main reading loop with error recovery"""
@@ -199,6 +208,7 @@ class BME280Reader:
                         )
                         # Reset error counter on successful read
                         consecutive_errors = 0
+                        self._last_successful_read = time.time()
                     else:
                         logger.warning("BME280 read returned no data")
                         consecutive_errors += 1
@@ -225,17 +235,90 @@ class BME280Reader:
             logger.info("BME280 reading stopped")
             
         except Exception as e:
-            logger.error(f"Fatal error in reading loop: {e}")
+            logger.error(f"FATAL: BME280 reading loop crashed: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            self.running = False
         finally:
+            # Clean up thread reference but keep running=True for watchdog to detect
+            logger.warning("BME280 reading loop exited")
             self._thread = None
     
+    def _start_watchdog(self):
+        """Start watchdog thread to monitor and restart reading loop if it dies"""
+        if self._watchdog_enabled:
+            return
+        
+        self._watchdog_enabled = True
+        watchdog = Thread(target=self._watchdog_loop, name="BME280-Watchdog", daemon=True)
+        watchdog.start()
+        self._watchdog_thread = watchdog
+        logger.info("BME280 watchdog started")
+    
+    def _watchdog_loop(self):
+        """Watchdog loop to detect and restart failed reading threads"""
+        check_interval = 10  # Check every 10 seconds
+        
+        while self.running and not self.stop_event.is_set():
+            try:
+                # Check if reading thread is alive
+                if self._thread is None or not self._thread.is_alive():
+                    if self.running:  # Only restart if we're supposed to be running
+                        logger.error("🚨 BME280 reading thread died! Auto-restarting...")
+                        self._restart_reading_thread()
+                
+                # Check if readings are stale (no successful read in 2x the interval)
+                if self._last_successful_read is not None:
+                    time_since_read = time.time() - self._last_successful_read
+                    max_stale_time = (self._read_interval or 30) * 3
+                    
+                    if time_since_read > max_stale_time:
+                        logger.error(f"🚨 BME280 readings stale for {time_since_read:.1f}s (max: {max_stale_time}s)")
+                        logger.error("Forcing restart of reading thread...")
+                        self._restart_reading_thread()
+                        self._last_successful_read = time.time()  # Reset to prevent rapid restarts
+                
+                # Wait before next check
+                self.stop_event.wait(check_interval)
+                
+            except Exception as e:
+                logger.error(f"Error in BME280 watchdog: {e}")
+                self.stop_event.wait(check_interval)
+        
+        logger.info("BME280 watchdog stopped")
+        self._watchdog_enabled = False
+    
+    def _restart_reading_thread(self):
+        """Restart the reading thread without changing the running state"""
+        try:
+            # Stop existing thread if alive
+            old_thread = self._thread
+            if old_thread and old_thread.is_alive():
+                logger.info("Stopping existing BME280 thread...")
+                self.stop_event.set()
+                old_thread.join(timeout=2.0)
+            
+            # Clear stop event and start new thread
+            self.stop_event.clear()
+            interval = self._read_interval or 30
+            
+            new_thread = Thread(target=self._reading_loop, args=(interval,), name="BME280-Reader")
+            new_thread.daemon = True
+            new_thread.start()
+            self._thread = new_thread
+            
+            logger.info(f"✅ BME280 reading thread restarted successfully (interval: {interval}s)")
+            
+        except Exception as e:
+            logger.error(f"Failed to restart BME280 reading thread: {e}")
+    
     def stop_reading(self):
-        """Stop sensor reading"""
+        """Stop sensor reading and watchdog"""
+        logger.info("Stopping BME280 reader...")
         self.running = False
+        self._watchdog_enabled = False
         self.stop_event.set()
+        
+        # Stop reading thread
         thread = self._thread
         if thread and thread.is_alive():
             try:
@@ -243,6 +326,17 @@ class BME280Reader:
             except Exception:
                 pass
         self._thread = None
+        
+        # Stop watchdog thread
+        watchdog = self._watchdog_thread
+        if watchdog and watchdog.is_alive():
+            try:
+                watchdog.join(timeout=1.0)
+            except Exception:
+                pass
+        self._watchdog_thread = None
+        
+        logger.info("BME280 reader stopped")
     
     def get_temperature(self, unit: str = "f") -> Optional[float]:
         """Get current temperature"""
@@ -331,9 +425,9 @@ class BME280Reader:
     def restart_reading(self, interval: Optional[int] = None):
         """Restart the background reading thread."""
         requested_interval = interval or self._read_interval or 30
-        logger.warning("Restarting BME280 background reader (interval: %ss)", requested_interval)
+        logger.warning("Manually restarting BME280 background reader (interval: %ss)", requested_interval)
         self.stop_reading()
-        time.sleep(0.1)
+        time.sleep(0.5)
         try:
             self.start_reading(requested_interval)
         except Exception as exc:
