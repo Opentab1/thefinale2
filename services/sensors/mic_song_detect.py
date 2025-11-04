@@ -107,7 +107,9 @@ class AudioMonitor:
         self._shazam_instance = None
         self._shazam_lock = Lock()
         self._shazam_created_at = 0.0  # Track when instance was created
-        self._shazam_refresh_interval = 3600.0  # Refresh every hour to prevent stale sessions
+        self._shazam_refresh_interval = 1800.0  # Refresh every 30 minutes to prevent stale sessions
+        self._shazam_use_count = 0  # Track usage to force refresh after N uses
+        self._shazam_max_uses = 50  # Refresh after 50 uses to prevent resource buildup
 
         # Initialize song detector if available
         if SongDetector is not None:
@@ -468,6 +470,14 @@ class AudioMonitor:
                                     logger.info("🎵 Running song detection from audio buffer...")
                             except Exception as e:
                                 logger.error(f"Failed to start song detection thread: {e}")
+                                # If thread creation fails, check if it's a resource issue
+                                import threading
+                                active_threads = len(threading.enumerate())
+                                if active_threads > 50:
+                                    logger.warning(f"High thread count detected: {active_threads} threads - may need cleanup")
+                                    # Log thread names for debugging
+                                    thread_names = [t.name for t in threading.enumerate()]
+                                    logger.debug(f"Active thread names: {thread_names[:10]}...")  # First 10 only
                         else:
                             logger.debug(f"Audio buffer not ready for song detection (index: {self._buffer_index}/{self._audio_buffer_size})")
                         self._last_song_detect_ts = now_song
@@ -476,6 +486,19 @@ class AudioMonitor:
                         # Log occasionally if song detector is not available
                         if int(now_song) % 60 == 0:  # Log once per minute
                             logger.debug("Song detector not available - song detection disabled")
+                    
+                    # Health check: If song detection has been failing for too long, force refresh
+                    if self._song_detection_stats.get("last_error") and self._song_detection_stats.get("last_success_at"):
+                        try:
+                            last_success = datetime.fromisoformat(self._song_detection_stats["last_success_at"])
+                            time_since_success = (datetime.now() - last_success).total_seconds()
+                            # If no success in 10 minutes and we have errors, force refresh
+                            if time_since_success > 600 and "timeout" in str(self._song_detection_stats.get("last_error", "")):
+                                logger.warning("Song detection has been failing for 10+ minutes, forcing Shazam refresh")
+                                self._force_shazam_refresh()
+                                self._song_detection_stats["last_error"] = None  # Clear error to allow retry
+                        except Exception:
+                            pass  # Ignore parsing errors
                     
                     # CRITICAL: Always update last_activity even if no song detection
                     # This prevents watchdog from thinking we're stuck
@@ -540,10 +563,11 @@ class AudioMonitor:
 
                 logger.debug(f"Saved audio buffer to {temp_filename}")
 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                loop = None
                 result = None
                 try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                     result = loop.run_until_complete(
                         asyncio.wait_for(
                             self._recognize_song_async(temp_filename),
@@ -553,18 +577,45 @@ class AudioMonitor:
                 except asyncio.TimeoutError:
                     logger.warning("Song detection timed out (20s) - skipping")
                     self._song_detection_stats["last_error"] = "timeout"
+                    # Force Shazam refresh on timeout to clear stale connections
+                    self._force_shazam_refresh()
                 except Exception as detect_error:
                     logger.error(f"Song detection error: {detect_error}")
                     self._song_detection_stats["last_error"] = f"{type(detect_error).__name__}: {detect_error}"
+                    # Force Shazam refresh on error to clear potentially bad state
+                    self._force_shazam_refresh()
                 finally:
-                    try:
-                        pending = asyncio.all_tasks(loop)
-                        for task in pending:
-                            task.cancel()
-                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                    except Exception:
-                        pass
-                    loop.close()
+                    # CRITICAL: Always clean up event loop properly to prevent resource leaks
+                    if loop is not None:
+                        try:
+                            # Cancel all pending tasks
+                            pending = asyncio.all_tasks(loop)
+                            if pending:
+                                for task in pending:
+                                    task.cancel()
+                                # Wait for cancellation with timeout
+                                try:
+                                    loop.run_until_complete(
+                                        asyncio.wait_for(
+                                            asyncio.gather(*pending, return_exceptions=True),
+                                            timeout=2.0
+                                        )
+                                    )
+                                except asyncio.TimeoutError:
+                                    logger.warning("Some tasks didn't cancel in time, forcing loop closure")
+                                except Exception:
+                                    pass
+                            
+                            # Close the loop
+                            loop.close()
+                        except Exception as cleanup_error:
+                            logger.warning(f"Error cleaning up event loop: {cleanup_error}")
+                        finally:
+                            # Ensure event loop is unset to prevent issues
+                            try:
+                                asyncio.set_event_loop(None)
+                            except Exception:
+                                pass
 
                 duration_sec = round(time.time() - start_monotonic, 2)
 
@@ -632,6 +683,12 @@ class AudioMonitor:
 
         return True
     
+    def _force_shazam_refresh(self):
+        """Force immediate refresh of Shazam instance (called on errors/timeouts)"""
+        with self._shazam_lock:
+            self._shazam_use_count = self._shazam_max_uses  # Trigger refresh on next use
+            logger.debug("Forced Shazam refresh scheduled for next detection")
+    
     async def _recognize_song_async(self, audio_file):
         """Recognize song using ShazamIO (async with timeout)"""
         try:
@@ -645,7 +702,8 @@ class AudioMonitor:
                 current_time = time.time()
                 needs_refresh = (
                     self._shazam_instance is None or
-                    (current_time - self._shazam_created_at) > self._shazam_refresh_interval
+                    (current_time - self._shazam_created_at) > self._shazam_refresh_interval or
+                    self._shazam_use_count >= self._shazam_max_uses
                 )
                 
                 if needs_refresh:
@@ -654,13 +712,18 @@ class AudioMonitor:
                         try:
                             if hasattr(self._shazam_instance, 'client') and hasattr(self._shazam_instance.client, 'close'):
                                 await self._shazam_instance.client.close()
+                            logger.debug("Closed old Shazam instance client session")
                         except Exception as e:
                             logger.debug(f"Error closing old Shazam instance: {e}")
                     
                     # Create new instance
                     self._shazam_instance = Shazam()
                     self._shazam_created_at = current_time
+                    self._shazam_use_count = 0
                     logger.info("Created new Shazam instance for song detection")
+                else:
+                    # Increment use count
+                    self._shazam_use_count += 1
                 
                 shazam = self._shazam_instance
             
@@ -676,9 +739,13 @@ class AudioMonitor:
             return None
         except asyncio.TimeoutError:
             logger.warning("Song recognition timed out after 15 seconds")
+            # Force refresh on timeout to clear potentially stuck connection
+            self._force_shazam_refresh()
             return None
         except Exception as e:
             logger.error(f"Shazam recognition error: {type(e).__name__}: {e}")
+            # Force refresh on error to clear potentially bad state
+            self._force_shazam_refresh()
             return None
     
     def stop_monitoring(self):
@@ -737,13 +804,29 @@ class AudioMonitor:
                     # We need to properly close it to prevent resource leaks
                     if hasattr(self._shazam_instance, 'client') and hasattr(self._shazam_instance.client, 'close'):
                         import asyncio
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
+                        loop = None
                         try:
-                            loop.run_until_complete(self._shazam_instance.client.close())
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            loop.run_until_complete(
+                                asyncio.wait_for(
+                                    self._shazam_instance.client.close(),
+                                    timeout=5.0
+                                )
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning("Shazam client close timed out")
+                        except Exception as e:
+                            logger.warning(f"Error closing Shazam client: {e}")
                         finally:
-                            loop.close()
+                            if loop is not None:
+                                try:
+                                    loop.close()
+                                    asyncio.set_event_loop(None)
+                                except Exception:
+                                    pass
                     self._shazam_instance = None
+                    self._shazam_use_count = 0
                     logger.info("Shazam instance cleaned up")
         except Exception as e:
             logger.warning(f"Error cleaning up Shazam instance: {e}")
