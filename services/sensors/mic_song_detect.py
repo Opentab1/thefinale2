@@ -9,6 +9,7 @@ from threading import Thread, Event, Lock
 from datetime import datetime
 import os
 import time
+from typing import Optional, Tuple
 
 # NumPy is required
 try:
@@ -76,6 +77,23 @@ class AudioMonitor:
         # Watchdog tracking
         self._monitoring_thread = None
         self._last_activity = 0.0
+        self._last_successful_read = 0.0
+        self._restart_requested = False
+
+        try:
+            stall_timeout = float(os.getenv('AUDIO_STREAM_STALL_TIMEOUT_SEC', '90'))
+        except (TypeError, ValueError):
+            stall_timeout = 90.0
+        self._stream_stall_timeout = max(30.0, stall_timeout)
+
+        try:
+            reconnect_delay = float(os.getenv('AUDIO_STREAM_RECONNECT_DELAY_SEC', '5'))
+        except (TypeError, ValueError):
+            reconnect_delay = 5.0
+        self._stream_reconnect_delay = max(1.0, reconnect_delay)
+
+        self._consecutive_stream_failures = 0
+        self._active_backend: Optional[str] = None
 
         # Song detection configuration from environment (default: 10s)
         try:
@@ -132,13 +150,7 @@ class AudioMonitor:
 
         # Audio interfaces (optional)
         self.pyaudio_instance = None
-        if PYAUDIO_AVAILABLE:
-            try:
-                self.pyaudio_instance = pyaudio.PyAudio()  # type: ignore[arg-type]
-                logger.info("PyAudio initialized successfully")
-            except Exception as e:
-                logger.warning(f"PyAudio initialization failed: {e}")
-                self.pyaudio_instance = None
+        self._ensure_pyaudio_instance(initial=True)
 
         # Validate and pick an input device
         self._validate_device()
@@ -314,189 +326,309 @@ class AudioMonitor:
     
     def _start_monitoring_thread(self):
         """Start the monitoring thread"""
+        self._restart_requested = False
         self._monitoring_thread = Thread(target=self._monitoring_loop, daemon=True)
         self._monitoring_thread.start()
         self._last_activity = time.time()
-    
-    def _watchdog_loop(self):
-        """Watchdog to restart monitoring if it crashes"""
-        while self.running and not self.stop_event.is_set():
+        self._last_successful_read = time.time()
+
+    def _ensure_pyaudio_instance(self, initial: bool = False):
+        """Ensure a PyAudio instance is available."""
+        if not PYAUDIO_AVAILABLE:
+            return
+
+        if self.pyaudio_instance is None:
             try:
-                # Check if monitoring thread is alive
-                if not self._monitoring_thread.is_alive():
-                    logger.error("Audio monitoring thread died! Restarting...")
-                    self._start_monitoring_thread()
-                
-                # Check if monitoring is stuck (no activity for 60 seconds)
-                if time.time() - self._last_activity > 60:
-                    logger.warning("Audio monitoring appears stuck (no activity for 60s)")
-                    logger.warning("This is normal if no audio is detected, continuing...")
-                    self._last_activity = time.time()  # Reset to prevent spam
-                
-                self.stop_event.wait(10)  # Check every 10 seconds
+                self.pyaudio_instance = pyaudio.PyAudio()  # type: ignore[arg-type]
+                if initial:
+                    logger.info("PyAudio initialized successfully")
+                else:
+                    logger.info("PyAudio instance reinitialized")
             except Exception as e:
-                logger.error(f"Error in watchdog: {e}")
-                self.stop_event.wait(10)
-    
-    def _monitoring_loop(self):
-        """Main monitoring loop with integrated song detection"""
+                logger.warning(f"PyAudio initialization failed: {e}")
+                self.pyaudio_instance = None
+
+    def _reset_pyaudio_instance(self):
+        """Terminate and clear the PyAudio instance."""
+        if not PYAUDIO_AVAILABLE:
+            return
+
+        if self.pyaudio_instance is not None:
+            try:
+                self.pyaudio_instance.terminate()
+            except Exception:
+                pass
+        self.pyaudio_instance = None
+
+    def _close_audio_streams(self, pa_stream: Optional[object], sd_stream: Optional[object]):
+        """Safely close audio input streams."""
+        if pa_stream is not None:
+            try:
+                pa_stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                pa_stream.close()
+            except Exception:
+                pass
+
+        if sd_stream is not None:
+            try:
+                sd_stream.stop()
+            except Exception:
+                pass
+            try:
+                sd_stream.close()
+            except Exception:
+                pass
+
+    def _open_audio_streams(self) -> Tuple[Optional[object], Optional[object], Optional[str]]:
+        """Attempt to open an audio input stream using available backends."""
+        # Revalidate device index in case hardware changed
+        if self.device_index is None:
+            self._validate_device()
+
         pa_stream = None
         sd_stream = None
-        stream_opened = False
+        backend: Optional[str] = None
+
+        if PYAUDIO_AVAILABLE:
+            self._ensure_pyaudio_instance()
+
+        if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None and self.device_index is not None:
+            try:
+                pa_stream = self.pyaudio_instance.open(
+                    format=pyaudio.paInt16,  # type: ignore[attr-defined]
+                    channels=1,
+                    rate=self.sample_rate,
+                    input=True,
+                    input_device_index=self.device_index,
+                    frames_per_buffer=self.chunk_size
+                )
+                backend = "pyaudio"
+                self._consecutive_stream_failures = 0
+                self._active_backend = backend
+                logger.info(f"✓ Audio stream opened successfully (PyAudio, device {self.device_index})")
+                return pa_stream, None, backend
+            except Exception as e:
+                logger.error(f"Failed to open PyAudio stream: {e}")
+                logger.error(f"  Error details: {type(e).__name__}: {str(e)}")
+                self._consecutive_stream_failures += 1
+                self._reset_pyaudio_instance()
+                self._ensure_pyaudio_instance()
+
+        if SOUNDDEVICE_AVAILABLE:
+            try:
+                sd_stream = sd.InputStream(  # type: ignore[call-arg]
+                    samplerate=self.sample_rate,
+                    dtype='int16',
+                    channels=1,
+                    blocksize=self.chunk_size,
+                    device=self.device_index if self.device_index is not None else None,
+                )
+                sd_stream.start()
+                backend = "sounddevice"
+                self._consecutive_stream_failures = 0
+                self._active_backend = backend
+                device_msg = f", device {self.device_index}" if self.device_index is not None else ""
+                logger.info(f"✓ Audio stream opened successfully (sounddevice{device_msg})")
+                return None, sd_stream, backend
+            except Exception as e:
+                logger.error(f"Failed to open sounddevice stream: {e}")
+                logger.error(f"  Error details: {type(e).__name__}: {str(e)}")
+                self._consecutive_stream_failures += 1
+
+        self._active_backend = None
+        return None, None, None
+    
+    def _watchdog_loop(self):
+        """Watchdog to restart monitoring if it crashes or stalls."""
+        check_interval = max(3.0, min(self._stream_stall_timeout / 3.0, 10.0))
+
+        while self.running and not self.stop_event.is_set():
+            try:
+                thread_alive = (
+                    self._monitoring_thread is not None and self._monitoring_thread.is_alive()
+                )
+
+                if not thread_alive:
+                    if self.running and not self._restart_requested:
+                        logger.error("Audio monitoring thread not running; restarting...")
+                        self._start_monitoring_thread()
+                else:
+                    now = time.time()
+                    inactive_for = now - self._last_activity
+                    since_last_read = now - self._last_successful_read
+
+                    if (
+                        self._stream_stall_timeout
+                        and (inactive_for > self._stream_stall_timeout
+                             or since_last_read > self._stream_stall_timeout)
+                        and not self._restart_requested
+                    ):
+                        logger.warning(
+                            "Audio monitoring appears stalled (inactive %.1fs, last read %.1fs ago); requesting restart",
+                            inactive_for,
+                            since_last_read,
+                        )
+                        self._restart_requested = True
+
+                    if self._restart_requested:
+                        # Allow the worker thread to exit on its own
+                        if self._monitoring_thread is not None:
+                            self._monitoring_thread.join(timeout=self._stream_reconnect_delay)
+                        if self._monitoring_thread is None or not self._monitoring_thread.is_alive():
+                            logger.info("Audio monitoring restart confirmed; launching new thread")
+                            self._start_monitoring_thread()
+
+                self.stop_event.wait(check_interval)
+            except Exception as e:
+                logger.error(f"Error in watchdog: {e}")
+                self.stop_event.wait(check_interval)
+    
+    def _monitoring_loop(self):
+        """Main monitoring loop with integrated song detection and auto-recovery."""
+        pa_stream: Optional[object] = None
+        sd_stream: Optional[object] = None
 
         try:
-            # Try PyAudio first
-            if PYAUDIO_AVAILABLE and self.pyaudio_instance is not None:
-                if self.device_index is None:
-                    logger.error("No audio input device found; cannot open audio stream")
-                    logger.warning("Audio monitoring will be disabled")
-                else:
-                    try:
-                        pa_stream = self.pyaudio_instance.open(
-                            format=pyaudio.paInt16,  # type: ignore[attr-defined]
-                            channels=1,
-                            rate=self.sample_rate,
-                            input=True,
-                            input_device_index=self.device_index,
-                            frames_per_buffer=self.chunk_size
-                        )
-                        stream_opened = True
-                        logger.info(f"✓ Audio stream opened successfully (PyAudio, device {self.device_index})")
-                    except Exception as e:
-                        logger.error(f"Failed to open PyAudio stream: {e}")
-                        logger.error(f"  Error details: {type(e).__name__}: {str(e)}")
-                        # Try sounddevice as fallback if available
-                        if SOUNDDEVICE_AVAILABLE:
-                            logger.info("Attempting fallback to sounddevice...")
-            
-            # Try sounddevice if PyAudio didn't work or isn't available
-            if not stream_opened and SOUNDDEVICE_AVAILABLE:
-                if self.device_index is None:
-                    logger.error("No audio input device found; cannot open audio stream")
-                    logger.warning("Audio monitoring will be disabled")
-                else:
-                    try:
-                        sd_stream = sd.InputStream(  # type: ignore[call-arg]
-                            samplerate=self.sample_rate,
-                            dtype='int16',
-                            channels=1,
-                            blocksize=self.chunk_size,
-                            device=self.device_index,
-                        )
-                        sd_stream.start()
-                        stream_opened = True
-                        logger.info(f"✓ Audio stream opened successfully (sounddevice, device {self.device_index})")
-                    except Exception as e:
-                        logger.error(f"Failed to open sounddevice stream: {e}")
-                        logger.error(f"  Error details: {type(e).__name__}: {str(e)}")
-            
-            if not stream_opened:
-                logger.error("="*80)
-                logger.error("CRITICAL: Could not open any audio stream!")
-                logger.error("Audio monitoring (dB readings) will NOT work.")
-                logger.error("Check:")
-                logger.error("  1. Audio device is connected: arecord -l")
-                logger.error("  2. Device permissions: arecord -d 1 test.wav")
-                logger.error("  3. Dependencies installed: pip install pyaudio sounddevice")
-                logger.error("="*80)
-                # Still run the loop for song detection, but no dB readings
-            else:
-                logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
-
             while self.running and not self.stop_event.is_set():
+                if self._restart_requested:
+                    logger.info("Audio monitoring loop exiting due to watchdog restart request")
+                    break
+
+                now = time.time()
+                if (
+                    self._stream_stall_timeout
+                    and self._last_successful_read
+                    and (now - self._last_successful_read) > self._stream_stall_timeout
+                ):
+                    logger.warning(
+                        "Audio stream stalled for %.1fs; reopening stream",
+                        now - self._last_successful_read,
+                    )
+                    self._close_audio_streams(pa_stream, sd_stream)
+                    if self._active_backend == "pyaudio":
+                        self._reset_pyaudio_instance()
+                    pa_stream = None
+                    sd_stream = None
+                    self._last_successful_read = now
+                    self._last_activity = now
+                    self.stop_event.wait(self._stream_reconnect_delay)
+                    continue
+
+                if pa_stream is None and sd_stream is None:
+                    pa_stream, sd_stream, _backend = self._open_audio_streams()
+                    if pa_stream is None and sd_stream is None:
+                        backoff = min(
+                            self._stream_reconnect_delay * (1 + min(self._consecutive_stream_failures, 5)),
+                            30.0,
+                        )
+                        logger.error(
+                            "CRITICAL: Unable to open audio stream (attempt %d). Retrying in %.1fs",
+                            self._consecutive_stream_failures,
+                            backoff,
+                        )
+                        retry_time = time.time()
+                        self._last_activity = retry_time
+                        self._last_successful_read = retry_time
+                        self.stop_event.wait(backoff)
+                        continue
+                    else:
+                        self._last_activity = time.time()
+                        self._last_successful_read = self._last_activity
+                        logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
+
                 try:
-                    # Read audio data
                     if pa_stream is not None:
                         audio_bytes = pa_stream.read(self.chunk_size, exception_on_overflow=False)
                         audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
                     elif sd_stream is not None:
-                        audio_data, _ = sd_stream.read(self.chunk_size)  # type: ignore[union-attr]
-                        if isinstance(audio_data, np.ndarray) and audio_data.ndim > 1:
-                            audio_data = audio_data[:, 0]
-                        audio_data = audio_data.astype(np.int16, copy=False)
+                        audio_data_np, _overflow = sd_stream.read(self.chunk_size)  # type: ignore[union-attr]
+                        if isinstance(audio_data_np, np.ndarray) and audio_data_np.ndim > 1:
+                            audio_data_np = audio_data_np[:, 0]
+                        audio_data = np.array(audio_data_np, dtype=np.int16, copy=False)
                     else:
-                        # No stream available - just check song detection and wait
-                        if self.song_detector is not None:
-                            song_info = self.song_detector.get_latest_song()
-                            if song_info and song_info.get("title") != "Unknown":
-                                self.current_song = song_info
-                                logger.info(f"🎵 Song: {song_info['title']} - {song_info['artist']}")
-                        self.stop_event.wait(5.0)
+                        # No stream available - wait before retrying
+                        self._last_activity = time.time()
+                        self.stop_event.wait(self._stream_reconnect_delay)
                         continue
-
-                    if audio_data.size == 0:
-                        continue
-                    
-                    # Store audio in rolling buffer for song detection
-                    chunk_len = min(len(audio_data), self._audio_buffer_size)
-                    if self._buffer_index + chunk_len <= self._audio_buffer_size:
-                        # Fits in remaining buffer space
-                        self._audio_buffer[self._buffer_index:self._buffer_index + chunk_len] = audio_data[:chunk_len]
-                        self._buffer_index += chunk_len
-                    else:
-                        # Wrap around - shift old data and append new
-                        shift_amount = chunk_len
-                        self._audio_buffer = np.roll(self._audio_buffer, -shift_amount)
-                        self._audio_buffer[-shift_amount:] = audio_data[:chunk_len]
-                        self._buffer_index = self._audio_buffer_size  # Buffer is full
-                    
-                    # Calculate dB level more frequently for better responsiveness (every 2 seconds)
-                    now_db = time.time()
-                    if (now_db - self._last_db_ts) >= 2.0:  # Update every 2 seconds
-                        db = self.calculate_db(audio_data)
-                        self.current_db = db
-                        self.peak_db = max(self.peak_db, db)
-                        self._last_db_ts = now_db
-                        self._last_activity = now_db  # Update watchdog
-                        logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
-                    
-                    # Trigger song detection on the configured cadence using buffered audio
-                    # Run in non-blocking way to prevent hanging
-                    now_song = time.time()
-                    if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
-                        if self._buffer_index >= self._audio_buffer_size:  # Buffer is full (5 seconds)
-                            # Run in separate thread to prevent blocking even if it hangs
-                            try:
-                                if self._detect_song_from_buffer():
-                                    logger.info("🎵 Running song detection from audio buffer...")
-                            except Exception as e:
-                                logger.error(f"Failed to start song detection thread: {e}")
-                        else:
-                            logger.debug(f"Audio buffer not ready for song detection (index: {self._buffer_index}/{self._audio_buffer_size})")
-                        self._last_song_detect_ts = now_song
-                        self._last_activity = now_song  # Update watchdog
-                    elif self.song_detector is None:
-                        # Log occasionally if song detector is not available
-                        if int(now_song) % 60 == 0:  # Log once per minute
-                            logger.debug("Song detector not available - song detection disabled")
-                    
-                    # CRITICAL: Always update last_activity even if no song detection
-                    # This prevents watchdog from thinking we're stuck
-                    self._last_activity = time.time()
-                    
-                except Exception as e:
-                    logger.error(f"Error in monitoring loop: {e}")
+                except Exception as read_error:
+                    logger.error(
+                        f"Error reading from {self._active_backend or 'audio'} stream: {read_error}"
+                    )
                     import traceback
-                    logger.error(traceback.format_exc())
-            
-            logger.info("Audio monitoring stopped")
-            
-        except Exception as e:
-            logger.error(f"Fatal error in monitoring loop: {e}")
-            self.running = False
+                    logger.debug(traceback.format_exc())
+                    self._close_audio_streams(pa_stream, sd_stream)
+                    if self._active_backend == "pyaudio":
+                        self._reset_pyaudio_instance()
+                    pa_stream = None
+                    sd_stream = None
+                    error_time = time.time()
+                    self._last_activity = error_time
+                    self._last_successful_read = error_time
+                    self.stop_event.wait(self._stream_reconnect_delay)
+                    continue
+
+                if audio_data.size == 0:
+                    idle_time = time.time()
+                    self._last_activity = idle_time
+                    self._last_successful_read = idle_time
+                    self.stop_event.wait(0.05)
+                    continue
+
+                self._last_successful_read = time.time()
+                self._last_activity = self._last_successful_read
+
+                # Store audio in rolling buffer for song detection
+                chunk_len = min(len(audio_data), self._audio_buffer_size)
+                if self._buffer_index + chunk_len <= self._audio_buffer_size:
+                    self._audio_buffer[self._buffer_index:self._buffer_index + chunk_len] = audio_data[:chunk_len]
+                    self._buffer_index += chunk_len
+                else:
+                    shift_amount = chunk_len
+                    self._audio_buffer = np.roll(self._audio_buffer, -shift_amount)
+                    self._audio_buffer[-shift_amount:] = audio_data[:chunk_len]
+                    self._buffer_index = self._audio_buffer_size
+
+                # Calculate dB level at configured cadence
+                now_db = self._last_successful_read
+                if (now_db - self._last_db_ts) >= self._db_interval:
+                    db = self.calculate_db(audio_data)
+                    self.current_db = db
+                    self.peak_db = max(self.peak_db, db)
+                    self._last_db_ts = now_db
+                    logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
+
+                # Trigger song detection on the configured cadence using buffered audio
+                now_song = self._last_successful_read
+                if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
+                    if self._buffer_index >= self._audio_buffer_size:
+                        try:
+                            if self._detect_song_from_buffer():
+                                logger.info("🎵 Running song detection from audio buffer...")
+                        except Exception as detection_error:
+                            logger.error(f"Failed to start song detection thread: {detection_error}")
+                    else:
+                        logger.debug(
+                            "Audio buffer not ready for song detection (index: %s/%s)",
+                            self._buffer_index,
+                            self._audio_buffer_size,
+                        )
+                    self._last_song_detect_ts = now_song
+                elif self.song_detector is None:
+                    if int(now_song) % 60 == 0:
+                        logger.debug("Song detector not available - song detection disabled")
+
+            logger.info("Audio monitoring loop stopped")
+
+        except Exception as fatal_error:
+            logger.error(f"Fatal error in monitoring loop: {fatal_error}")
+            import traceback
+            logger.debug(traceback.format_exc())
         finally:
-            try:
-                if pa_stream:
-                    pa_stream.stop_stream()
-                    pa_stream.close()
-            except Exception:
-                pass
-            try:
-                if sd_stream:
-                    sd_stream.stop()
-                    sd_stream.close()
-            except Exception:
-                pass
+            self._close_audio_streams(pa_stream, sd_stream)
+            self._active_backend = None
     
     def _detect_song_from_buffer(self):
         """Detect song using buffered audio data (runs in background thread)."""
@@ -697,11 +829,8 @@ class AudioMonitor:
     def cleanup(self):
         """Cleanup resources"""
         self.stop_monitoring()
-        try:
-            if self.pyaudio_instance:
-                self.pyaudio_instance.terminate()
-        except Exception:
-            pass
+        self._close_audio_streams(None, None)
+        self._reset_pyaudio_instance()
 
 
 if __name__ == "__main__":
