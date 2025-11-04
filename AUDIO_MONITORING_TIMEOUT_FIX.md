@@ -144,6 +144,12 @@ journalctl -u pulse-hub -f
 4. **Proper Cleanup** - Explicit ClientSession.close() calls
 5. **Graceful Degradation** - Error handling for cleanup failures
 
+### 2025-11-04 Update – Stream Watchdog Hardening
+- Automatic PyAudio/sounddevice stream restart when reads stall for >60 seconds
+- Watchdog now requests an immediate stream recycle instead of logging only
+- Stream read failures retry up to 3 times before forcing backend reopen
+- Monitoring telemetry records active backend to simplify diagnostics
+
 ### Why 1-Hour Refresh Interval?
 - Long enough to benefit from connection reuse
 - Short enough to prevent any stale session issues
