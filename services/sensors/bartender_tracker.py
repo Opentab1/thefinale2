@@ -1,6 +1,12 @@
 """
-Pulse 1.0 - AI Bartender Drink Counter
+Pulse 1.0 - AI Bartender Drink Counter (Anonymous Tracking)
 Tracks individual bartenders and drinks made using computer vision
+
+PRIVACY-FIRST: Uses anonymous person re-identification (ReID)
+- NO face recognition or biometric data stored
+- Tracks bartenders by appearance (clothing, position, body features)
+- Each bartender gets a random anonymous ID for the shift
+- Owner can manually map IDs to names externally
 
 This is a NEW module - does not interfere with existing sensors
 """
@@ -13,50 +19,50 @@ from datetime import datetime
 from typing import Optional, Dict, List, Tuple
 import os
 import time
-
-try:
-    import face_recognition
-    FACE_RECOGNITION_AVAILABLE = True
-except ImportError:
-    FACE_RECOGNITION_AVAILABLE = False
-    logging.warning("face_recognition not available - bartender ID will use position-based tracking only")
+import hashlib
 
 logger = logging.getLogger(__name__)
 
 
 class BartenderTracker:
     """
-    Tracks bartenders and counts drinks made in real-time
-    Uses face recognition + position tracking for bartender identification
+    Tracks bartenders anonymously using person re-identification (ReID)
+    NO face recognition - privacy-first approach
+    
+    Each bartender is assigned a random anonymous ID based on appearance
     """
     
     def __init__(self, camera_index: int = 0):
-        """Initialize bartender tracker"""
+        """Initialize anonymous bartender tracker"""
         self.camera_index = camera_index
         self.running = False
         self.stop_event = Event()
         
-        # Bartender database
-        self.bartenders = {}  # {id: {'name': str, 'face_encoding': array, 'drinks_today': int}}
-        self.next_bartender_id = 1
+        # Anonymous bartender tracking
+        self.active_bartenders = {}  # {anon_id: {'appearance_features': array, 'drinks_today': int, 'last_seen': datetime}}
+        self.next_anon_id = 1
+        
+        # Person detector (for body detection)
+        self.person_detector = cv2.HOGDescriptor()
+        self.person_detector.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        
+        # ReID tracking parameters
+        self.reid_threshold = 0.7  # Similarity threshold for matching
+        self.reid_history = {}  # {anon_id: [feature_vectors]}
+        self.max_history_length = 10  # Keep last N appearance samples
         
         # Current detections
-        self.current_bartenders = []  # List of detected bartenders in frame
-        self.drinks_per_bartender = {}  # {bartender_id: drink_count}
+        self.current_detections = []  # List of detected people in frame
+        self.drinks_per_bartender = {}  # {anon_id: drink_count}
         
         # Drink detection zones
         self.bar_zones = []  # List of (x, y, w, h) rectangles
-        self.last_drink_time = {}  # {bartender_id: timestamp}
+        self.last_drink_time = {}  # {anon_id: timestamp}
         self.min_time_between_drinks = 30  # seconds
         
         # Performance tracking
         self.total_drinks_today = 0
         self.start_time = datetime.now()
-        
-        # Face recognition setup
-        self.face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        )
         
         # Snapshot for dashboard
         self._snapshot_path = "/opt/pulse/data/bartender_camera.jpg"
@@ -77,46 +83,104 @@ class BartenderTracker:
             except Exception:
                 pass
         
-        logger.info("Bartender tracker initialized")
+        logger.info("Anonymous bartender tracker initialized (NO face recognition)")
     
-    def add_bartender(self, name: str, face_image: Optional[np.ndarray] = None) -> int:
+    def _extract_appearance_features(self, person_crop: np.ndarray) -> np.ndarray:
         """
-        Register a new bartender
+        Extract appearance features for person re-identification
+        Uses simple color histogram + spatial features (no biometrics)
         
         Args:
-            name: Bartender's name
-            face_image: Optional face image for recognition (BGR format)
+            person_crop: Cropped image of person
             
         Returns:
-            bartender_id: Unique ID assigned to bartender
+            Feature vector for ReID
         """
-        bartender_id = self.next_bartender_id
-        self.next_bartender_id += 1
+        try:
+            # Resize to standard size
+            person_crop = cv2.resize(person_crop, (64, 128))
+            
+            # Extract color histogram (HSV color space - better for clothing)
+            hsv = cv2.cvtColor(person_crop, cv2.COLOR_BGR2HSV)
+            
+            # Split into upper body (clothing) and lower body
+            height = person_crop.shape[0]
+            upper = hsv[:height//2, :]
+            lower = hsv[height//2:, :]
+            
+            # Calculate histograms for each region
+            hist_upper = cv2.calcHist([upper], [0, 1], None, [8, 8], [0, 180, 0, 256])
+            hist_lower = cv2.calcHist([lower], [0, 1], None, [8, 8], [0, 180, 0, 256])
+            
+            # Normalize
+            hist_upper = cv2.normalize(hist_upper, hist_upper).flatten()
+            hist_lower = cv2.normalize(hist_lower, hist_lower).flatten()
+            
+            # Combine features
+            features = np.concatenate([hist_upper, hist_lower])
+            
+            return features
+        except Exception as e:
+            logger.error(f"Error extracting appearance features: {e}")
+            return np.zeros(128)  # Return zero vector on error
+    
+    def _match_to_existing_bartender(self, features: np.ndarray) -> Optional[int]:
+        """
+        Match appearance features to existing bartender
         
-        face_encoding = None
-        if face_image is not None and FACE_RECOGNITION_AVAILABLE:
-            try:
-                # Convert BGR to RGB for face_recognition
-                rgb_image = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
-                encodings = face_recognition.face_encodings(rgb_image)
-                if encodings:
-                    face_encoding = encodings[0]
-                    logger.info(f"Face encoding created for {name}")
-            except Exception as e:
-                logger.error(f"Error creating face encoding: {e}")
+        Args:
+            features: Appearance feature vector
+            
+        Returns:
+            anon_id if match found, None otherwise
+        """
+        best_match_id = None
+        best_similarity = 0.0
+        
+        for anon_id, bartender in self.active_bartenders.items():
+            # Compare with historical features
+            if anon_id in self.reid_history:
+                for hist_features in self.reid_history[anon_id]:
+                    # Cosine similarity
+                    similarity = np.dot(features, hist_features) / (
+                        np.linalg.norm(features) * np.linalg.norm(hist_features) + 1e-6
+                    )
+                    
+                    if similarity > best_similarity:
+                        best_similarity = similarity
+                        best_match_id = anon_id
+        
+        # Return match if above threshold
+        if best_similarity > self.reid_threshold:
+            return best_match_id
+        
+        return None
+    
+    def _create_new_bartender(self, features: np.ndarray) -> int:
+        """
+        Create a new anonymous bartender ID
+        
+        Args:
+            features: Initial appearance features
+            
+        Returns:
+            New anonymous ID
+        """
+        anon_id = self.next_anon_id
+        self.next_anon_id += 1
         
         with self.data_lock:
-            self.bartenders[bartender_id] = {
-                'name': name,
-                'face_encoding': face_encoding,
+            self.active_bartenders[anon_id] = {
+                'appearance_features': features,
                 'drinks_today': 0,
                 'shift_start': datetime.now(),
-                'last_seen': None
+                'last_seen': datetime.now()
             }
-            self.drinks_per_bartender[bartender_id] = 0
+            self.drinks_per_bartender[anon_id] = 0
+            self.reid_history[anon_id] = [features]
         
-        logger.info(f"Registered bartender: {name} (ID: {bartender_id})")
-        return bartender_id
+        logger.info(f"New bartender detected: Anonymous ID #{anon_id}")
+        return anon_id
     
     def set_bar_zone(self, x: int, y: int, w: int, h: int):
         """
@@ -130,66 +194,70 @@ class BartenderTracker:
             self.bar_zones = [(x, y, w, h)]
         logger.info(f"Bar zone set: ({x}, {y}, {w}, {h})")
     
-    def _detect_bartenders(self, frame: np.ndarray) -> List[Dict]:
+    def _detect_people(self, frame: np.ndarray) -> List[Dict]:
         """
-        Detect bartenders in frame
+        Detect people (potential bartenders) in frame using HOG detector
         
         Returns:
-            List of detected bartenders with bounding boxes and IDs
+            List of detected people with bounding boxes
         """
         detections = []
         
-        # Detect faces
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50)
-        )
+        try:
+            # Resize for faster detection
+            scale = 0.5
+            resized = cv2.resize(frame, None, fx=scale, fy=scale)
+            
+            # Detect people using HOG
+            boxes, weights = self.person_detector.detectMultiScale(
+                resized,
+                winStride=(8, 8),
+                padding=(4, 4),
+                scale=1.05
+            )
+            
+            # Process each detection
+            for i, (x, y, w, h) in enumerate(boxes):
+                # Scale back to original size
+                x, y, w, h = int(x/scale), int(y/scale), int(w/scale), int(h/scale)
+                
+                # Ensure within frame bounds
+                x = max(0, x)
+                y = max(0, y)
+                w = min(w, frame.shape[1] - x)
+                h = min(h, frame.shape[0] - y)
+                
+                # Extract person crop for ReID
+                person_crop = frame[y:y+h, x:x+w]
+                
+                # Extract appearance features
+                features = self._extract_appearance_features(person_crop)
+                
+                # Try to match to existing bartender
+                anon_id = self._match_to_existing_bartender(features)
+                
+                # If no match and in bar zone, create new bartender
+                in_bar_zone = self._is_in_bar_zone(x, y, w, h)
+                if anon_id is None and in_bar_zone:
+                    anon_id = self._create_new_bartender(features)
+                elif anon_id is not None:
+                    # Update appearance history
+                    if anon_id in self.reid_history:
+                        self.reid_history[anon_id].append(features)
+                        # Keep only recent history
+                        if len(self.reid_history[anon_id]) > self.max_history_length:
+                            self.reid_history[anon_id].pop(0)
+                
+                detections.append({
+                    'anon_id': anon_id,
+                    'box': (x, y, w, h),
+                    'features': features,
+                    'in_bar_zone': in_bar_zone,
+                    'center': (x + w // 2, y + h // 2)
+                })
         
-        # Try to identify each face
-        for (x, y, w, h) in faces:
-            bartender_id = None
-            confidence = 0.0
-            name = "Unknown"
-            
-            # Try face recognition if available
-            if FACE_RECOGNITION_AVAILABLE and self.bartenders:
-                try:
-                    face_crop = frame[y:y+h, x:x+w]
-                    rgb_crop = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-                    encodings = face_recognition.face_encodings(rgb_crop)
-                    
-                    if encodings:
-                        face_encoding = encodings[0]
-                        
-                        # Compare with known bartenders
-                        for bid, bartender in self.bartenders.items():
-                            if bartender['face_encoding'] is not None:
-                                matches = face_recognition.compare_faces(
-                                    [bartender['face_encoding']], face_encoding, tolerance=0.6
-                                )
-                                if matches[0]:
-                                    distance = face_recognition.face_distance(
-                                        [bartender['face_encoding']], face_encoding
-                                    )[0]
-                                    conf = 1.0 - distance
-                                    if conf > confidence:
-                                        bartender_id = bid
-                                        confidence = conf
-                                        name = bartender['name']
-                except Exception as e:
-                    logger.debug(f"Face recognition error: {e}")
-            
-            # Check if person is in bar zone
-            in_bar_zone = self._is_in_bar_zone(x, y, w, h)
-            
-            detections.append({
-                'bartender_id': bartender_id,
-                'name': name,
-                'box': (x, y, w, h),
-                'confidence': confidence,
-                'in_bar_zone': in_bar_zone,
-                'center': (x + w // 2, y + h // 2)
-            })
+        except Exception as e:
+            logger.error(f"Error detecting people: {e}")
         
         return detections
     
@@ -207,65 +275,42 @@ class BartenderTracker:
         
         return False
     
-    def _detect_drink_made(self, bartender_id: int, detection: Dict) -> bool:
+    def record_drink(self, anon_id: int) -> bool:
         """
-        Detect if bartender just made a drink
-        Simple heuristic: person in bar zone + time since last drink
-        
-        In production, this would use hand tracking/action recognition
-        """
-        if not detection['in_bar_zone']:
-            return False
-        
-        # Check time since last drink for this bartender
-        now = time.time()
-        if bartender_id in self.last_drink_time:
-            time_since_last = now - self.last_drink_time[bartender_id]
-            if time_since_last < self.min_time_between_drinks:
-                return False
-        
-        # Simple placeholder: in this demo, we'll trigger on presence
-        # Real implementation would use hand tracking (MediaPipe) or action recognition
-        # For now, we manually trigger drinks via API
-        
-        return False
-    
-    def record_drink(self, bartender_id: int) -> bool:
-        """
-        Manually record a drink for a bartender
+        Manually record a drink for an anonymous bartender
         
         Args:
-            bartender_id: ID of bartender who made the drink
+            anon_id: Anonymous ID of bartender who made the drink
             
         Returns:
             bool: True if successful
         """
         with self.data_lock:
-            if bartender_id not in self.bartenders:
-                logger.warning(f"Unknown bartender ID: {bartender_id}")
+            if anon_id not in self.active_bartenders:
+                logger.warning(f"Unknown anonymous bartender ID: {anon_id}")
                 return False
             
             # Check rate limit
             now = time.time()
-            if bartender_id in self.last_drink_time:
-                time_since_last = now - self.last_drink_time[bartender_id]
+            if anon_id in self.last_drink_time:
+                time_since_last = now - self.last_drink_time[anon_id]
                 if time_since_last < 5:  # Min 5 seconds between drinks
-                    logger.debug(f"Drink recording rate limited for bartender {bartender_id}")
+                    logger.debug(f"Drink recording rate limited for bartender #{anon_id}")
                     return False
             
             # Record drink
-            self.drinks_per_bartender[bartender_id] += 1
-            self.bartenders[bartender_id]['drinks_today'] += 1
-            self.last_drink_time[bartender_id] = now
+            self.drinks_per_bartender[anon_id] += 1
+            self.active_bartenders[anon_id]['drinks_today'] += 1
+            self.last_drink_time[anon_id] = now
             self.total_drinks_today += 1
             
-            logger.info(f"Drink recorded: {self.bartenders[bartender_id]['name']} "
-                       f"(Total: {self.drinks_per_bartender[bartender_id]})")
+            logger.info(f"Drink recorded: Anonymous Bartender #{anon_id} "
+                       f"(Total: {self.drinks_per_bartender[anon_id]})")
             
             return True
     
     def _annotate_frame(self, frame: np.ndarray, detections: List[Dict]) -> np.ndarray:
-        """Draw bounding boxes and labels on frame"""
+        """Draw bounding boxes and labels on frame (anonymous tracking)"""
         annotated = frame.copy()
         
         # Draw bar zones
@@ -274,51 +319,54 @@ class BartenderTracker:
             cv2.putText(annotated, "BAR ZONE", (zx + 5, zy + 20),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 100, 255), 2)
         
-        # Draw bartender detections
+        # Draw bartender detections with anonymous IDs
         for det in detections:
             x, y, w, h = det['box']
-            bartender_id = det['bartender_id']
-            name = det['name']
-            confidence = det['confidence']
+            anon_id = det['anon_id']
             in_zone = det['in_bar_zone']
             
             # Choose color based on status
-            if bartender_id is not None:
-                color = (0, 255, 0)  # Green - identified
-                label = f"{name} (#{bartender_id})"
-                if bartender_id in self.drinks_per_bartender:
-                    label += f" - {self.drinks_per_bartender[bartender_id]} drinks"
+            if anon_id is not None:
+                color = (0, 255, 0)  # Green - tracked bartender
+                label = f"Bartender #{anon_id}"
+                if anon_id in self.drinks_per_bartender:
+                    drinks = self.drinks_per_bartender[anon_id]
+                    label += f" - {drinks} drinks"
             elif in_zone:
-                color = (0, 255, 255)  # Yellow - in bar zone but unidentified
-                label = "Bartender? (Unregistered)"
+                color = (0, 255, 255)  # Yellow - in bar zone but not yet tracked
+                label = "Person in Bar Zone"
             else:
-                color = (200, 200, 200)  # Gray - person detected
+                color = (200, 200, 200)  # Gray - person outside bar
                 label = "Person"
             
             # Draw box
-            cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 2)
+            cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 3)
             
             # Draw label background
-            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
             cv2.rectangle(annotated, (x, y - label_size[1] - 10), 
-                         (x + label_size[0], y), color, -1)
+                         (x + label_size[0] + 10, y), color, -1)
             
             # Draw label text
-            cv2.putText(annotated, label, (x, y - 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+            cv2.putText(annotated, label, (x + 5, y - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
         
         # Draw stats overlay
+        active_count = len([d for d in detections if d['anon_id'] is not None])
         stats_text = [
             f"Total Drinks Today: {self.total_drinks_today}",
-            f"Active Bartenders: {len([d for d in detections if d['bartender_id'] is not None])}"
+            f"Active Bartenders: {active_count}",
+            "NO FACE DATA - Anonymous Tracking"
         ]
         
         y_offset = 30
         for text in stats_text:
+            # White outline
             cv2.putText(annotated, text, (10, y_offset),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 3)
+            # Black text
             cv2.putText(annotated, text, (10, y_offset),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 1)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
             y_offset += 30
         
         return annotated
@@ -389,16 +437,16 @@ class BartenderTracker:
                     if frame_count % 2 != 0:
                         continue
                     
-                    # Detect bartenders
-                    detections = self._detect_bartenders(frame)
+                    # Detect people (potential bartenders)
+                    detections = self._detect_people(frame)
                     
                     with self.data_lock:
-                        self.current_bartenders = detections
+                        self.current_detections = detections
                         
-                        # Update last seen times
+                        # Update last seen times for tracked bartenders
                         for det in detections:
-                            if det['bartender_id'] is not None:
-                                self.bartenders[det['bartender_id']]['last_seen'] = datetime.now()
+                            if det['anon_id'] is not None:
+                                self.active_bartenders[det['anon_id']]['last_seen'] = datetime.now()
                     
                     # Annotate frame
                     annotated_frame = self._annotate_frame(frame, detections)
@@ -430,75 +478,88 @@ class BartenderTracker:
         self.stop_event.set()
     
     def get_stats(self) -> Dict:
-        """Get current bartender statistics"""
+        """Get current anonymous bartender statistics"""
         with self.data_lock:
             stats = {
                 'total_drinks_today': self.total_drinks_today,
-                'active_bartenders': len([d for d in self.current_bartenders if d['bartender_id'] is not None]),
-                'registered_bartenders': len(self.bartenders),
+                'active_bartenders': len([d for d in self.current_detections if d['anon_id'] is not None]),
+                'tracked_bartenders': len(self.active_bartenders),
+                'privacy_mode': 'ANONYMOUS - NO BIOMETRIC DATA',
                 'bartenders': []
             }
             
-            # Add per-bartender stats
-            for bid, bartender in self.bartenders.items():
-                drinks = self.drinks_per_bartender.get(bid, 0)
+            # Add per-bartender stats (anonymous)
+            for anon_id, bartender in self.active_bartenders.items():
+                drinks = self.drinks_per_bartender.get(anon_id, 0)
                 
                 # Calculate drinks per hour
                 shift_duration = (datetime.now() - bartender['shift_start']).total_seconds() / 3600
                 drinks_per_hour = drinks / shift_duration if shift_duration > 0 else 0
                 
+                # Check if currently active (seen in last 60 seconds)
+                is_active = bartender['last_seen'] is not None and \
+                           (datetime.now() - bartender['last_seen']).total_seconds() < 60
+                
                 stats['bartenders'].append({
-                    'id': bid,
-                    'name': bartender['name'],
+                    'id': anon_id,
+                    'anonymous_id': f"BARTENDER-{anon_id:03d}",  # e.g., BARTENDER-001
                     'drinks_today': drinks,
                     'drinks_per_hour': round(drinks_per_hour, 1),
                     'shift_start': bartender['shift_start'].isoformat(),
                     'last_seen': bartender['last_seen'].isoformat() if bartender['last_seen'] else None,
-                    'is_active': bartender['last_seen'] is not None and 
-                                (datetime.now() - bartender['last_seen']).total_seconds() < 60
+                    'is_active': is_active
                 })
+            
+            # Sort by drinks (highest first)
+            stats['bartenders'].sort(key=lambda x: x['drinks_today'], reverse=True)
             
             return stats
     
     def get_bartender_list(self) -> List[Dict]:
-        """Get list of registered bartenders"""
+        """Get list of anonymous bartenders currently being tracked"""
         with self.data_lock:
             return [
                 {
-                    'id': bid,
-                    'name': bartender['name'],
-                    'drinks_today': self.drinks_per_bartender.get(bid, 0)
+                    'id': anon_id,
+                    'anonymous_id': f"BARTENDER-{anon_id:03d}",
+                    'drinks_today': self.drinks_per_bartender.get(anon_id, 0),
+                    'is_active': (datetime.now() - bartender['last_seen']).total_seconds() < 60 
+                                if bartender['last_seen'] else False
                 }
-                for bid, bartender in self.bartenders.items()
+                for anon_id, bartender in self.active_bartenders.items()
             ]
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
-    # Demo usage
+    # Demo usage - Anonymous tracking
     tracker = BartenderTracker()
     
-    # Register some test bartenders
-    tracker.add_bartender("Sarah")
-    tracker.add_bartender("Mike")
-    tracker.add_bartender("Alex")
-    
-    # Set bar zone (example coordinates)
+    # Set bar zone (example coordinates - adjust for your camera view)
     tracker.set_bar_zone(100, 100, 400, 300)
     
     # Start tracking
     tracker.start_tracking()
     
+    print("🔒 PRIVACY MODE: Anonymous bartender tracking active")
+    print("   - NO face recognition")
+    print("   - NO biometric data stored")
+    print("   - Bartenders tracked by appearance only")
+    print("   - Each person gets anonymous ID for the shift\n")
+    
     try:
         while True:
             time.sleep(5)
             stats = tracker.get_stats()
-            print(f"\n=== Bartender Stats ===")
+            print(f"\n=== Anonymous Bartender Stats ===")
             print(f"Total Drinks: {stats['total_drinks_today']}")
             print(f"Active: {stats['active_bartenders']}")
+            print(f"Mode: {stats['privacy_mode']}")
             for b in stats['bartenders']:
-                print(f"  {b['name']}: {b['drinks_today']} drinks ({b['drinks_per_hour']}/hr)")
+                status = "🟢 ACTIVE" if b['is_active'] else "⚪ INACTIVE"
+                print(f"  {b['anonymous_id']}: {b['drinks_today']} drinks "
+                      f"({b['drinks_per_hour']}/hr) {status}")
     except KeyboardInterrupt:
         print("\nStopping...")
         tracker.stop_tracking()
