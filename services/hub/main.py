@@ -354,28 +354,24 @@ class PulseHub:
                 pass
         
         if self.bme280:
-            # Use cached values (background thread keeps these updated)
-            # Cache is guaranteed to be populated by initial sync read in start_reading()
+            # Use get_all_readings() which includes fallback to direct read if cache is None
             try:
-                cached = self.bme280.get_all_readings()
-                data["temperature_f"] = cached.get("temperature_f")
-                data["humidity"] = cached.get("humidity")
-                data["pressure"] = cached.get("pressure")
+                readings = self.bme280.get_all_readings()
+                data["temperature_f"] = readings.get("temperature_f")
+                data["humidity"] = readings.get("humidity")
+                data["pressure"] = readings.get("pressure")
                 
-                # Fallback: if cached values are None, try a direct read
+                # Log if we're still not getting temperature data
                 if data["temperature_f"] is None:
-                    logger.warning("BME280 cached temperature is None - attempting direct read")
-                    try:
-                        direct_read = self.bme280.read_sensor()
-                        if direct_read and direct_read.get("temperature_f") is not None:
-                            data["temperature_f"] = direct_read.get("temperature_f")
-                            data["humidity"] = direct_read.get("humidity")
-                            data["pressure"] = direct_read.get("pressure")
-                            logger.info(f"Direct BME280 read successful: {data['temperature_f']:.1f}°F")
-                        else:
-                            logger.error("BME280 direct read returned no data - sensor may have failed")
-                    except Exception as e2:
-                        logger.error(f"BME280 direct read failed: {e2}")
+                    logger.warning("BME280 temperature still None after fallback - sensor may be disconnected")
+                    # Check if sensor thread is still running
+                    if not self.bme280.running:
+                        logger.error("BME280 reading thread is not running - attempting restart...")
+                        try:
+                            self.bme280.start_reading(interval=30)
+                            logger.info("BME280 reading thread restarted")
+                        except Exception as restart_error:
+                            logger.error(f"Failed to restart BME280: {restart_error}")
             except Exception as e:
                 logger.error(f"Error getting BME280 readings: {e}")
                 # Try direct read as last resort
@@ -385,11 +381,13 @@ class PulseHub:
                         data["temperature_f"] = direct_read.get("temperature_f")
                         data["humidity"] = direct_read.get("humidity")
                         data["pressure"] = direct_read.get("pressure")
+                        logger.info(f"Emergency direct read successful: {data['temperature_f']:.1f}°F")
                     else:
                         data["temperature_f"] = None
                         data["humidity"] = None
                         data["pressure"] = None
-                except Exception:
+                except Exception as direct_error:
+                    logger.error(f"Emergency direct read also failed: {direct_error}")
                     data["temperature_f"] = None
                     data["humidity"] = None
                     data["pressure"] = None

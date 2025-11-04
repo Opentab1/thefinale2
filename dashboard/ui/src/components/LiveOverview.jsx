@@ -13,10 +13,10 @@ export default function LiveOverview({ sensorData }) {
     occupancy = 0,
     entries = 0,
     exits = 0,
-    temperature_f = 0,
-    humidity = 0,
-    light_level = 0,
-    noise_db = 0,
+    temperature_f = null,
+    humidity = null,
+    light_level = null,
+    noise_db = null,
     current_song = {}
   } = sensorData
 
@@ -53,7 +53,7 @@ export default function LiveOverview({ sensorData }) {
         <MetricCard
           icon={<Thermometer className="w-8 h-8" />}
           title="Temperature"
-          value={temperature_f?.toFixed(1) || '-'}
+          value={temperature_f != null ? temperature_f.toFixed(1) : '-'}
           unit="°F"
           color="red"
         />
@@ -61,7 +61,7 @@ export default function LiveOverview({ sensorData }) {
         <MetricCard
           icon={<Droplet className="w-8 h-8" />}
           title="Humidity"
-          value={humidity?.toFixed(1) || '-'}
+          value={humidity != null ? humidity.toFixed(1) : '-'}
           unit="%"
           color="blue"
         />
@@ -69,7 +69,7 @@ export default function LiveOverview({ sensorData }) {
         <MetricCard
           icon={<Sun className="w-8 h-8" />}
           title="Light Level"
-          value={light_level?.toFixed(0) || '-'}
+          value={light_level != null ? light_level.toFixed(0) : '-'}
           unit="lux"
           color="yellow"
         />
@@ -77,7 +77,7 @@ export default function LiveOverview({ sensorData }) {
         <MetricCard
           icon={<Volume2 className="w-8 h-8" />}
           title="Noise Level"
-          value={noise_db?.toFixed(1) || '-'}
+          value={noise_db != null ? noise_db.toFixed(1) : '-'}
           unit="dB"
           color="purple"
         />
@@ -230,30 +230,38 @@ function ComfortMeter({ temperature, humidity, noise, light }) {
   // Simple comfort score calculation (0-100)
   let score = 50 // Base score
   
-  // Temperature (68-72°F is ideal)
-  if (temperature >= 68 && temperature <= 72) {
-    score += 20
-  } else if (temperature >= 65 && temperature <= 75) {
-    score += 10
+  // Temperature (68-72°F is ideal) - only calculate if we have data
+  if (temperature != null) {
+    if (temperature >= 68 && temperature <= 72) {
+      score += 20
+    } else if (temperature >= 65 && temperature <= 75) {
+      score += 10
+    }
   }
   
-  // Humidity (40-60% is ideal)
-  if (humidity >= 40 && humidity <= 60) {
-    score += 15
-  } else if (humidity >= 30 && humidity <= 70) {
-    score += 5
+  // Humidity (40-60% is ideal) - only calculate if we have data
+  if (humidity != null) {
+    if (humidity >= 40 && humidity <= 60) {
+      score += 15
+    } else if (humidity >= 30 && humidity <= 70) {
+      score += 5
+    }
   }
   
-  // Noise (50-70 dB is acceptable)
-  if (noise >= 50 && noise <= 70) {
-    score += 10
-  } else if (noise < 50 || noise > 80) {
-    score -= 10
+  // Noise (50-70 dB is acceptable) - only calculate if we have data
+  if (noise != null) {
+    if (noise >= 50 && noise <= 70) {
+      score += 10
+    } else if (noise < 50 || noise > 80) {
+      score -= 10
+    }
   }
   
-  // Light (200-500 lux is good)
-  if (light >= 200 && light <= 500) {
-    score += 5
+  // Light (200-500 lux is good) - only calculate if we have data
+  if (light != null) {
+    if (light >= 200 && light <= 500) {
+      score += 5
+    }
   }
   
   score = Math.max(0, Math.min(100, score))

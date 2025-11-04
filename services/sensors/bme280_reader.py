@@ -140,31 +140,53 @@ class BME280Reader:
         logger.info(f"Started BME280 background reading (interval: {interval}s)")
     
     def _reading_loop(self, interval: int):
-        """Main reading loop"""
+        """Main reading loop with automatic recovery"""
+        consecutive_errors = 0
+        max_errors = 5
+        
         try:
             while self.running and not self.stop_event.is_set():
                 try:
                     data = self.read_sensor()
                     
-                    if data:
+                    if data and data.get("temperature_f") is not None:
+                        consecutive_errors = 0  # Reset error counter on success
                         logger.debug(
                             f"Temp: {data['temperature_f']:.1f}°F, "
                             f"Humidity: {data['humidity']:.1f}%, "
                             f"Pressure: {data['pressure']:.2f} hPa"
                         )
+                    else:
+                        logger.warning("BME280 read returned no data - sensor may be disconnected")
+                        consecutive_errors += 1
                     
                     # Wait for next reading
                     self.stop_event.wait(interval)
                     
                 except Exception as e:
-                    logger.error(f"Error in reading loop: {e}")
+                    consecutive_errors += 1
+                    logger.error(f"Error in reading loop ({consecutive_errors}/{max_errors}): {e}")
+                    
+                    # If we have too many consecutive errors, try to reinitialize the sensor
+                    if consecutive_errors >= max_errors:
+                        logger.warning("Too many consecutive errors - attempting sensor reinitialization...")
+                        try:
+                            self._init_sensor()
+                            logger.info("Sensor reinitialized successfully")
+                            consecutive_errors = 0
+                        except Exception as reinit_error:
+                            logger.error(f"Failed to reinitialize sensor: {reinit_error}")
+                            # Continue anyway - might recover on next attempt
+                    
                     self.stop_event.wait(interval)
             
             logger.info("BME280 reading stopped")
             
         except Exception as e:
             logger.error(f"Fatal error in reading loop: {e}")
-            self.running = False
+            # Don't set running to False - let the watchdog restart it if needed
+            import traceback
+            logger.error(traceback.format_exc())
     
     def stop_reading(self):
         """Stop sensor reading"""
@@ -189,7 +211,23 @@ class BME280Reader:
         return self.pressure
     
     def get_all_readings(self) -> Dict:
-        """Get all current readings"""
+        """Get all current readings with fallback to direct read if cache is stale"""
+        # If cached values are None or too old, try a direct read
+        if self.temperature is None:
+            logger.debug("Cached temperature is None - attempting direct read")
+            try:
+                direct_data = self.read_sensor()
+                if direct_data and direct_data.get("temperature_f") is not None:
+                    return {
+                        "temperature_f": direct_data.get("temperature_f"),
+                        "temperature_c": direct_data.get("temperature_c"),
+                        "humidity": direct_data.get("humidity"),
+                        "pressure": direct_data.get("pressure"),
+                        "timestamp": datetime.now().isoformat()
+                    }
+            except Exception as e:
+                logger.debug(f"Direct read fallback failed: {e}")
+        
         return {
             "temperature_f": self.temperature,
             "temperature_c": (self.temperature - 32) * 5/9 if self.temperature else None,
