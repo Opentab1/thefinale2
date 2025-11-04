@@ -4,6 +4,8 @@ Song detection and decibel level monitoring
 Integrated with party_box song detection for production-ready music recognition
 """
 
+import asyncio
+import concurrent.futures
 import logging
 from threading import Thread, Event, Lock
 from datetime import datetime
@@ -95,6 +97,12 @@ class AudioMonitor:
             "last_error": None,
             "active": False,
         }
+
+        # Dedicated async event loop for song recognition to keep Shazam stable
+        self._detection_loop = None
+        self._detection_loop_thread = None
+        self._detection_loop_ready_event = None
+        self._detection_loop_lock = Lock()
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
         # This allows song detection without opening a separate audio stream
@@ -118,14 +126,19 @@ class AudioMonitor:
                     enabled=False,  # Don't start background recording
                     detection_interval=int(self._song_detect_interval)
                 )
-                logger.info("✅ Song detector initialized (using shared audio buffer)")
-                # Check if ShazamIO is actually available
-                try:
-                    from shazamio import Shazam
-                    logger.info("✅ ShazamIO library available - song detection will work")
-                except ImportError:
-                    logger.warning("⚠️ ShazamIO not available - song detection will not work")
-                    logger.warning("   Install with: pip install shazamio aiohttp")
+
+                if not self._ensure_detection_loop():
+                    logger.warning("Song detection event loop failed to initialize; disabling detection")
+                    self.song_detector = None
+                else:
+                    logger.info("✅ Song detector initialized (using shared audio buffer)")
+                    # Check if ShazamIO is actually available
+                    try:
+                        from shazamio import Shazam
+                        logger.info("✅ ShazamIO library available - song detection will work")
+                    except ImportError:
+                        logger.warning("⚠️ ShazamIO not available - song detection will not work")
+                        logger.warning("   Install with: pip install shazamio aiohttp")
             except Exception as e:
                 logger.warning(f"Failed to initialize song detector: {e}")
                 logger.warning(f"   Error details: {type(e).__name__}: {str(e)}")
@@ -247,6 +260,75 @@ class AudioMonitor:
         except Exception as e:
             logger.error(f"Audio device validation failed: {e}")
     
+    def _ensure_detection_loop(self) -> bool:
+        """Ensure the dedicated async loop for Shazam runs in a background thread."""
+        if self._detection_loop is not None:
+            return True
+
+        with self._detection_loop_lock:
+            if self._detection_loop is not None:
+                return True
+
+            try:
+                loop = asyncio.new_event_loop()
+                ready_event = Event()
+
+                def _loop_runner():
+                    asyncio.set_event_loop(loop)
+                    ready_event.set()
+                    logger.debug("Song detection event loop started")
+                    loop.run_forever()
+
+                thread = Thread(target=_loop_runner, name="AudioMonitorSongLoop", daemon=True)
+                thread.start()
+
+                if not ready_event.wait(timeout=5.0):
+                    logger.error("Song detection loop failed to start within 5 seconds")
+                    # Attempt graceful shutdown of the loop/thread if possible
+                    try:
+                        loop.call_soon_threadsafe(loop.stop)
+                    except RuntimeError:
+                        pass
+                    thread.join(timeout=1.0)
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
+                    return False
+
+                self._detection_loop = loop
+                self._detection_loop_thread = thread
+                self._detection_loop_ready_event = ready_event
+                return True
+            except Exception as exc:
+                logger.error(f"Failed to initialize song detection loop: {exc}")
+                return False
+
+    def _shutdown_detection_loop(self):
+        """Stop and clean up the dedicated song detection loop."""
+        with self._detection_loop_lock:
+            loop = self._detection_loop
+            thread = self._detection_loop_thread
+            self._detection_loop = None
+            self._detection_loop_thread = None
+            self._detection_loop_ready_event = None
+
+            if loop is None:
+                return
+
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except Exception:
+                pass
+
+            if thread:
+                thread.join(timeout=2.0)
+
+            try:
+                loop.close()
+            except Exception:
+                logger.debug("Song detection loop close raised", exc_info=True)
+
     def calculate_db(self, audio_data: np.ndarray) -> float:
         """Calculate decibel level from audio data"""
         try:
@@ -510,7 +592,6 @@ class AudioMonitor:
         import tempfile
         import wave
         import threading
-        import asyncio
 
         if not self._song_detection_lock.acquire(blocking=False):
             logger.debug("Song detection skipped (previous attempt still running)")
@@ -528,6 +609,7 @@ class AudioMonitor:
         def detect_async():
             temp_filename = None
             duration_sec = None
+            future = None
             try:
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                     temp_filename = temp_file.name
@@ -540,31 +622,26 @@ class AudioMonitor:
 
                 logger.debug(f"Saved audio buffer to {temp_filename}")
 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                if not self._ensure_detection_loop():
+                    logger.error("Song detection loop unavailable; skipping detection")
+                    self._song_detection_stats["last_error"] = "loop_unavailable"
+                    return
+
                 result = None
                 try:
-                    result = loop.run_until_complete(
-                        asyncio.wait_for(
-                            self._recognize_song_async(temp_filename),
-                            timeout=20.0
-                        )
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._recognize_song_async(temp_filename),
+                        self._detection_loop
                     )
-                except asyncio.TimeoutError:
+                    result = future.result(timeout=20.0)
+                except concurrent.futures.TimeoutError:
+                    if future:
+                        future.cancel()
                     logger.warning("Song detection timed out (20s) - skipping")
                     self._song_detection_stats["last_error"] = "timeout"
                 except Exception as detect_error:
                     logger.error(f"Song detection error: {detect_error}")
                     self._song_detection_stats["last_error"] = f"{type(detect_error).__name__}: {detect_error}"
-                finally:
-                    try:
-                        pending = asyncio.all_tasks(loop)
-                        for task in pending:
-                            task.cancel()
-                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                    except Exception:
-                        pass
-                    loop.close()
 
                 duration_sec = round(time.time() - start_monotonic, 2)
 
@@ -604,6 +681,13 @@ class AudioMonitor:
                 logger.debug(traceback.format_exc())
                 self._song_detection_stats["last_error"] = f"{type(e).__name__}: {e}"
             finally:
+                if future and not future.done():
+                    future.cancel()
+                    try:
+                        future.result()
+                    except Exception:
+                        pass
+
                 if temp_filename:
                     try:
                         if os.path.exists(temp_filename):
@@ -635,7 +719,6 @@ class AudioMonitor:
     async def _recognize_song_async(self, audio_file):
         """Recognize song using ShazamIO (async with timeout)"""
         try:
-            import asyncio
             from shazamio import Shazam
             
             # Use a single reusable Shazam instance to prevent resource leaks
@@ -677,6 +760,9 @@ class AudioMonitor:
         except asyncio.TimeoutError:
             logger.warning("Song recognition timed out after 15 seconds")
             return None
+        except asyncio.CancelledError:
+            logger.debug("Song recognition coroutine cancelled")
+            raise
         except Exception as e:
             logger.error(f"Shazam recognition error: {type(e).__name__}: {e}")
             return None
@@ -735,18 +821,44 @@ class AudioMonitor:
                 if self._shazam_instance is not None:
                     # ShazamIO's Shazam class uses aiohttp ClientSession internally
                     # We need to properly close it to prevent resource leaks
-                    if hasattr(self._shazam_instance, 'client') and hasattr(self._shazam_instance.client, 'close'):
-                        import asyncio
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
+                    client = getattr(self._shazam_instance, 'client', None)
+                    close_callable = getattr(client, 'close', None) if client else None
+
+                    if close_callable is not None:
                         try:
-                            loop.run_until_complete(self._shazam_instance.client.close())
-                        finally:
-                            loop.close()
+                            close_coro = close_callable()
+                            if asyncio.iscoroutine(close_coro):
+                                future = None
+                                try:
+                                    if self._detection_loop is not None:
+                                        future = asyncio.run_coroutine_threadsafe(close_coro, self._detection_loop)
+                                        future.result(timeout=5.0)
+                                    else:
+                                        asyncio.run(close_coro)
+                                except concurrent.futures.TimeoutError:
+                                    if future:
+                                        future.cancel()
+                                    logger.debug("Timeout while closing Shazam client session")
+                                except Exception as close_error:
+                                    logger.debug(f"Error closing Shazam client: {close_error}", exc_info=True)
+                                finally:
+                                    if future and not future.done():
+                                        future.cancel()
+                                        try:
+                                            future.result()
+                                        except Exception:
+                                            pass
+                            else:
+                                # If close() returned None, it likely handled closing synchronously
+                                pass
+                        except Exception as close_exc:
+                            logger.debug(f"Exception while invoking Shazam client close(): {close_exc}", exc_info=True)
                     self._shazam_instance = None
                     logger.info("Shazam instance cleaned up")
         except Exception as e:
             logger.warning(f"Error cleaning up Shazam instance: {e}")
+        finally:
+            self._shutdown_detection_loop()
         
         try:
             if self.pyaudio_instance:
