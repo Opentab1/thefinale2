@@ -352,8 +352,81 @@ class AudioMonitor:
             except Exception:
                 logger.debug("Song detection loop close raised", exc_info=True)
 
+    def _reset_shazam_instance(self, reason: str = "reset"):
+        """Dispose of the cached Shazam instance so a fresh one can be created."""
+        old_instance = None
+        with self._shazam_lock:
+            if self._shazam_instance is None:
+                return
+            old_instance = self._shazam_instance
+            self._shazam_instance = None
+            self._shazam_created_at = 0.0
+
+        client = getattr(old_instance, "client", None)
+        close_callable = getattr(client, "close", None) if client else None
+
+        if close_callable is None:
+            logger.debug("Shazam reset (%s): no client close() available", reason)
+            logger.info("Shazam instance reset (%s)", reason)
+            return
+
+        def _run_close(coro):
+            if asyncio.iscoroutine(coro):
+                loop = self._detection_loop
+                if loop is not None and not loop.is_closed():
+                    future = None
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(coro, loop)
+                        future.result(timeout=5.0)
+                    except concurrent.futures.TimeoutError:
+                        if future:
+                            future.cancel()
+                        logger.debug("Timeout closing Shazam client during %s", reason)
+                    except Exception as exc:
+                        logger.debug(
+                            "Error closing Shazam client during %s: %s",
+                            reason,
+                            exc,
+                            exc_info=True,
+                        )
+                    finally:
+                        if future and not future.done():
+                            future.cancel()
+                            try:
+                                future.result()
+                            except Exception:
+                                pass
+                else:
+                    new_loop = asyncio.new_event_loop()
+                    try:
+                        new_loop.run_until_complete(coro)
+                    except Exception as exc:
+                        logger.debug(
+                            "Error closing Shazam client on new loop during %s: %s",
+                            reason,
+                            exc,
+                            exc_info=True,
+                        )
+                    finally:
+                        new_loop.close()
+
+        try:
+            close_result = close_callable()
+        except Exception as exc:
+            logger.debug(
+                "Error invoking Shazam client close() during %s: %s",
+                reason,
+                exc,
+                exc_info=True,
+            )
+        else:
+            _run_close(close_result)
+
+        logger.info("Shazam instance reset (%s)", reason)
+
     def _restart_detection_loop(self) -> bool:
         """Restart the song detection event loop."""
+        self._reset_shazam_instance(reason="loop_restart")
         self._shutdown_detection_loop()
         if self._ensure_detection_loop():
             logger.info("Song detection event loop restarted")
@@ -1035,44 +1108,7 @@ class AudioMonitor:
         
         # Cleanup Shazam instance and its ClientSession
         try:
-            with self._shazam_lock:
-                if self._shazam_instance is not None:
-                    # ShazamIO's Shazam class uses aiohttp ClientSession internally
-                    # We need to properly close it to prevent resource leaks
-                    client = getattr(self._shazam_instance, 'client', None)
-                    close_callable = getattr(client, 'close', None) if client else None
-
-                    if close_callable is not None:
-                        try:
-                            close_coro = close_callable()
-                            if asyncio.iscoroutine(close_coro):
-                                future = None
-                                try:
-                                    if self._detection_loop is not None:
-                                        future = asyncio.run_coroutine_threadsafe(close_coro, self._detection_loop)
-                                        future.result(timeout=5.0)
-                                    else:
-                                        asyncio.run(close_coro)
-                                except concurrent.futures.TimeoutError:
-                                    if future:
-                                        future.cancel()
-                                    logger.debug("Timeout while closing Shazam client session")
-                                except Exception as close_error:
-                                    logger.debug(f"Error closing Shazam client: {close_error}", exc_info=True)
-                                finally:
-                                    if future and not future.done():
-                                        future.cancel()
-                                        try:
-                                            future.result()
-                                        except Exception:
-                                            pass
-                            else:
-                                # If close() returned None, it likely handled closing synchronously
-                                pass
-                        except Exception as close_exc:
-                            logger.debug(f"Exception while invoking Shazam client close(): {close_exc}", exc_info=True)
-                    self._shazam_instance = None
-                    logger.info("Shazam instance cleaned up")
+            self._reset_shazam_instance(reason="cleanup")
         except Exception as e:
             logger.warning(f"Error cleaning up Shazam instance: {e}")
         finally:
