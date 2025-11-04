@@ -123,9 +123,25 @@ class BME280Reader:
         try:
             initial_data = self.read_sensor()
             if initial_data and initial_data.get("temperature_f") is not None:
+                # Explicitly set cached values
+                self.temperature = initial_data.get("temperature_f")
+                self.humidity = initial_data.get("humidity")
+                self.pressure = initial_data.get("pressure")
                 logger.info(f"Initial reading: {initial_data['temperature_f']:.1f}°F, {initial_data['humidity']:.1f}%")
+                logger.info(f"✓ Cached values initialized: temp={self.temperature}°F, humidity={self.humidity}%")
             else:
                 logger.warning("Initial reading returned no data - sensor may not be working")
+                # Try one more time
+                time.sleep(0.5)
+                initial_data = self.read_sensor()
+                if initial_data and initial_data.get("temperature_f") is not None:
+                    self.temperature = initial_data.get("temperature_f")
+                    self.humidity = initial_data.get("humidity")
+                    self.pressure = initial_data.get("pressure")
+                    logger.info(f"✓ Retry successful: {initial_data['temperature_f']:.1f}°F")
+                else:
+                    logger.error("✗ Initial read failed after retry - sensor may not be working")
+                    raise Exception("BME280 initial read failed - sensor may not be connected")
         except Exception as e:
             logger.error(f"Initial sensor read failed: {e}")
             raise  # Re-raise to prevent starting with bad sensor

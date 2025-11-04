@@ -98,7 +98,15 @@ def get_current_sensors():
     try:
         if hub_instance:
             data = hub_instance._collect_sensor_data()
-            logger.debug(f"Sensor data from hub: temp={data.get('temperature_f')}, humidity={data.get('humidity')}")
+            logger.debug(f"Sensor data from hub: temp={data.get('temperature_f')}, humidity={data.get('humidity')}, noise_db={data.get('noise_db')}, song={data.get('current_song')}")
+            
+            # Log warnings for None values
+            if data.get('temperature_f') is None:
+                logger.warning("⚠️ Temperature is None - BME280 may not be working")
+            if data.get('noise_db') is None:
+                logger.warning("⚠️ Noise dB is None - AudioMonitor stream may not be active")
+            if not data.get('current_song') or data.get('current_song', {}).get('title') in (None, 'Unknown'):
+                logger.debug("No song detected (this is normal if no music is playing)")
         else:
             # Fallback: derive current snapshot from database
             data = {

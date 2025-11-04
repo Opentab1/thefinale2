@@ -69,9 +69,10 @@ class AudioMonitor:
         self.running = False
         self.stop_event = Event()
 
-        self.current_db = 0.0
+        self.current_db = None  # Use None to indicate "not initialized" vs 0.0 for "no sound"
         self.peak_db = 0.0
         self.current_song = None
+        self._stream_active = False  # Track if audio stream is actually active
         
         # Watchdog tracking
         self._monitoring_thread = None
@@ -103,9 +104,16 @@ class AudioMonitor:
                 try:
                     from shazamio import Shazam
                     logger.info("✅ ShazamIO library available - song detection will work")
-                except ImportError:
+                    # Verify it can be instantiated
+                    _test_shazam = Shazam()
+                    logger.info("✅ ShazamIO instantiation successful")
+                except ImportError as ie:
                     logger.warning("⚠️ ShazamIO not available - song detection will not work")
                     logger.warning("   Install with: pip install shazamio aiohttp")
+                    logger.warning(f"   Error: {ie}")
+                except Exception as e:
+                    logger.warning(f"⚠️ ShazamIO available but failed to instantiate: {e}")
+                    logger.warning("   Song detection may not work properly")
             except Exception as e:
                 logger.warning(f"Failed to initialize song detector: {e}")
                 logger.warning(f"   Error details: {type(e).__name__}: {str(e)}")
@@ -116,6 +124,12 @@ class AudioMonitor:
             self.song_detector = None
             logger.warning("⚠️ Song detector disabled (SongDetector class not available)")
             logger.warning("   Check if song_detector.py is properly imported")
+            # Try to import it directly to see what the error is
+            try:
+                from .song_detector import SongDetector as TestSongDetector
+                logger.info("   ✓ SongDetector can be imported, but wasn't available at init time")
+            except Exception as import_error:
+                logger.warning(f"   ✗ SongDetector import failed: {import_error}")
 
         # Audio interfaces (optional)
         self.pyaudio_instance = None
@@ -375,9 +389,14 @@ class AudioMonitor:
                 logger.error("  2. Device permissions: arecord -d 1 test.wav")
                 logger.error("  3. Dependencies installed: pip install pyaudio sounddevice")
                 logger.error("="*80)
-                # Still run the loop for song detection, but no dB readings
+                self._stream_active = False
+                # Set dB to None to indicate stream not active
+                self.current_db = None
             else:
                 logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
+                self._stream_active = True
+                # Initialize with a default value (will be updated on first read)
+                self.current_db = 0.0
 
             while self.running and not self.stop_event.is_set():
                 try:
@@ -420,11 +439,15 @@ class AudioMonitor:
                     now_db = time.time()
                     if (now_db - self._last_db_ts) >= 2.0:  # Update every 2 seconds
                         db = self.calculate_db(audio_data)
-                        self.current_db = db
-                        self.peak_db = max(self.peak_db, db)
-                        self._last_db_ts = now_db
-                        self._last_activity = now_db  # Update watchdog
-                        logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
+                        # Only update if we got a valid reading
+                        if db is not None and db >= 0:
+                            self.current_db = db
+                            self.peak_db = max(self.peak_db, db)
+                            self._last_db_ts = now_db
+                            self._last_activity = now_db  # Update watchdog
+                            logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
+                        else:
+                            logger.debug(f"Invalid dB calculation: {db}")
                     
                     # Trigger song detection every 30 seconds using buffered audio
                     # Run in non-blocking way to prevent hanging
@@ -432,11 +455,15 @@ class AudioMonitor:
                     if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
                         if self._buffer_index >= self._audio_buffer_size:  # Buffer is full (5 seconds)
                             logger.info("🎵 Running song detection from audio buffer...")
+                            logger.debug(f"   Buffer ready: {self._buffer_index}/{self._audio_buffer_size} samples")
                             # Run in separate thread to prevent blocking even if it hangs
                             try:
                                 self._detect_song_from_buffer()
+                                logger.debug("   Song detection thread started")
                             except Exception as e:
                                 logger.error(f"Failed to start song detection thread: {e}")
+                                import traceback
+                                logger.error(traceback.format_exc())
                         else:
                             logger.debug(f"Audio buffer not ready for song detection (index: {self._buffer_index}/{self._audio_buffer_size})")
                         self._last_song_detect_ts = now_song
@@ -444,7 +471,8 @@ class AudioMonitor:
                     elif self.song_detector is None:
                         # Log occasionally if song detector is not available
                         if int(now_song) % 60 == 0:  # Log once per minute
-                            logger.debug("Song detector not available - song detection disabled")
+                            logger.warning("⚠️ Song detector not available - song detection disabled")
+                            logger.warning("   Check ShazamIO installation: pip install shazamio aiohttp")
                     
                     # CRITICAL: Always update last_activity even if no song detection
                     # This prevents watchdog from thinking we're stuck
@@ -622,6 +650,11 @@ class AudioMonitor:
     
     def get_current_db(self) -> float:
         """Get current decibel level"""
+        # Return 0.0 if None (for backward compatibility), but log warning
+        if self.current_db is None:
+            if not self._stream_active:
+                logger.debug("Audio stream not active - dB reading unavailable")
+            return 0.0
         return self.current_db
     
     def get_peak_db(self) -> float:

@@ -403,15 +403,30 @@ class PulseHub:
             data["light_level"] = self.light_sensor.get_light_level()
         
         if self.audio_monitor:
-            data["noise_db"] = self.audio_monitor.get_current_db()
-            song_data = self.audio_monitor.get_current_song()
-            data["current_song"] = song_data
-            
-            # Log song detection status for debugging
-            if song_data and song_data.get("title") not in (None, "Unknown"):
-                logger.debug(f"Song detected via audio monitor: {song_data.get('title')} - {song_data.get('artist')}")
-            else:
-                logger.debug("No song detected via audio monitor (title: Unknown or None)")
+            try:
+                db_value = self.audio_monitor.get_current_db()
+                data["noise_db"] = db_value if db_value is not None else None
+                
+                # Log dB status for debugging
+                if data["noise_db"] is not None and data["noise_db"] > 0:
+                    logger.debug(f"Audio dB: {data['noise_db']:.1f} dB")
+                elif data["noise_db"] == 0:
+                    logger.debug("Audio dB: 0 dB (no sound detected or stream not active)")
+                else:
+                    logger.warning("Audio dB: None (audio stream may not be active)")
+                
+                song_data = self.audio_monitor.get_current_song()
+                data["current_song"] = song_data
+                
+                # Log song detection status for debugging
+                if song_data and song_data.get("title") not in (None, "Unknown"):
+                    logger.debug(f"Song detected via audio monitor: {song_data.get('title')} - {song_data.get('artist')}")
+                else:
+                    logger.debug("No song detected via audio monitor (title: Unknown or None)")
+            except Exception as e:
+                logger.error(f"Error getting audio monitor data: {e}")
+                data["noise_db"] = None
+                data["current_song"] = {"title": None, "artist": None}
 
         # Fallback: if no song detected via mic, use music controller's current track
         if (not data.get("current_song") or data["current_song"].get("title") in (None, "Unknown")) and self.music_controller:
