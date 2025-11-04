@@ -138,11 +138,48 @@ class PulseDB:
                 )
             ''')
             
+            # ===== NEW: Bartender Tracking Tables =====
+            # Bartender profiles
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bartenders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    face_encoding BLOB,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    status TEXT DEFAULT 'active'
+                )
+            ''')
+            
+            # Bartender drink events
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bartender_drinks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bartender_id INTEGER NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    drink_type TEXT,
+                    FOREIGN KEY (bartender_id) REFERENCES bartenders(id)
+                )
+            ''')
+            
+            # Bartender shifts
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bartender_shifts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bartender_id INTEGER NOT NULL,
+                    clock_in DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    clock_out DATETIME,
+                    total_drinks INTEGER DEFAULT 0,
+                    FOREIGN KEY (bartender_id) REFERENCES bartenders(id)
+                )
+            ''')
+            
             # Create indexes
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_sensor_timestamp ON sensor_readings(timestamp)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_occupancy_timestamp ON occupancy(timestamp)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_environment_timestamp ON environment(timestamp)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_automation_timestamp ON automation_log(timestamp)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_bartender_drinks_timestamp ON bartender_drinks(timestamp)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_bartender_drinks_bartender ON bartender_drinks(bartender_id)')
             
             conn.commit()
     
@@ -339,3 +376,88 @@ class PulseDB:
                 ''', (days,))
             
             conn.commit()
+    
+    # ===== NEW: Bartender Tracking Methods =====
+    def add_bartender(self, name: str, face_encoding: bytes = None) -> int:
+        """Add a new bartender to the database"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO bartenders (name, face_encoding)
+                VALUES (?, ?)
+            ''', (name, face_encoding))
+            return cursor.lastrowid
+    
+    def get_bartenders(self) -> List[Dict]:
+        """Get all bartenders"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, name, created_at, status FROM bartenders WHERE status = "active"')
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def log_bartender_drink(self, bartender_id: int, drink_type: str = None):
+        """Log a drink made by a bartender"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO bartender_drinks (bartender_id, drink_type)
+                VALUES (?, ?)
+            ''', (bartender_id, drink_type))
+    
+    def get_bartender_drinks_today(self, bartender_id: int) -> int:
+        """Get number of drinks made by bartender today"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT COUNT(*) as count FROM bartender_drinks
+                WHERE bartender_id = ? 
+                AND DATE(timestamp) = DATE('now')
+            ''', (bartender_id,))
+            result = cursor.fetchone()
+            return result[0] if result else 0
+    
+    def get_bartender_stats(self, hours: int = 24) -> List[Dict]:
+        """Get bartender statistics for the last N hours"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT 
+                    b.id,
+                    b.name,
+                    COUNT(d.id) as drinks_count,
+                    COUNT(d.id) * 1.0 / ? as drinks_per_hour
+                FROM bartenders b
+                LEFT JOIN bartender_drinks d ON b.id = d.bartender_id
+                    AND d.timestamp >= datetime('now', '-' || ? || ' hours')
+                WHERE b.status = 'active'
+                GROUP BY b.id, b.name
+                ORDER BY drinks_count DESC
+            ''', (hours, hours))
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def get_bartender_hourly_drinks(self, bartender_id: int, hours: int = 24) -> List[Dict]:
+        """Get hourly drink counts for a specific bartender"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT 
+                    strftime('%Y-%m-%d %H:00:00', timestamp) as hour,
+                    COUNT(*) as drink_count
+                FROM bartender_drinks
+                WHERE bartender_id = ?
+                AND timestamp >= datetime('now', '-' || ? || ' hours')
+                GROUP BY hour
+                ORDER BY hour
+            ''', (bartender_id, hours))
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def get_total_drinks_today(self) -> int:
+        """Get total drinks made today across all bartenders"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT COUNT(*) as count FROM bartender_drinks
+                WHERE DATE(timestamp) = DATE('now')
+            ''')
+            result = cursor.fetchone()
+            return result[0] if result else 0

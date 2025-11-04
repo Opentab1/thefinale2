@@ -499,6 +499,103 @@ def tv_power():
         return jsonify({"error": str(e)}), 500
 
 
+# ===== NEW: Bartender Tracking API Routes =====
+
+@app.route('/api/bartender/stats', methods=['GET'])
+def get_bartender_stats():
+    """Get bartender statistics"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        stats = db.get_bartender_stats(hours)
+        total_drinks = db.get_total_drinks_today()
+        
+        return jsonify({
+            "total_drinks_today": total_drinks,
+            "bartenders": stats
+        })
+    except Exception as e:
+        logger.error(f"Error getting bartender stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/bartender/list', methods=['GET'])
+def get_bartender_list():
+    """Get list of all bartenders"""
+    try:
+        bartenders = db.get_bartenders()
+        return jsonify({"bartenders": bartenders})
+    except Exception as e:
+        logger.error(f"Error getting bartender list: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/bartender/add', methods=['POST'])
+def add_bartender():
+    """Add a new bartender"""
+    try:
+        name = request.json.get('name')
+        if not name:
+            return jsonify({"error": "Name is required"}), 400
+        
+        bartender_id = db.add_bartender(name)
+        return jsonify({"success": True, "bartender_id": bartender_id})
+    except Exception as e:
+        logger.error(f"Error adding bartender: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/bartender/drink', methods=['POST'])
+def record_bartender_drink():
+    """Record a drink made by a bartender"""
+    try:
+        bartender_id = request.json.get('bartender_id')
+        drink_type = request.json.get('drink_type', 'unknown')
+        
+        if not bartender_id:
+            return jsonify({"error": "bartender_id is required"}), 400
+        
+        db.log_bartender_drink(bartender_id, drink_type)
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.error(f"Error recording drink: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/bartender/<int:bartender_id>/hourly', methods=['GET'])
+def get_bartender_hourly(bartender_id):
+    """Get hourly drink counts for a specific bartender"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        data = db.get_bartender_hourly_drinks(bartender_id, hours)
+        return jsonify({"hourly_drinks": data})
+    except Exception as e:
+        logger.error(f"Error getting hourly data: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/bartender/snapshot')
+def bartender_snapshot():
+    """Get bartender camera snapshot"""
+    try:
+        snapshot_path = Path('/opt/pulse/data/bartender_camera.jpg')
+        
+        if snapshot_path.exists() and snapshot_path.stat().st_size > 0:
+            resp = send_file(str(snapshot_path), mimetype='image/jpeg', max_age=0)
+            resp.headers['Cache-Control'] = 'no-store'
+            return resp
+        
+        # Fallback: return placeholder
+        transparent_png = (
+            b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+            b'\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0bIDATx\xda\x63\x60\x00\x00\x00\x02\x00\x01'
+            b'\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82'
+        )
+        return Response(transparent_png, mimetype='image/png', headers={'Cache-Control': 'no-store'})
+    except Exception as e:
+        logger.error(f"Error serving bartender snapshot: {e}")
+        return ("Error", 500)
+
+
 # ===== WebSocket Events =====
 
 @socketio.on('connect')
