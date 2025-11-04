@@ -340,6 +340,7 @@ class PulseHub:
             "humidity": None,
             "pressure": None,
             "altitude": None,
+            "temperature_age_seconds": None,
             "light_level": None,
             "noise_db": None,
             "current_song": None,
@@ -368,6 +369,9 @@ class PulseHub:
                 data["humidity"] = self._sanitize_environment_value(cached.get("humidity"))
                 data["pressure"] = self._sanitize_environment_value(cached.get("pressure"))
                 data["altitude"] = self._sanitize_environment_value(cached.get("altitude"))
+                cache_age = cached.get("age_seconds")
+                data["temperature_age_seconds"] = cache_age
+                stale_threshold = max(120.0, self.bme280.get_read_interval() * 4)
                 
                 # Log temperature readings for debugging
                 if data["temperature_f"] is not None:
@@ -379,9 +383,23 @@ class PulseHub:
                         f"Pressure: {pressure_str}"
                     )
                 
+                if cache_age is not None and cache_age > stale_threshold:
+                    logger.warning(
+                        "BME280 readings are stale (age=%.1fs > threshold %.1fs)",
+                        cache_age,
+                        stale_threshold
+                    )
+                elif cache_age is None:
+                    logger.debug("BME280 cache age unavailable - treating as potentially stale")
+                
                 # Fallback: if cached values are None, try a direct read
-                if data["temperature_f"] is None:
-                    logger.warning("BME280 cached temperature is None - attempting direct read")
+                needs_refresh = (
+                    data["temperature_f"] is None
+                    or cache_age is None
+                    or (cache_age is not None and cache_age > stale_threshold)
+                )
+                if needs_refresh:
+                    logger.warning("BME280 cache needs refresh - attempting direct read")
                     try:
                         direct_read = self.bme280.read_sensor()
                         if direct_read and direct_read.get("temperature_f") is not None:
@@ -390,6 +408,8 @@ class PulseHub:
                             data["humidity"] = self._sanitize_environment_value(direct_read.get("humidity"))
                             data["pressure"] = self._sanitize_environment_value(direct_read.get("pressure"))
                             data["altitude"] = self._sanitize_environment_value(direct_read.get("altitude"))
+                            cache_age = self.bme280.get_cache_age()
+                            data["temperature_age_seconds"] = cache_age
                             if data["temperature_f"] is not None:
                                 logger.info(f"Direct BME280 read successful: {data['temperature_f']:.1f}°F")
                         else:
@@ -421,6 +441,16 @@ class PulseHub:
                     data["humidity"] = None
                     data["pressure"] = None
                     data["altitude"] = None
+
+            if self.bme280.is_cache_stale():
+                # Attempt to restart background polling if it appears to be down
+                if not self.bme280.running:
+                    try:
+                        self.bme280.restart_reading()
+                    except Exception as restart_error:
+                        logger.error(f"Failed to restart BME280 reader: {restart_error}")
+                else:
+                    logger.debug("BME280 cache marked stale but reader still running; will monitor")
 
         self._apply_environment_fallback(data)
         

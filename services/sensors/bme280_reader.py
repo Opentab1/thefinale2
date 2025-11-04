@@ -6,7 +6,7 @@ import logging
 import math
 import time
 import numpy as np
-from threading import Thread, Event
+from threading import Thread, Event, Lock
 from datetime import datetime
 from typing import Optional, Dict
 
@@ -18,11 +18,15 @@ class BME280Reader:
         self.sensor = None
         self.running = False
         self.stop_event = Event()
+        self._sensor_lock = Lock()
+        self._thread = None
+        self._read_interval = None
         
         self.temperature = None
         self.humidity = None
         self.pressure = None
         self.altitude = None
+        self.last_update = None
         
         self._init_sensor()
 
@@ -100,20 +104,21 @@ class BME280Reader:
             if self.sensor is None:
                 raise Exception("Sensor not initialized")
             
-            # Read values
-            temp_c_raw = getattr(self.sensor, "temperature", None)
-            temp_c = self._sanitize_value(temp_c_raw)
-            if temp_c is None:
-                raise ValueError("BME280 returned invalid temperature reading")
+            with self._sensor_lock:
+                # Read values
+                temp_c_raw = getattr(self.sensor, "temperature", None)
+                temp_c = self._sanitize_value(temp_c_raw)
+                if temp_c is None:
+                    raise ValueError("BME280 returned invalid temperature reading")
 
-            humidity_raw = getattr(self.sensor, "humidity", None)
-            humidity = self._sanitize_value(humidity_raw)
+                humidity_raw = getattr(self.sensor, "humidity", None)
+                humidity = self._sanitize_value(humidity_raw)
 
-            pressure_raw = getattr(self.sensor, "pressure", None)
-            pressure = self._sanitize_value(pressure_raw)
+                pressure_raw = getattr(self.sensor, "pressure", None)
+                pressure = self._sanitize_value(pressure_raw)
 
-            altitude_raw = getattr(self.sensor, "altitude", None)
-            altitude = self._sanitize_value(altitude_raw)
+                altitude_raw = getattr(self.sensor, "altitude", None)
+                altitude = self._sanitize_value(altitude_raw)
             
             # Convert temperature to Fahrenheit
             temp_f = (temp_c * 9/5) + 32
@@ -130,6 +135,7 @@ class BME280Reader:
             self.humidity = humidity
             self.pressure = pressure
             self.altitude = altitude
+            self.last_update = time.time()
 
             return {
                 "temperature_f": temp_f_rounded,
@@ -137,6 +143,7 @@ class BME280Reader:
                 "humidity": humidity_rounded,
                 "pressure": pressure_rounded,
                 "altitude": altitude_rounded,
+                "age_seconds": 0.0,
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -150,6 +157,7 @@ class BME280Reader:
             logger.warning("Reader already running")
             return
         
+        self._read_interval = interval
         # CRITICAL: Do an initial synchronous read to populate the cache
         # This ensures cached values are never None when hub queries them
         logger.info("Performing initial BME280 reading...")
@@ -169,6 +177,7 @@ class BME280Reader:
         thread = Thread(target=self._reading_loop, args=(interval,))
         thread.daemon = True
         thread.start()
+        self._thread = thread
         
         logger.info(f"Started BME280 background reading (interval: {interval}s)")
     
@@ -220,11 +229,20 @@ class BME280Reader:
             import traceback
             logger.error(traceback.format_exc())
             self.running = False
+        finally:
+            self._thread = None
     
     def stop_reading(self):
         """Stop sensor reading"""
         self.running = False
         self.stop_event.set()
+        thread = self._thread
+        if thread and thread.is_alive():
+            try:
+                thread.join(timeout=1.0)
+            except Exception:
+                pass
+        self._thread = None
     
     def get_temperature(self, unit: str = "f") -> Optional[float]:
         """Get current temperature"""
@@ -249,6 +267,7 @@ class BME280Reader:
         humidity = self._sanitize_value(self.humidity)
         pressure = self._sanitize_value(self.pressure)
         altitude = self._sanitize_value(self.altitude)
+        cache_age = self.get_cache_age()
 
         temp_c = (temp_f - 32) * 5/9 if temp_f is not None else None
 
@@ -258,6 +277,7 @@ class BME280Reader:
             "humidity": round(humidity, 1) if humidity is not None else None,
             "pressure": round(pressure, 2) if pressure is not None else None,
             "altitude": round(altitude, 1) if altitude is not None else None,
+            "age_seconds": round(cache_age, 1) if cache_age is not None else None,
             "timestamp": datetime.now().isoformat()
         }
     
@@ -298,6 +318,30 @@ class BME280Reader:
         dew_f = (dew_c * 9/5) + 32
         
         return round(dew_f, 1)
+
+    def get_cache_age(self) -> Optional[float]:
+        if self.last_update is None:
+            return None
+        return max(0.0, time.time() - self.last_update)
+
+    def is_cache_stale(self, max_age: float = 120.0) -> bool:
+        age = self.get_cache_age()
+        return age is None or age > max_age
+
+    def restart_reading(self, interval: Optional[int] = None):
+        """Restart the background reading thread."""
+        requested_interval = interval or self._read_interval or 30
+        logger.warning("Restarting BME280 background reader (interval: %ss)", requested_interval)
+        self.stop_reading()
+        time.sleep(0.1)
+        try:
+            self.start_reading(requested_interval)
+        except Exception as exc:
+            logger.error(f"Failed to restart BME280 reader: {exc}")
+            raise
+
+    def get_read_interval(self) -> int:
+        return self._read_interval or 30
 
 
 if __name__ == "__main__":
