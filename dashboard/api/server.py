@@ -98,6 +98,7 @@ def get_current_sensors():
     try:
         if hub_instance:
             data = hub_instance._collect_sensor_data()
+            logger.debug(f"Sensor data from hub: temp={data.get('temperature_f')}, humidity={data.get('humidity')}")
         else:
             # Fallback: derive current snapshot from database
             data = {
@@ -113,17 +114,21 @@ def get_current_sensors():
             }
 
             # Fallback to database if hub is not available
-            env = db.get_latest_environment()
-            if env:
-                # Only update if database has more recent data than None
-                if data.get("temperature_f") is None and env.get("temperature") is not None:
-                    data["temperature_f"] = env.get("temperature")
-                if data.get("humidity") is None and env.get("humidity") is not None:
-                    data["humidity"] = env.get("humidity")
-                if data.get("light_level") is None and env.get("light_level") is not None:
-                    data["light_level"] = env.get("light_level")
-                if data.get("noise_db") is None and env.get("noise_level") is not None:
-                    data["noise_db"] = env.get("noise_level")
+            try:
+                env = db.get_latest_environment()
+                if env:
+                    # Only update if database has more recent data than None
+                    if data.get("temperature_f") is None and env.get("temperature") is not None:
+                        data["temperature_f"] = env.get("temperature")
+                    if data.get("humidity") is None and env.get("humidity") is not None:
+                        data["humidity"] = env.get("humidity")
+                    if data.get("light_level") is None and env.get("light_level") is not None:
+                        data["light_level"] = env.get("light_level")
+                    if data.get("noise_db") is None and env.get("noise_level") is not None:
+                        data["noise_db"] = env.get("noise_level")
+                    logger.debug(f"Sensor data from DB: temp={data.get('temperature_f')}, humidity={data.get('humidity')}")
+            except Exception as e:
+                logger.error(f"Error reading environment from DB: {e}")
 
             # Last played song from music_log (if any)
             try:
@@ -135,12 +140,15 @@ def get_current_sensors():
                         data["current_song"] = {"title": row[0], "artist": row[1]}
                     else:
                         data["current_song"] = {"title": None, "artist": None}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Error reading music log: {e}")
                 data["current_song"] = {"title": None, "artist": None}
         
         return jsonify(data)
     except Exception as e:
         logger.error(f"Error getting sensors: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 
@@ -527,10 +535,12 @@ def handle_update_request():
 
 def broadcast_sensor_data():
     """Broadcast sensor data to all connected clients"""
+    broadcast_count = 0
     while True:
         try:
             if hub_instance:
                 data = hub_instance._collect_sensor_data()
+                logger.debug(f"Broadcasting data from hub: temp={data.get('temperature_f')}, humidity={data.get('humidity')}")
             else:
                 # Fallback to current snapshot from DB so UI still updates
                 data = {
@@ -542,17 +552,23 @@ def broadcast_sensor_data():
                     "current_song": None,
                 }
                 # Fallback to database for environment data
-                env = db.get_latest_environment()
-                if env:
-                    # Only update if we don't already have data
-                    if data.get("temperature_f") is None and env.get("temperature") is not None:
-                        data["temperature_f"] = env.get("temperature")
-                    if data.get("humidity") is None and env.get("humidity") is not None:
-                        data["humidity"] = env.get("humidity")
-                    if data.get("light_level") is None and env.get("light_level") is not None:
-                        data["light_level"] = env.get("light_level")
-                    if data.get("noise_db") is None and env.get("noise_level") is not None:
-                        data["noise_db"] = env.get("noise_level")
+                try:
+                    env = db.get_latest_environment()
+                    if env:
+                        # Only update if we don't already have data
+                        if data.get("temperature_f") is None and env.get("temperature") is not None:
+                            data["temperature_f"] = env.get("temperature")
+                        if data.get("humidity") is None and env.get("humidity") is not None:
+                            data["humidity"] = env.get("humidity")
+                        if data.get("light_level") is None and env.get("light_level") is not None:
+                            data["light_level"] = env.get("light_level")
+                        if data.get("noise_db") is None and env.get("noise_level") is not None:
+                            data["noise_db"] = env.get("noise_level")
+                        logger.debug(f"Broadcasting data from DB: temp={data.get('temperature_f')}, humidity={data.get('humidity')}")
+                except Exception as e:
+                    logger.error(f"Error reading environment from DB: {e}")
+                
+                # Last played song from music_log (with timeout protection)
                 try:
                     with db.get_connection() as conn:
                         cur = conn.cursor()
@@ -562,14 +578,22 @@ def broadcast_sensor_data():
                             data["current_song"] = {"title": row[0], "artist": row[1]}
                         else:
                             data["current_song"] = {"title": None, "artist": None}
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Error reading music log: {e}")
                     data["current_song"] = {"title": None, "artist": None}
 
             socketio.emit('sensor_update', data)
             
+            # Log every 12 broadcasts (1 minute at 5 second intervals)
+            broadcast_count += 1
+            if broadcast_count % 12 == 0:
+                logger.info(f"Dashboard broadcast #{broadcast_count}: temp={data.get('temperature_f')}, occupancy={data.get('occupancy')}")
+            
             time.sleep(5)  # Update every 5 seconds
         except Exception as e:
             logger.error(f"Error broadcasting sensor data: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             time.sleep(5)
 
 

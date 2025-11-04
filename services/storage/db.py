@@ -5,6 +5,7 @@ SQLite-based local storage with offline-first behavior
 
 import os
 import sqlite3
+import time
 from datetime import datetime
 from contextlib import contextmanager
 import json
@@ -26,17 +27,43 @@ class PulseDB:
     
     @contextmanager
     def get_connection(self):
-        """Context manager for database connections"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        """Context manager for database connections with timeout and retry"""
+        max_retries = 3
+        retry_delay = 0.5
+        conn = None
+        
+        for attempt in range(max_retries):
+            try:
+                # Use timeout to prevent indefinite blocking
+                conn = sqlite3.connect(self.db_path, timeout=10.0)
+                conn.row_factory = sqlite3.Row
+                # Enable WAL mode for better concurrent access
+                conn.execute('PRAGMA journal_mode=WAL')
+                # Set busy timeout to handle lock contention
+                conn.execute('PRAGMA busy_timeout=5000')
+                break
+            except sqlite3.OperationalError as e:
+                if attempt < max_retries - 1:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Database connection attempt {attempt + 1} failed: {e}, retrying...")
+                    time.sleep(retry_delay)
+                else:
+                    raise
+        
         try:
             yield conn
             conn.commit()
         except Exception as e:
-            conn.rollback()
+            if conn:
+                conn.rollback()
             raise e
         finally:
-            conn.close()
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     
     def _init_database(self):
         """Initialize database schema"""
