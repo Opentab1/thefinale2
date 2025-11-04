@@ -4,6 +4,7 @@ Main coordinator for all sensors, controls, and automation
 """
 
 import logging
+import math
 import os
 import sys
 import time
@@ -335,10 +336,15 @@ class PulseHub:
             "exits": 0,
             "traffic": None,
             "temperature_f": None,
+            "temperature_c": None,
             "humidity": None,
+            "pressure": None,
+            "altitude": None,
+            "temperature_age_seconds": None,
             "light_level": None,
             "noise_db": None,
-            "current_song": None
+            "current_song": None,
+            "song_detection": None
         }
         
         if self.people_counter:
@@ -358,24 +364,54 @@ class PulseHub:
             # Cache is guaranteed to be populated by initial sync read in start_reading()
             try:
                 cached = self.bme280.get_all_readings()
-                data["temperature_f"] = cached.get("temperature_f")
-                data["humidity"] = cached.get("humidity")
-                data["pressure"] = cached.get("pressure")
+                data["temperature_f"] = self._sanitize_environment_value(cached.get("temperature_f"))
+                data["temperature_c"] = self._sanitize_environment_value(cached.get("temperature_c"))
+                data["humidity"] = self._sanitize_environment_value(cached.get("humidity"))
+                data["pressure"] = self._sanitize_environment_value(cached.get("pressure"))
+                data["altitude"] = self._sanitize_environment_value(cached.get("altitude"))
+                cache_age = cached.get("age_seconds")
+                data["temperature_age_seconds"] = cache_age
+                stale_threshold = max(120.0, self.bme280.get_read_interval() * 4)
                 
                 # Log temperature readings for debugging
                 if data["temperature_f"] is not None:
-                    logger.debug(f"BME280 cached temp: {data['temperature_f']:.1f}°F, humidity: {data.get('humidity', 0):.1f}%")
+                    humidity_str = f"{data['humidity']:.1f}%" if data.get("humidity") is not None else "N/A"
+                    pressure_str = f"{data['pressure']:.2f} hPa" if data.get("pressure") is not None else "N/A"
+                    logger.debug(
+                        f"BME280 cached temp: {data['temperature_f']:.1f}°F, "
+                        f"Humidity: {humidity_str}, "
+                        f"Pressure: {pressure_str}"
+                    )
+                
+                if cache_age is not None and cache_age > stale_threshold:
+                    logger.warning(
+                        "BME280 readings are stale (age=%.1fs > threshold %.1fs)",
+                        cache_age,
+                        stale_threshold
+                    )
+                elif cache_age is None:
+                    logger.debug("BME280 cache age unavailable - treating as potentially stale")
                 
                 # Fallback: if cached values are None, try a direct read
-                if data["temperature_f"] is None:
-                    logger.warning("BME280 cached temperature is None - attempting direct read")
+                needs_refresh = (
+                    data["temperature_f"] is None
+                    or cache_age is None
+                    or (cache_age is not None and cache_age > stale_threshold)
+                )
+                if needs_refresh:
+                    logger.warning("BME280 cache needs refresh - attempting direct read")
                     try:
                         direct_read = self.bme280.read_sensor()
                         if direct_read and direct_read.get("temperature_f") is not None:
-                            data["temperature_f"] = direct_read.get("temperature_f")
-                            data["humidity"] = direct_read.get("humidity")
-                            data["pressure"] = direct_read.get("pressure")
-                            logger.info(f"Direct BME280 read successful: {data['temperature_f']:.1f}°F")
+                            data["temperature_f"] = self._sanitize_environment_value(direct_read.get("temperature_f"))
+                            data["temperature_c"] = self._sanitize_environment_value(direct_read.get("temperature_c"))
+                            data["humidity"] = self._sanitize_environment_value(direct_read.get("humidity"))
+                            data["pressure"] = self._sanitize_environment_value(direct_read.get("pressure"))
+                            data["altitude"] = self._sanitize_environment_value(direct_read.get("altitude"))
+                            cache_age = self.bme280.get_cache_age()
+                            data["temperature_age_seconds"] = cache_age
+                            if data["temperature_f"] is not None:
+                                logger.info(f"Direct BME280 read successful: {data['temperature_f']:.1f}°F")
                         else:
                             logger.error("BME280 direct read returned no data - sensor may have failed")
                     except Exception as e2:
@@ -386,26 +422,46 @@ class PulseHub:
                 try:
                     direct_read = self.bme280.read_sensor()
                     if direct_read and direct_read.get("temperature_f") is not None:
-                        data["temperature_f"] = direct_read.get("temperature_f")
-                        data["humidity"] = direct_read.get("humidity")
-                        data["pressure"] = direct_read.get("pressure")
-                        logger.info(f"Last resort BME280 read: {data['temperature_f']:.1f}°F")
+                        data["temperature_f"] = self._sanitize_environment_value(direct_read.get("temperature_f"))
+                        data["temperature_c"] = self._sanitize_environment_value(direct_read.get("temperature_c"))
+                        data["humidity"] = self._sanitize_environment_value(direct_read.get("humidity"))
+                        data["pressure"] = self._sanitize_environment_value(direct_read.get("pressure"))
+                        data["altitude"] = self._sanitize_environment_value(direct_read.get("altitude"))
+                        if data["temperature_f"] is not None:
+                            logger.info(f"Last resort BME280 read: {data['temperature_f']:.1f}°F")
                     else:
                         data["temperature_f"] = None
+                        data["temperature_c"] = None
                         data["humidity"] = None
                         data["pressure"] = None
+                        data["altitude"] = None
                 except Exception:
                     data["temperature_f"] = None
+                    data["temperature_c"] = None
                     data["humidity"] = None
                     data["pressure"] = None
+                    data["altitude"] = None
+
+            if self.bme280.is_cache_stale():
+                # Attempt to restart background polling if it appears to be down
+                if not self.bme280.running:
+                    try:
+                        self.bme280.restart_reading()
+                    except Exception as restart_error:
+                        logger.error(f"Failed to restart BME280 reader: {restart_error}")
+                else:
+                    logger.debug("BME280 cache marked stale but reader still running; will monitor")
+
+        self._apply_environment_fallback(data)
         
         if self.light_sensor:
-            data["light_level"] = self.light_sensor.get_light_level()
+            data["light_level"] = self._sanitize_environment_value(self.light_sensor.get_light_level())
         
         if self.audio_monitor:
-            data["noise_db"] = self.audio_monitor.get_current_db()
+            data["noise_db"] = self._sanitize_environment_value(self.audio_monitor.get_current_db())
             song_data = self.audio_monitor.get_current_song()
             data["current_song"] = song_data
+            data["song_detection"] = self.audio_monitor.get_song_detection_stats()
             
             # Log song detection status for debugging
             if song_data and song_data.get("title") not in (None, "Unknown"):
@@ -429,6 +485,52 @@ class PulseHub:
         
         return data
     
+    @staticmethod
+    def _sanitize_environment_value(value):
+        if value is None:
+            return None
+        try:
+            value_float = float(value)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(value_float) or math.isinf(value_float):
+            return None
+        return value_float
+
+    def _apply_environment_fallback(self, data: dict):
+        """Populate environment readings from database when live sensor data is missing."""
+        needs_temp = data.get("temperature_f") is None
+        needs_humidity = data.get("humidity") is None
+        needs_pressure = data.get("pressure") is None
+
+        if not any([needs_temp, needs_humidity, needs_pressure]):
+            return
+
+        try:
+            latest_env = self.db.get_latest_environment()
+        except Exception as exc:
+            logger.error(f"Error fetching environment fallback: {exc}")
+            return
+
+        if not latest_env:
+            return
+
+        if needs_temp:
+            temp = self._sanitize_environment_value(latest_env.get("temperature"))
+            if temp is not None:
+                data["temperature_f"] = temp
+                data["temperature_c"] = round((temp - 32) * 5/9, 1)
+
+        if needs_humidity:
+            humidity = self._sanitize_environment_value(latest_env.get("humidity"))
+            if humidity is not None:
+                data["humidity"] = humidity
+
+        if needs_pressure:
+            pressure = self._sanitize_environment_value(latest_env.get("pressure"))
+            if pressure is not None:
+                data["pressure"] = pressure
+
     def _store_sensor_data(self, data: dict):
         """Store sensor data in database with retry logic"""
         max_retries = 3
@@ -445,31 +547,43 @@ class PulseHub:
                         exit_count=int(data.get("exits", 0))
                     )
                 
-                # Environment - ensure temperature is logged even if None
-                temp_f = data.get("temperature_f")
-                humidity = data.get("humidity")
-                light = data.get("light_level")
-                noise = data.get("noise_db")
-                
-                # Log what we're about to store
-                logger.debug(f"Storing environment data: temp={temp_f}, humidity={humidity}, light={light}, noise={noise}")
-                
-                self.db.log_environment(
-                    temperature=temp_f,
-                    humidity=humidity,
-                    light_level=light,
-                    noise_level=noise
-                )
+                # Environment - ensure readings are finite before persisting
+                temp_f = self._sanitize_environment_value(data.get("temperature_f"))
+                humidity = self._sanitize_environment_value(data.get("humidity"))
+                pressure = self._sanitize_environment_value(data.get("pressure"))
+                light = self._sanitize_environment_value(data.get("light_level"))
+                noise = self._sanitize_environment_value(data.get("noise_db"))
+
+                if any(value is not None for value in (temp_f, humidity, pressure, light, noise)):
+                    logger.debug(
+                        "Storing environment data: temp=%s, humidity=%s, pressure=%s, light=%s, noise=%s",
+                        temp_f,
+                        humidity,
+                        pressure,
+                        light,
+                        noise
+                    )
+
+                    self.db.log_environment(
+                        temperature=temp_f,
+                        humidity=humidity,
+                        pressure=pressure,
+                        light_level=light,
+                        noise_level=noise
+                    )
+                else:
+                    logger.debug("Skipping environment log - no valid readings available")
                 
                 # Verify it was stored by reading it back
                 if temp_f is not None:
                     latest_env = self.db.get_latest_environment()
                     if latest_env:
-                        stored_temp = latest_env.get("temperature")
-                        if stored_temp != temp_f:
-                            logger.warning(f"Temperature mismatch: stored {stored_temp}, expected {temp_f}")
-                        else:
-                            logger.debug(f"Temperature verified in DB: {stored_temp}°F")
+                        stored_temp = self._sanitize_environment_value(latest_env.get("temperature"))
+                        if stored_temp is not None:
+                            if abs(stored_temp - temp_f) > 0.5:
+                                logger.warning(f"Temperature mismatch: stored {stored_temp}, expected {temp_f}")
+                            else:
+                                logger.debug(f"Temperature verified in DB: {stored_temp}°F")
                 
                 # Music
                 song = data.get("current_song")

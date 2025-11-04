@@ -5,10 +5,9 @@ Integrated with party_box song detection for production-ready music recognition
 """
 
 import logging
-from threading import Thread, Event
+from threading import Thread, Event, Lock
 from datetime import datetime
 import os
-import time
 import time
 
 # NumPy is required
@@ -68,20 +67,34 @@ class AudioMonitor:
         self.chunk_size = chunk_size
         self.running = False
         self.stop_event = Event()
+        self._song_detection_lock = Lock()
 
         self.current_db = 0.0
         self.peak_db = 0.0
-        self.current_song = None
+        self.current_song = self._default_song_payload()
         
         # Watchdog tracking
         self._monitoring_thread = None
         self._last_activity = 0.0
 
-        # Song detection configuration from environment (default: 30s)
-        self._song_detect_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '30'))
+        # Song detection configuration from environment (default: 10s)
+        try:
+            configured_interval = float(os.getenv('SONG_DETECT_INTERVAL_SEC', '10'))
+        except (TypeError, ValueError):
+            configured_interval = 10.0
+        self._song_detect_interval = max(5.0, configured_interval)
+        logger.info(f"Song detection interval set to {self._song_detect_interval:.1f}s")
         self._db_interval = float(os.getenv('DB_UPDATE_INTERVAL_SEC', '2.0'))
         self._last_db_ts = 0.0
         self._last_song_detect_ts = 0.0
+        self._song_detection_stats = {
+            "interval_sec": self._song_detect_interval,
+            "last_attempt_started_at": None,
+            "last_attempt_duration_sec": None,
+            "last_success_at": None,
+            "last_error": None,
+            "active": False,
+        }
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
         # This allows song detection without opening a separate audio stream
@@ -131,6 +144,17 @@ class AudioMonitor:
         self._validate_device()
         logger.info(f"Audio monitor initialized (device: {self.device_index}, backend: {'PyAudio' if PYAUDIO_AVAILABLE and self.pyaudio_instance else 'sounddevice'})")
     
+    def _default_song_payload(self, title: str = "Unknown", artist: str = "Unknown",
+                              confidence: float = 0.0, detected_at=None) -> dict:
+        """Return a canonical song payload with consistent metadata fields."""
+        return {
+            "title": title,
+            "artist": artist,
+            "confidence": confidence,
+            "timestamp": detected_at,
+            "source": "mic_shazam"
+        }
+
     def _validate_device(self):
         """Validate and pick the best audio input device automatically.
 
@@ -426,15 +450,15 @@ class AudioMonitor:
                         self._last_activity = now_db  # Update watchdog
                         logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB)")
                     
-                    # Trigger song detection every 30 seconds using buffered audio
+                    # Trigger song detection on the configured cadence using buffered audio
                     # Run in non-blocking way to prevent hanging
                     now_song = time.time()
                     if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
                         if self._buffer_index >= self._audio_buffer_size:  # Buffer is full (5 seconds)
-                            logger.info("🎵 Running song detection from audio buffer...")
                             # Run in separate thread to prevent blocking even if it hangs
                             try:
-                                self._detect_song_from_buffer()
+                                if self._detect_song_from_buffer():
+                                    logger.info("🎵 Running song detection from audio buffer...")
                             except Exception as e:
                                 logger.error(f"Failed to start song detection thread: {e}")
                         else:
@@ -475,120 +499,131 @@ class AudioMonitor:
                 pass
     
     def _detect_song_from_buffer(self):
-        """Detect song using buffered audio data (runs in background thread with hard timeout)"""
+        """Detect song using buffered audio data (runs in background thread)."""
         import tempfile
         import wave
         import threading
-        import signal
-        
-        def timeout_handler(signum, frame):
-            raise TimeoutError("Song detection exceeded hard timeout")
-        
+        import asyncio
+
+        if not self._song_detection_lock.acquire(blocking=False):
+            logger.debug("Song detection skipped (previous attempt still running)")
+            return False
+
+        start_monotonic = time.time()
+        started_at_iso = datetime.now().isoformat()
+        self._song_detection_stats.update({
+            "interval_sec": self._song_detect_interval,
+            "last_attempt_started_at": started_at_iso,
+            "active": True,
+            "last_error": None,
+        })
+
         def detect_async():
             temp_filename = None
+            duration_sec = None
             try:
-                # Save buffer to temporary WAV file
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                     temp_filename = temp_file.name
-                
+
                 with wave.open(temp_filename, 'wb') as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)  # 16-bit audio
                     wf.setframerate(self.sample_rate)
                     wf.writeframes(self._audio_buffer.tobytes())
-                
+
                 logger.debug(f"Saved audio buffer to {temp_filename}")
-                
-                # Set up hard timeout using signal (only works on Unix)
-                import platform
-                use_signal_timeout = platform.system() != 'Windows'
-                
+
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 result = None
                 try:
-                    if use_signal_timeout:
-                        # Set alarm for 25 seconds (hard kill)
-                        signal.signal(signal.SIGALRM, timeout_handler)
-                        signal.alarm(25)
-                    
-                    # Process the audio file with ShazamIO (with asyncio timeout)
-                    import asyncio
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    
-                    try:
-                        # Add 20 second overall timeout for entire song detection
-                        result = loop.run_until_complete(
-                            asyncio.wait_for(
-                                self._recognize_song_async(temp_filename),
-                                timeout=20.0
-                            )
+                    result = loop.run_until_complete(
+                        asyncio.wait_for(
+                            self._recognize_song_async(temp_filename),
+                            timeout=20.0
                         )
-                    except asyncio.TimeoutError:
-                        logger.warning("Song detection timed out (20s) - skipping")
-                        result = None
-                    finally:
-                        try:
-                            # Clean up any pending tasks
-                            pending = asyncio.all_tasks(loop)
-                            for task in pending:
-                                task.cancel()
-                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                        except Exception:
-                            pass
-                        loop.close()
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Song detection timed out (20s) - skipping")
+                    self._song_detection_stats["last_error"] = "timeout"
+                except Exception as detect_error:
+                    logger.error(f"Song detection error: {detect_error}")
+                    self._song_detection_stats["last_error"] = f"{type(detect_error).__name__}: {detect_error}"
                 finally:
-                    if use_signal_timeout:
-                        # Cancel alarm
-                        signal.alarm(0)
-                
-                # Process result
+                    try:
+                        pending = asyncio.all_tasks(loop)
+                        for task in pending:
+                            task.cancel()
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    except Exception:
+                        pass
+                    loop.close()
+
+                duration_sec = round(time.time() - start_monotonic, 2)
+
                 if result and 'track' in result:
                     track = result['track']
                     title = track.get('title', 'Unknown')
                     artist = track.get('subtitle', 'Unknown')
-                    
-                    new_song = {
-                        "title": title,
-                        "artist": artist,
-                        "timestamp": time.time(),
-                        "confidence": 1.0
-                    }
-                    
-                    # Only log if it's a new song
+
+                    payload = self._default_song_payload(
+                        title=title,
+                        artist=artist,
+                        confidence=1.0,
+                        detected_at=datetime.now().isoformat()
+                    )
+                    payload["detection_duration_sec"] = duration_sec
+
                     if not self.current_song or self.current_song.get("title") != title:
-                        logger.info(f"✅ Song detected: {title} - {artist}")
-                    
-                    self.current_song = new_song
-                else:
-                    logger.debug("No song detected from buffer (Shazam returned no match)")
-                    # Log reason if available
-                    if result:
-                        logger.debug(f"Shazam result: {list(result.keys())}")
+                        logger.info(f"✅ Song detected in {duration_sec:.2f}s: {title} - {artist}")
                     else:
-                        logger.debug("Shazam returned None (may be network issue or timeout)")
-                
-            except TimeoutError as e:
-                logger.error(f"Song detection hard timeout exceeded: {e}")
+                        logger.debug(f"Song re-confirmed in {duration_sec:.2f}s: {title} - {artist}")
+
+                    self.current_song = payload
+                    self._song_detection_stats["last_success_at"] = payload["timestamp"]
+                    self._song_detection_stats["last_error"] = None
+                else:
+                    if result:
+                        logger.debug(f"No song detected from buffer (keys: {list(result.keys())})")
+                        self._song_detection_stats["last_error"] = "no_match"
+                    else:
+                        logger.debug("No song detected from buffer (no result returned)")
+                        self._song_detection_stats["last_error"] = "no_result"
+
             except Exception as e:
+                duration_sec = round(time.time() - start_monotonic, 2)
                 logger.error(f"Error detecting song from buffer: {e}")
                 import traceback
                 logger.debug(traceback.format_exc())
+                self._song_detection_stats["last_error"] = f"{type(e).__name__}: {e}"
             finally:
-                # Clean up temp file
                 if temp_filename:
                     try:
-                        import os
                         if os.path.exists(temp_filename):
                             os.remove(temp_filename)
-                    except Exception as e:
-                        logger.debug(f"Failed to remove temp file: {e}")
-        
-        # Run in background thread to not block audio monitoring
-        # Use a timeout wrapper to ensure thread doesn't hang forever
-        thread = threading.Thread(target=detect_async, daemon=True)
-        thread.start()
-        
-        # Don't wait for thread - it runs independently
+                    except Exception as cleanup_error:
+                        logger.debug(f"Failed to remove temp file: {cleanup_error}")
+
+                if duration_sec is None:
+                    duration_sec = round(time.time() - start_monotonic, 2)
+
+                self._song_detection_stats["last_attempt_duration_sec"] = duration_sec
+                self._song_detection_stats["active"] = False
+                self._song_detection_lock.release()
+
+            # End detect_async
+
+        try:
+            thread = threading.Thread(target=detect_async, daemon=True)
+            thread.start()
+        except Exception as start_error:
+            self._song_detection_stats["active"] = False
+            self._song_detection_stats["last_error"] = f"thread_start_error:{start_error}"
+            self._song_detection_lock.release()
+            logger.error(f"Failed to start song detection thread: {start_error}")
+            return False
+
+        return True
     
     async def _recognize_song_async(self, audio_file):
         """Recognize song using ShazamIO (async with timeout)"""
@@ -633,15 +668,21 @@ class AudioMonitor:
         self.peak_db = 0.0
     
     def get_current_song(self) -> dict:
-        """Get currently detected song from party_box detector"""
-        if self.current_song:
-            return self.current_song
-        return {
-            "title": "Unknown",
-            "artist": "Unknown",
-            "confidence": 0.0,
-            "timestamp": None
-        }
+        """Get currently detected song augmented with detection metadata."""
+        song_payload = dict(self.current_song) if self.current_song else self._default_song_payload()
+        song_payload.update({
+            "detection_interval_sec": self._song_detection_stats.get("interval_sec"),
+            "last_detection_started_at": self._song_detection_stats.get("last_attempt_started_at"),
+            "last_detection_duration_sec": self._song_detection_stats.get("last_attempt_duration_sec"),
+            "last_detection_success_at": self._song_detection_stats.get("last_success_at"),
+            "last_detection_error": self._song_detection_stats.get("last_error"),
+            "detection_active": self._song_detection_stats.get("active", False)
+        })
+        return song_payload
+
+    def get_song_detection_stats(self) -> dict:
+        """Return a shallow copy of the song detection telemetry."""
+        return dict(self._song_detection_stats)
     
     def get_stats(self) -> dict:
         """Get all audio statistics"""
@@ -649,6 +690,7 @@ class AudioMonitor:
             "current_db": self.current_db,
             "peak_db": self.peak_db,
             "current_song": self.get_current_song(),
+            "song_detection": self.get_song_detection_stats(),
             "timestamp": datetime.now().isoformat()
         }
     

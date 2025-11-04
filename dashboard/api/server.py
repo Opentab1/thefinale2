@@ -107,10 +107,14 @@ def get_current_sensors():
                 "exits": 0,
                 "traffic": None,
                 "temperature_f": None,
+                "temperature_c": None,
                 "humidity": None,
+                "pressure": None,
+                "temperature_age_seconds": None,
                 "light_level": None,
                 "noise_db": None,
                 "current_song": None,
+                "song_detection": None,
             }
 
             # Fallback to database if hub is not available
@@ -120,8 +124,11 @@ def get_current_sensors():
                     # Only update if database has more recent data than None
                     if data.get("temperature_f") is None and env.get("temperature") is not None:
                         data["temperature_f"] = env.get("temperature")
+                        data["temperature_c"] = round((env.get("temperature") - 32) * 5/9, 1)
                     if data.get("humidity") is None and env.get("humidity") is not None:
                         data["humidity"] = env.get("humidity")
+                    if data.get("pressure") is None and env.get("pressure") is not None:
+                        data["pressure"] = env.get("pressure")
                     if data.get("light_level") is None and env.get("light_level") is not None:
                         data["light_level"] = env.get("light_level")
                     if data.get("noise_db") is None and env.get("noise_level") is not None:
@@ -546,10 +553,14 @@ def broadcast_sensor_data():
                 data = {
                     "occupancy": db.get_current_occupancy(),
                     "temperature_f": None,
+                    "temperature_c": None,
                     "humidity": None,
+                    "pressure": None,
+                    "temperature_age_seconds": None,
                     "light_level": None,
                     "noise_db": None,
                     "current_song": None,
+                    "song_detection": None,
                 }
                 # Fallback to database for environment data
                 try:
@@ -558,8 +569,11 @@ def broadcast_sensor_data():
                         # Only update if we don't already have data
                         if data.get("temperature_f") is None and env.get("temperature") is not None:
                             data["temperature_f"] = env.get("temperature")
+                            data["temperature_c"] = round((env.get("temperature") - 32) * 5/9, 1)
                         if data.get("humidity") is None and env.get("humidity") is not None:
                             data["humidity"] = env.get("humidity")
+                        if data.get("pressure") is None and env.get("pressure") is not None:
+                            data["pressure"] = env.get("pressure")
                         if data.get("light_level") is None and env.get("light_level") is not None:
                             data["light_level"] = env.get("light_level")
                         if data.get("noise_db") is None and env.get("noise_level") is not None:
