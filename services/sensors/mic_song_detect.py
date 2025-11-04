@@ -120,6 +120,11 @@ class AudioMonitor:
         self._max_consecutive_read_errors = 3
         self._watchdog_restart_threshold = max(60.0, self._song_detect_interval * 4)
         self._stream_restart_request = Event()
+        self._active_pa_stream = None
+        self._active_sd_stream = None
+        self._active_stream_lock = Lock()
+        self._last_stream_restart_reason = None
+        self._last_stream_restart_ts = 0.0
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
         # This allows song detection without opening a separate audio stream
@@ -555,6 +560,47 @@ class AudioMonitor:
         self._stream_restart_count = 0
         self._stream_restart_request.clear()
     
+    def _request_stream_restart(self, reason: str, force_close: bool = True):
+        """Signal the audio loop to recycle its underlying stream."""
+        now = time.time()
+        previous_reason = self._last_stream_restart_reason
+        previous_ts = self._last_stream_restart_ts
+        if not self._stream_restart_request.is_set():
+            logger.warning("Audio stream restart requested (%s)", reason)
+        self._stream_restart_request.set()
+        self._last_stream_restart_reason = reason
+        self._last_stream_restart_ts = now
+
+        if not force_close:
+            return
+
+        if previous_reason == reason and previous_ts and (now - previous_ts) < 2.0:
+            # Avoid repeatedly hammering the same stream shutdown within a short window
+            return
+
+        backend = self._monitoring_backend
+        with self._active_stream_lock:
+            if backend == "pyaudio" and self._active_pa_stream is not None:
+                try:
+                    self._active_pa_stream.stop_stream()
+                except Exception as exc:  # noqa: BLE001 - best effort shutdown
+                    logger.debug("PyAudio stop_stream failed during restart (%s): %s", reason, exc)
+            elif backend == "sounddevice" and self._active_sd_stream is not None:
+                try:
+                    # Abort is non-blocking and safe to call from another thread
+                    self._active_sd_stream.abort(ignore_errors=True)
+                except TypeError:
+                    try:
+                        self._active_sd_stream.abort()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("sounddevice abort failed during restart (%s): %s", reason, exc)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("sounddevice abort failed during restart (%s): %s", reason, exc)
+                    try:
+                        self._active_sd_stream.stop()
+                    except Exception:
+                        pass
+
     def _watchdog_loop(self):
         """Watchdog to restart monitoring if it crashes"""
         while self.running and not self.stop_event.is_set():
@@ -572,7 +618,7 @@ class AudioMonitor:
                             inactivity,
                             self._monitoring_backend
                         )
-                        self._stream_restart_request.set()
+                        self._request_stream_restart("monitoring_inactivity_watchdog")
                         self._last_activity = now
                     elif inactivity > self._watchdog_restart_threshold:
                         self._last_activity = now  # Prevent repeated warnings when backend is inactive
@@ -597,7 +643,7 @@ class AudioMonitor:
                                 "dB readings stale for %.1fs - requesting audio stream restart",
                                 now - self._last_db_ts,
                             )
-                            self._stream_restart_request.set()
+                            self._request_stream_restart("stale_db_watchdog")
                             self._last_db_restart_ts = now
 
                 # Validate the async song detection loop when detection not already running
@@ -629,6 +675,9 @@ class AudioMonitor:
             try:
                 backend, pa_stream, sd_stream = self._open_audio_stream(self._stream_restart_count)
                 self._monitoring_backend = backend
+                with self._active_stream_lock:
+                    self._active_pa_stream = pa_stream
+                    self._active_sd_stream = sd_stream
                 self._stream_restart_count = 0
                 logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
                 self._stream_restart_request.clear()
@@ -645,6 +694,8 @@ class AudioMonitor:
                     self._stream_restart_count,
                     init_error,
                 )
+                self._last_stream_restart_reason = f"init_error:{init_error}"
+                self._last_stream_restart_ts = time.time()
                 if self.stop_event.wait(wait_time):
                     break
 
@@ -656,6 +707,8 @@ class AudioMonitor:
                     runtime_error,
                     self._stream_restart_count,
                 )
+                self._last_stream_restart_reason = f"runtime_error:{runtime_error}"
+                self._last_stream_restart_ts = time.time()
                 if self.stop_event.wait(wait_time):
                     break
                 continue
@@ -664,11 +717,16 @@ class AudioMonitor:
                 self._stream_restart_count += 1
                 wait_time = min(5.0, 1.5 * self._stream_restart_count)
                 logger.error("Unexpected audio monitoring error: %s", unexpected, exc_info=True)
+                self._last_stream_restart_reason = f"unexpected:{type(unexpected).__name__}"
+                self._last_stream_restart_ts = time.time()
                 if self.stop_event.wait(wait_time):
                     break
 
             finally:
                 self._monitoring_backend = None
+                with self._active_stream_lock:
+                    self._active_pa_stream = None
+                    self._active_sd_stream = None
                 self._close_audio_stream(pa_stream, sd_stream)
 
         logger.info("Audio monitoring stopped")
@@ -1098,7 +1156,13 @@ class AudioMonitor:
             "peak_db": self.peak_db,
             "current_song": self.get_current_song(),
             "song_detection": self.get_song_detection_stats(),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "audio_stream": {
+                "backend": self._monitoring_backend,
+                "restart_requested": self._stream_restart_request.is_set(),
+                "last_restart_reason": self._last_stream_restart_reason,
+                "last_restart_ts": self._last_stream_restart_ts,
+            }
         }
     
     def cleanup(self):
