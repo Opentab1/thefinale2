@@ -60,6 +60,11 @@ class BartenderTracker:
         self.last_drink_time = {}  # {anon_id: timestamp}
         self.min_time_between_drinks = 30  # seconds
         
+        # Auto-detection settings
+        self.auto_detect_enabled = True  # Enable automatic drink detection
+        self.time_per_drink = 120  # Assume 1 drink every 120 seconds (2 minutes)
+        self.bartender_zone_time = {}  # Track time spent in bar zone
+        
         # Performance tracking
         self.total_drinks_today = 0
         self.start_time = datetime.now()
@@ -444,9 +449,25 @@ class BartenderTracker:
                         self.current_detections = detections
                         
                         # Update last seen times for tracked bartenders
+                        now = datetime.now()
                         for det in detections:
                             if det['anon_id'] is not None:
-                                self.active_bartenders[det['anon_id']]['last_seen'] = datetime.now()
+                                self.active_bartenders[det['anon_id']]['last_seen'] = now
+                                
+                                # Track time in bar zone for auto-detection
+                                if det['in_bar_zone'] and self.auto_detect_enabled:
+                                    anon_id = det['anon_id']
+                                    if anon_id not in self.bartender_zone_time:
+                                        self.bartender_zone_time[anon_id] = 0
+                                    
+                                    # Add time (approximately 0.1 seconds per frame)
+                                    self.bartender_zone_time[anon_id] += 0.1
+                                    
+                                    # Auto-record drink every 2 minutes of activity
+                                    if self.bartender_zone_time[anon_id] >= self.time_per_drink:
+                                        self.record_drink(anon_id)
+                                        self.bartender_zone_time[anon_id] = 0
+                                        logger.info(f"AUTO-DETECTED: Bartender #{anon_id} made a drink")
                     
                     # Annotate frame
                     annotated_frame = self._annotate_frame(frame, detections)
@@ -485,6 +506,7 @@ class BartenderTracker:
                 'active_bartenders': len([d for d in self.current_detections if d['anon_id'] is not None]),
                 'tracked_bartenders': len(self.active_bartenders),
                 'privacy_mode': 'ANONYMOUS - NO BIOMETRIC DATA',
+                'auto_detect_mode': 'TIME-BASED' if self.auto_detect_enabled else 'MANUAL',
                 'bartenders': []
             }
             
