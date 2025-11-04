@@ -17,8 +17,21 @@ export default function LiveOverview({ sensorData }) {
     humidity = 0,
     light_level = 0,
     noise_db = 0,
-    current_song = {}
+    current_song = {},
+    song_detection = {}
   } = sensorData
+
+  const formatSeconds = (value, digits = 1) =>
+    typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : null
+
+  const detectionIntervalSec = current_song?.detection_interval_sec ?? song_detection?.interval_sec
+  const lastDetectionDurationSec = current_song?.last_detection_duration_sec ?? song_detection?.last_attempt_duration_sec
+  const lastDetectionStartedAt = current_song?.last_detection_started_at ?? song_detection?.last_attempt_started_at
+  const detectionActive = current_song?.detection_active ?? song_detection?.active
+  const lastDetectionError = current_song?.last_detection_error ?? song_detection?.last_error
+  const formattedInterval = formatSeconds(detectionIntervalSec, detectionIntervalSec >= 10 ? 1 : 2)
+  const formattedLastDetection = formatSeconds(lastDetectionDurationSec, 2)
+  const lastDetectionTimeLabel = lastDetectionStartedAt ? new Date(lastDetectionStartedAt).toLocaleTimeString() : null
 
   
 
@@ -87,10 +100,22 @@ export default function LiveOverview({ sensorData }) {
             <Music className="w-8 h-8 text-green-500" />
             <h3 className="text-lg font-semibold">Now Playing</h3>
           </div>
-          <div className="space-y-1">
-            <p className="font-medium">{current_song?.title || 'No song detected'}</p>
-            <p className="text-sm text-gray-400">{current_song?.artist || ''}</p>
-          </div>
+            <div className="space-y-1">
+              <p className="font-medium">{current_song?.title || 'No song detected'}</p>
+              <p className="text-sm text-gray-400">{current_song?.artist || ''}</p>
+              <div className="text-xs text-gray-500 space-y-1 pt-2">
+                <p>Interval: {formattedInterval || '—'}s</p>
+                <p>
+                  Last detection: {formattedLastDetection ? `${formattedLastDetection}s` : '—'}
+                  {lastDetectionTimeLabel ? ` @ ${lastDetectionTimeLabel}` : ''}
+                </p>
+                {detectionActive ? (
+                  <p className="text-amber-400">Detection running…</p>
+                ) : lastDetectionError ? (
+                  <p className="text-red-400">Last error: {lastDetectionError}</p>
+                ) : null}
+              </div>
+            </div>
         </div>
 
         <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">

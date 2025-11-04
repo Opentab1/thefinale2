@@ -3,6 +3,7 @@ Pulse 1.0 - BME280 Temperature/Humidity/Pressure Sensor
 """
 
 import logging
+import math
 import time
 import numpy as np
 from threading import Thread, Event
@@ -21,8 +22,22 @@ class BME280Reader:
         self.temperature = None
         self.humidity = None
         self.pressure = None
+        self.altitude = None
         
         self._init_sensor()
+
+    @staticmethod
+    def _sanitize_value(value: Optional[float]) -> Optional[float]:
+        """Return a finite float value or None when reading is invalid."""
+        if value is None:
+            return None
+        try:
+            value_float = float(value)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(value_float) or math.isinf(value_float):
+            return None
+        return value_float
     
     def _init_sensor(self):
         """Initialize BME280 sensor with robust error handling"""
@@ -86,24 +101,42 @@ class BME280Reader:
                 raise Exception("Sensor not initialized")
             
             # Read values
-            temp_c = self.sensor.temperature
-            humidity = self.sensor.humidity
-            pressure = self.sensor.pressure
+            temp_c_raw = getattr(self.sensor, "temperature", None)
+            temp_c = self._sanitize_value(temp_c_raw)
+            if temp_c is None:
+                raise ValueError("BME280 returned invalid temperature reading")
+
+            humidity_raw = getattr(self.sensor, "humidity", None)
+            humidity = self._sanitize_value(humidity_raw)
+
+            pressure_raw = getattr(self.sensor, "pressure", None)
+            pressure = self._sanitize_value(pressure_raw)
+
+            altitude_raw = getattr(self.sensor, "altitude", None)
+            altitude = self._sanitize_value(altitude_raw)
             
             # Convert temperature to Fahrenheit
             temp_f = (temp_c * 9/5) + 32
-            
+
+            # Prepare rounded outputs (keep internal state unrounded for calculations)
+            temp_f_rounded = round(temp_f, 1)
+            temp_c_rounded = round(temp_c, 1)
+            humidity_rounded = round(humidity, 1) if humidity is not None else None
+            pressure_rounded = round(pressure, 2) if pressure is not None else None
+            altitude_rounded = round(altitude, 1) if altitude is not None else None
+
             # Update stored values
             self.temperature = temp_f
             self.humidity = humidity
             self.pressure = pressure
-            
+            self.altitude = altitude
+
             return {
-                "temperature_f": round(temp_f, 1),
-                "temperature_c": round(temp_c, 1),
-                "humidity": round(humidity, 1),
-                "pressure": round(pressure, 2),
-                "altitude": round(self.sensor.altitude, 1),
+                "temperature_f": temp_f_rounded,
+                "temperature_c": temp_c_rounded,
+                "humidity": humidity_rounded,
+                "pressure": pressure_rounded,
+                "altitude": altitude_rounded,
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -212,11 +245,19 @@ class BME280Reader:
     
     def get_all_readings(self) -> Dict:
         """Get all current readings"""
+        temp_f = self._sanitize_value(self.temperature)
+        humidity = self._sanitize_value(self.humidity)
+        pressure = self._sanitize_value(self.pressure)
+        altitude = self._sanitize_value(self.altitude)
+
+        temp_c = (temp_f - 32) * 5/9 if temp_f is not None else None
+
         return {
-            "temperature_f": self.temperature,
-            "temperature_c": (self.temperature - 32) * 5/9 if self.temperature else None,
-            "humidity": self.humidity,
-            "pressure": self.pressure,
+            "temperature_f": round(temp_f, 1) if temp_f is not None else None,
+            "temperature_c": round(temp_c, 1) if temp_c is not None else None,
+            "humidity": round(humidity, 1) if humidity is not None else None,
+            "pressure": round(pressure, 2) if pressure is not None else None,
+            "altitude": round(altitude, 1) if altitude is not None else None,
             "timestamp": datetime.now().isoformat()
         }
     
