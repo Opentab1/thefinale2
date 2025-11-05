@@ -12,8 +12,9 @@ Environment="PYTHONPATH=/opt/pulse"
 Environment="PYTHONUNBUFFERED=1"
 ExecStart=/opt/pulse/venv/bin/python3 -u /opt/pulse/services/hub/main.py
 Restart=always
-RestartSec=10
+RestartSec=1
 TimeoutStartSec=30
+StartLimitInterval=0
 
 # Logging
 StandardOutput=append:/var/log/pulse/hub.log

@@ -100,8 +100,8 @@ class AudioMonitor:
         self._last_song_detect_ts = 0.0
 
         self._health_thread = None
-        # CRITICAL FIX: Check health more frequently (every 5 seconds)
-        self._health_check_interval = 5.0  # Fixed: Always 5 seconds
+        # CRITICAL FIX: Check health more frequently (every 3 seconds for immediate recovery)
+        self._health_check_interval = 3.0  # Fixed: Always 3 seconds
         self._last_db_restart_ts = 0.0
 
         # Event loop and Shazam instance management now handled by SongDetector
@@ -110,8 +110,8 @@ class AudioMonitor:
         self._monitoring_backend = None
         self._stream_restart_count = 0
         self._max_consecutive_read_errors = 3
-        # CRITICAL FIX: Reduce watchdog threshold to catch failures faster (was 60s, now 20s)
-        self._watchdog_restart_threshold = 20.0  # Fixed: Always 20 seconds
+        # CRITICAL FIX: Reduce watchdog threshold to catch failures faster (was 20s, now 10s)
+        self._watchdog_restart_threshold = 10.0  # Fixed: Always 10 seconds
         self._stream_restart_request = Event()
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
@@ -358,19 +358,25 @@ class AudioMonitor:
         self._stream_restart_request.clear()
     
     def _watchdog_loop(self):
-        """Watchdog to restart monitoring if it crashes"""
+        """Watchdog to restart monitoring if it crashes - CRITICAL: Must never fail"""
+        consecutive_errors = 0
         while self.running and not self.stop_event.is_set():
             try:
                 # Check if monitoring thread is alive
                 if self._monitoring_thread is None or not self._monitoring_thread.is_alive():
-                    logger.error("Audio monitoring thread died! Restarting...")
-                    self._start_monitoring_thread()
+                    logger.error("🚨 CRITICAL: Audio monitoring thread died! Restarting IMMEDIATELY...")
+                    try:
+                        self._start_monitoring_thread()
+                        logger.info("✅ Audio monitoring thread restarted")
+                    except Exception as restart_error:
+                        logger.error(f"❌ Failed to restart monitoring thread: {restart_error}")
+                        # Try again next cycle
                 else:
                     now = time.time()
                     inactivity = now - self._last_activity
                     if inactivity > self._watchdog_restart_threshold and self._monitoring_backend is not None:
                         logger.warning(
-                            "Audio monitoring stalled (no activity for %.1fs, backend=%s) - restarting stream",
+                            "🚨 CRITICAL: Audio monitoring stalled (no activity for %.1fs, backend=%s) - restarting stream IMMEDIATELY",
                             inactivity,
                             self._monitoring_backend
                         )
@@ -381,14 +387,30 @@ class AudioMonitor:
                 
                 # SongDetector now handles its own thread monitoring via its watchdog
                 
-                self.stop_event.wait(5)  # CRITICAL FIX: Check every 5 seconds (was 10)
+                consecutive_errors = 0  # Reset on successful check
+                self.stop_event.wait(3)  # CRITICAL FIX: Check every 3 seconds (was 5)
             except Exception as e:
-                logger.error(f"Error in watchdog: {e}")
-                self.stop_event.wait(5)
+                consecutive_errors += 1
+                logger.error(f"🚨 CRITICAL ERROR in audio watchdog (consecutive: {consecutive_errors}): {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                # If watchdog itself is failing, try to restart monitoring
+                if consecutive_errors >= 5:
+                    logger.error("🚨 CRITICAL: Watchdog has failed 5 times. Attempting emergency restart...")
+                    try:
+                        if self.running:
+                            self.stop_monitoring()
+                            time.sleep(1)
+                            self.start_monitoring()
+                        consecutive_errors = 0
+                    except Exception:
+                        logger.error("🚨 CRITICAL: Failed to restart audio monitoring. System may be unstable.")
+                self.stop_event.wait(3)
     
     def _healthcheck_loop(self):
-        """Periodic health checks for the audio monitor and song detection."""
+        """Periodic health checks for the audio monitor and song detection - CRITICAL: Must never fail"""
         logger.debug("Audio monitor healthcheck thread started")
+        consecutive_errors = 0
         while self.running and not self.stop_event.is_set():
             try:
                 now = time.time()
@@ -398,7 +420,7 @@ class AudioMonitor:
                     if self._monitoring_thread and self._monitoring_thread.is_alive():
                         if not self._stream_restart_request.is_set() and (now - self._last_db_restart_ts) > self._db_interval:
                             logger.warning(
-                                "⚠️ dB readings stale for %.1fs - requesting audio stream restart",
+                                "🚨 CRITICAL: dB readings stale for %.1fs - requesting audio stream restart IMMEDIATELY",
                                 now - self._last_db_ts,
                             )
                             self._stream_restart_request.set()
@@ -407,8 +429,8 @@ class AudioMonitor:
                             # CRITICAL FIX: Track complete system stall (25min issue)
                             if self._system_completely_stalled_at == 0.0:
                                 self._system_completely_stalled_at = now
-                            elif (now - self._system_completely_stalled_at) > 60.0:
-                                # System has been stalled for >60s despite restart attempts
+                            elif (now - self._system_completely_stalled_at) > 30.0:  # Reduced from 60s to 30s
+                                # System has been stalled for >30s despite restart attempts
                                 logger.error(
                                     "🚨 CRITICAL: Audio system completely stalled for %.1fs - FORCING COMPLETE RESTART!",
                                     now - self._system_completely_stalled_at
@@ -416,29 +438,40 @@ class AudioMonitor:
                                 # Stop and restart the entire monitoring system
                                 try:
                                     self.stop_monitoring()
-                                    time.sleep(2)
+                                    time.sleep(1)  # Reduced from 2s
                                     self.start_monitoring()
                                     logger.info("✅ Complete audio system restart successful")
                                     self._system_completely_stalled_at = 0.0
                                 except Exception as e:
                                     logger.error(f"❌ Failed to restart audio system: {e}")
+                                    import traceback
+                                    logger.error(traceback.format_exc())
+                    else:
+                        # Monitoring thread is dead - watchdog should handle this but log anyway
+                        logger.warning("🚨 CRITICAL: Monitoring thread is dead and healthcheck detected it")
                 else:
                     # dB readings are fresh - reset stall tracker
                     self._system_completely_stalled_at = 0.0
 
                 # SongDetector handles its own health monitoring via its watchdog thread
-
+                consecutive_errors = 0  # Reset on successful check
                 self.stop_event.wait(self._health_check_interval)
             except Exception as exc:
-                logger.error(f"Error in audio monitor healthcheck: {exc}", exc_info=True)
+                consecutive_errors += 1
+                logger.error(f"🚨 CRITICAL ERROR in audio monitor healthcheck (consecutive: {consecutive_errors}): {exc}", exc_info=True)
+                # Don't let healthcheck crash - always continue
+                if consecutive_errors >= 10:
+                    logger.error("🚨 CRITICAL: Healthcheck has had 10 consecutive errors but continuing...")
+                    consecutive_errors = 0
                 self.stop_event.wait(self._health_check_interval)
 
         logger.debug("Audio monitor healthcheck thread stopped")
         self._health_thread = None
 
     def _monitoring_loop(self):
-        """Main monitoring loop with automatic recovery for stream failures."""
+        """Main monitoring loop with automatic recovery for stream failures - CRITICAL: Must never crash"""
         logger.debug("Audio monitoring loop thread started")
+        consecutive_crashes = 0
         while self.running and not self.stop_event.is_set():
             backend = None
             pa_stream = None
@@ -448,6 +481,7 @@ class AudioMonitor:
                 backend, pa_stream, sd_stream = self._open_audio_stream(self._stream_restart_count)
                 self._monitoring_backend = backend
                 self._stream_restart_count = 0
+                consecutive_crashes = 0  # Reset on successful stream open
                 logger.info("🔊 Audio monitoring active - dB readings will appear shortly")
                 self._stream_restart_request.clear()
                 self._run_audio_loop(backend, pa_stream, sd_stream)
@@ -456,32 +490,41 @@ class AudioMonitor:
                 break
 
             except self.StreamInitError as init_error:
+                consecutive_crashes += 1
                 self._stream_restart_count += 1
-                wait_time = min(5.0, 1.0 + self._stream_restart_count)
+                wait_time = min(2.0, 0.5 + self._stream_restart_count * 0.2)  # Reduced wait times
                 logger.error(
-                    "Audio stream initialization failed (attempt %d): %s",
+                    "🚨 CRITICAL: Audio stream initialization failed (attempt %d, crashes: %d): %s",
                     self._stream_restart_count,
+                    consecutive_crashes,
                     init_error,
                 )
                 if self.stop_event.wait(wait_time):
                     break
 
             except self.StreamRuntimeError as runtime_error:
+                consecutive_crashes += 1
                 self._stream_restart_count += 1
-                wait_time = min(5.0, 1.5 * self._stream_restart_count)
+                wait_time = min(2.0, 0.5 + self._stream_restart_count * 0.2)  # Reduced wait times
                 logger.warning(
-                    "Audio stream runtime failure detected: %s -- restarting stream (attempt %d)",
+                    "🚨 CRITICAL: Audio stream runtime failure detected: %s -- restarting stream IMMEDIATELY (attempt %d, crashes: %d)",
                     runtime_error,
                     self._stream_restart_count,
+                    consecutive_crashes,
                 )
                 if self.stop_event.wait(wait_time):
                     break
                 continue
 
             except Exception as unexpected:
+                consecutive_crashes += 1
                 self._stream_restart_count += 1
-                wait_time = min(5.0, 1.5 * self._stream_restart_count)
-                logger.error("Unexpected audio monitoring error: %s", unexpected, exc_info=True)
+                wait_time = min(2.0, 0.5 + self._stream_restart_count * 0.2)  # Reduced wait times
+                logger.error("🚨 CRITICAL: Unexpected audio monitoring error (crashes: %d): %s", consecutive_crashes, unexpected, exc_info=True)
+                # CRITICAL: Don't let any exception crash the loop - always restart
+                if consecutive_crashes >= 10:
+                    logger.error("🚨 CRITICAL: Monitoring loop has crashed 10 times but continuing...")
+                    consecutive_crashes = 0  # Reset to prevent log spam
                 if self.stop_event.wait(wait_time):
                     break
 

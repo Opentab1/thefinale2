@@ -83,10 +83,11 @@ class SongDetector:
         # CRITICAL FIX: Watchdog for thread health monitoring
         self.watchdog_thread = None
         self.watchdog_active = False
-        self.watchdog_interval = 10.0  # Check every 10 seconds
+        self.watchdog_interval = 3.0  # CRITICAL: Check every 3 seconds for immediate recovery
         self.last_heartbeat = time.time()
         self.thread_restart_count = 0
-        self.max_restarts_per_hour = 10
+        self.max_restarts_per_hour = 100  # Allow many restarts - better than crashing
+        self._last_restart_time = 0.0
         
         # CRITICAL FIX: Reusable event loop to prevent resource leaks
         self._event_loop = None
@@ -149,43 +150,77 @@ class SongDetector:
                 self.watchdog_thread = None
     
     def _watchdog_loop(self):
-        """Watchdog loop to monitor thread health and restart if needed"""
+        """Watchdog loop to monitor thread health and restart if needed - CRITICAL: Must never fail"""
+        consecutive_errors = 0
         while self.watchdog_active and self.enabled:
             try:
                 time.sleep(self.watchdog_interval)
+                consecutive_errors = 0  # Reset on successful check
                 
-                # Check if detection thread is alive
+                # CRITICAL: Check if detection thread is alive - IMMEDIATE RESTART if dead
                 if self.detection_thread is None or not self.detection_thread.is_alive():
-                    logging.error("⚠️ Song detection thread died! Restarting...")
+                    logging.error("🚨 CRITICAL: Song detection thread died! Restarting IMMEDIATELY...")
                     self.thread_restart_count += 1
+                    self._last_restart_time = time.time()
                     
-                    # Rate limit restarts
-                    if self.thread_restart_count > self.max_restarts_per_hour:
-                        logging.error(f"⚠️ Too many thread restarts ({self.thread_restart_count}). Disabling watchdog temporarily.")
-                        time.sleep(3600)  # Wait an hour before allowing more restarts
-                        self.thread_restart_count = 0
+                    # CRITICAL: Only rate limit if we're restarting too frequently (more than once per second)
+                    now = time.time()
+                    if self._last_restart_time > 0 and (now - self._last_restart_time) < 1.0:
+                        # Restarting too fast - wait a bit
+                        time.sleep(0.5)
+                    
+                    # ALWAYS restart - no matter what
+                    try:
+                        self.start_detection_thread()
+                        logging.info("✅ Song detection thread restarted successfully")
+                    except Exception as restart_error:
+                        logging.error(f"❌ Failed to restart detection thread: {restart_error}")
+                        # Try again next cycle
                         continue
-                    
-                    # Restart the thread
-                    self.start_detection_thread()
                 
-                # Check heartbeat - thread should update this every loop iteration
+                # CRITICAL: Check heartbeat - detect stuck threads IMMEDIATELY
                 heartbeat_age = time.time() - self.last_heartbeat
-                if heartbeat_age > (self.detection_interval * 2 + 30):  # Allow 2x interval + buffer
-                    logging.warning(f"⚠️ Song detection thread heartbeat stale ({heartbeat_age:.1f}s). Thread may be stuck.")
-                    # Force restart
+                # In buffer mode, heartbeat should update every 5 seconds
+                # In auto-record mode, heartbeat should update every detection_interval
+                max_heartbeat_age = max(15.0, self.detection_interval * 2) if not self.use_buffer_mode else 15.0
+                
+                if heartbeat_age > max_heartbeat_age:
+                    logging.warning(f"🚨 CRITICAL: Song detection thread heartbeat stale ({heartbeat_age:.1f}s > {max_heartbeat_age}s). Thread may be stuck. FORCING RESTART!")
+                    # Force restart immediately
                     self.detection_active = False
                     if self.detection_thread and self.detection_thread.is_alive():
-                        self.detection_thread.join(timeout=2.0)
-                    self.start_detection_thread()
+                        try:
+                            self.detection_thread.join(timeout=1.0)  # Shorter timeout
+                        except Exception:
+                            pass
+                    try:
+                        self.start_detection_thread()
+                        logging.info("✅ Song detection thread restarted after heartbeat timeout")
+                    except Exception as restart_error:
+                        logging.error(f"❌ Failed to restart after heartbeat timeout: {restart_error}")
                     
             except Exception as e:
-                logging.error(f"Error in song detector watchdog: {e}")
+                consecutive_errors += 1
+                logging.error(f"🚨 CRITICAL ERROR in song detector watchdog (consecutive: {consecutive_errors}): {e}")
+                import traceback
+                logging.error(traceback.format_exc())
+                # If watchdog itself is failing, try to restart everything
+                if consecutive_errors >= 5:
+                    logging.error("🚨 CRITICAL: Watchdog has failed 5 times. Attempting emergency restart...")
+                    try:
+                        # Try to restart watchdog
+                        self.watchdog_active = False
+                        time.sleep(1)
+                        self._start_watchdog()
+                        consecutive_errors = 0
+                    except Exception:
+                        logging.error("🚨 CRITICAL: Failed to restart watchdog. System may be unstable.")
                 time.sleep(self.watchdog_interval)
     
     def _detection_loop(self):
-        """Background thread for periodic song detection"""
-        logging.info("Song detection loop started")
+        """Background thread for periodic song detection - CRITICAL: Must never crash"""
+        logging.info("✅ Song detection loop started")
+        consecutive_errors = 0
         
         # Initialize last detection time to now to prevent immediate first detection
         # This gives the AudioMonitor time to open its dB monitoring stream first
@@ -193,8 +228,9 @@ class SongDetector:
         
         while self.detection_active:
             try:
-                # Update heartbeat (required for watchdog)
+                # CRITICAL: Update heartbeat FIRST - watchdog depends on this
                 self.last_heartbeat = time.time()
+                consecutive_errors = 0  # Reset error counter on successful iteration
                 
                 if self.use_buffer_mode:
                     # In buffer mode, we just maintain heartbeat for watchdog
@@ -205,14 +241,35 @@ class SongDetector:
                     current_time = time.time()
                     if current_time - self.last_detection_time >= self.detection_interval:
                         logging.info("Starting song recognition...")
-                        self.detect_song()
-                        self.last_detection_time = current_time
+                        try:
+                            self.detect_song()
+                            self.last_detection_time = current_time
+                        except Exception as detect_error:
+                            logging.error(f"Error during song detection: {detect_error}")
+                            # Continue anyway - don't crash the loop
+                            self.last_detection_time = current_time
                     
                     # Sleep to avoid consuming CPU
                     time.sleep(5)
+            except KeyboardInterrupt:
+                # Allow graceful shutdown
+                logging.info("Song detection loop interrupted")
+                break
             except Exception as e:
-                logging.error(f"Error in detection loop: {e}")
+                consecutive_errors += 1
+                logging.error(f"🚨 CRITICAL ERROR in detection loop (consecutive: {consecutive_errors}): {e}")
+                import traceback
+                logging.error(traceback.format_exc())
+                
+                # CRITICAL: Don't let errors crash the loop - always continue
+                # If we have too many consecutive errors, log warning but keep going
+                if consecutive_errors >= 10:
+                    logging.error("🚨 CRITICAL: Detection loop has had 10 consecutive errors but continuing...")
+                    consecutive_errors = 0  # Reset to prevent log spam
+                
                 time.sleep(5)  # Continue even after errors
+        
+        logging.warning("Song detection loop exited (should not happen unless stopped)")
     
     def detect_song(self):
         """Record audio and detect song (only works in auto-record mode)"""
@@ -259,7 +316,7 @@ class SongDetector:
     
     def detect_song_from_buffer(self, audio_buffer, sample_rate=44100):
         """
-        Detect song from pre-recorded audio buffer
+        Detect song from pre-recorded audio buffer - CRITICAL: Must never crash
         
         Args:
             audio_buffer: numpy array of audio data (int16)
@@ -286,37 +343,57 @@ class SongDetector:
                 return False
             
             # CRITICAL FIX: Ensure event loop exists before attempting detection
-            if not self._ensure_event_loop():
-                logging.error("⚠️ Event loop unavailable - cannot process audio")
-                return False
+            # Retry up to 3 times if event loop creation fails
+            for attempt in range(3):
+                if self._ensure_event_loop():
+                    break
+                if attempt < 2:
+                    logging.warning(f"⚠️ Event loop unavailable (attempt {attempt+1}/3), retrying...")
+                    time.sleep(0.5)
+                else:
+                    logging.error("⚠️ Event loop unavailable after 3 attempts - cannot process audio")
+                    return False
             
             # Create temporary file for the recording
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                temp_filename = temp_file.name
-            
-            # Save to WAV file
-            with wave.open(temp_filename, 'wb') as wf:
-                wf.setnchannels(self.channels)
-                wf.setsampwidth(2)  # 16-bit audio
-                wf.setframerate(sample_rate)
-                wf.writeframes(audio_buffer.tobytes())
-            
-            logging.debug(f"Audio buffer saved to {temp_filename} for song detection (buffer sum: {buffer_sum})")
-            
-            # Process in a separate thread
-            processing_thread = threading.Thread(
-                target=self._process_audio_file,
-                args=(temp_filename,),
-                daemon=True
-            )
-            processing_thread.start()
-            
-            return True
+            temp_filename = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                    temp_filename = temp_file.name
+                
+                # Save to WAV file
+                with wave.open(temp_filename, 'wb') as wf:
+                    wf.setnchannels(self.channels)
+                    wf.setsampwidth(2)  # 16-bit audio
+                    wf.setframerate(sample_rate)
+                    wf.writeframes(audio_buffer.tobytes())
+                
+                logging.debug(f"Audio buffer saved to {temp_filename} for song detection (buffer sum: {buffer_sum})")
+                
+                # Process in a separate thread
+                processing_thread = threading.Thread(
+                    target=self._process_audio_file,
+                    args=(temp_filename,),
+                    daemon=True,
+                    name="SongDetectionProcessing"
+                )
+                processing_thread.start()
+                
+                return True
+            except Exception as file_error:
+                logging.error(f"Error creating temp file for song detection: {file_error}")
+                # Clean up temp file if it was created
+                if temp_filename and os.path.exists(temp_filename):
+                    try:
+                        os.remove(temp_filename)
+                    except Exception:
+                        pass
+                return False
             
         except Exception as e:
-            logging.error(f"Error detecting song from buffer: {e}")
+            logging.error(f"🚨 CRITICAL: Error detecting song from buffer: {e}")
             import traceback
-            logging.debug(traceback.format_exc())
+            logging.error(traceback.format_exc())
+            # Don't crash - return False and let caller handle it
             return False
     
     def _ensure_event_loop(self):

@@ -274,27 +274,51 @@ class PulseHub:
             logger.info("🎤 Starting audio monitor...")
             try:
                 self.audio_monitor.start_monitoring()
-                # CRITICAL FIX: Verify monitoring actually started
-                time.sleep(1)  # Give it a moment to initialize
-                if self.audio_monitor.running:
-                    logger.info("  ✓ Audio monitor started")
-                    
-                    # Verify song detector if present
-                    if hasattr(self.audio_monitor, 'song_detector') and self.audio_monitor.song_detector:
-                        if self.audio_monitor.song_detector.enabled:
-                            # Check if threads are alive
-                            if hasattr(self.audio_monitor.song_detector, 'detection_thread'):
-                                if self.audio_monitor.song_detector.detection_thread and self.audio_monitor.song_detector.detection_thread.is_alive():
-                                    logger.info("  ✓ Song detector thread running")
+                # CRITICAL FIX: Verify monitoring actually started with retries
+                max_retries = 3
+                for retry in range(max_retries):
+                    time.sleep(1)  # Give it a moment to initialize
+                    if self.audio_monitor.running:
+                        logger.info("  ✓ Audio monitor started")
+                        
+                        # Verify song detector if present
+                        if hasattr(self.audio_monitor, 'song_detector') and self.audio_monitor.song_detector:
+                            if self.audio_monitor.song_detector.enabled:
+                                # Check if threads are alive
+                                if hasattr(self.audio_monitor.song_detector, 'detection_thread'):
+                                    if self.audio_monitor.song_detector.detection_thread and self.audio_monitor.song_detector.detection_thread.is_alive():
+                                        logger.info("  ✓ Song detector thread running")
+                                    else:
+                                        logger.warning("  ⚠ Song detector thread not running (will be monitored by watchdog)")
+                                if hasattr(self.audio_monitor.song_detector, 'watchdog_thread'):
+                                    if self.audio_monitor.song_detector.watchdog_thread and self.audio_monitor.song_detector.watchdog_thread.is_alive():
+                                        logger.info("  ✓ Song detector watchdog running")
                                 else:
-                                    logger.warning("  ⚠ Song detector thread not running (will be monitored)")
-                            if hasattr(self.audio_monitor.song_detector, 'watchdog_thread'):
-                                if self.audio_monitor.song_detector.watchdog_thread and self.audio_monitor.song_detector.watchdog_thread.is_alive():
-                                    logger.info("  ✓ Song detector watchdog running")
-                        else:
-                            logger.info("  ℹ Song detector initialized (using AudioMonitor's detection loop)")
-                else:
-                    logger.error("  ✗ Audio monitor failed to start (running=False)")
+                                    logger.warning("  ⚠ Song detector watchdog not running - trying to start...")
+                                    try:
+                                        self.audio_monitor.song_detector._start_watchdog()
+                                    except Exception as wd_error:
+                                        logger.error(f"  ✗ Failed to start watchdog: {wd_error}")
+                            else:
+                                logger.info("  ℹ Song detector initialized (using AudioMonitor's detection loop)")
+                        
+                        # Verify monitoring thread is alive
+                        if hasattr(self.audio_monitor, '_monitoring_thread'):
+                            if self.audio_monitor._monitoring_thread and self.audio_monitor._monitoring_thread.is_alive():
+                                logger.info("  ✓ Audio monitoring thread running")
+                            else:
+                                logger.warning("  ⚠ Audio monitoring thread not running (will be monitored by watchdog)")
+                        break
+                    elif retry < max_retries - 1:
+                        logger.warning(f"  ⚠ Audio monitor not running yet (retry {retry+1}/{max_retries}), retrying...")
+                        try:
+                            self.audio_monitor.stop_monitoring()
+                            time.sleep(0.5)
+                            self.audio_monitor.start_monitoring()
+                        except Exception as retry_error:
+                            logger.error(f"  ✗ Retry failed: {retry_error}")
+                    else:
+                        logger.error("  ✗ Audio monitor failed to start after retries (running=False)")
             except Exception as e:
                 logger.error(f"  ✗ Failed to start audio monitor: {e}", exc_info=True)
         
@@ -343,16 +367,36 @@ class PulseHub:
         logger.info("="*80 + "\n")
     
     def _audio_health_monitor(self):
-        """Monitor audio services (dB reader and song detector) and restart if needed"""
-        check_interval = 30  # Check every 30 seconds
+        """Monitor audio services (dB reader and song detector) and restart if needed - CRITICAL: Must never fail"""
+        check_interval = 15  # CRITICAL: Check every 15 seconds (was 30) for faster recovery
         last_db_reading = None
         last_db_time = time.time()
-        db_stuck_threshold = 60  # dB reader stuck if no update for 60s
+        db_stuck_threshold = 15  # CRITICAL: Reduced from 60s to 15s - dB reader stuck if no update for 15s
         consecutive_failures = 0
+        consecutive_errors = 0
         
         while self.running and not self.stop_event.is_set():
             try:
+                consecutive_errors = 0  # Reset on successful check
+                
                 if not self.audio_monitor:
+                    self.stop_event.wait(check_interval)
+                    continue
+                
+                # CRITICAL: Check if monitoring is actually running
+                if not self.audio_monitor.running:
+                    logger.error("🚨 CRITICAL: Audio monitor is not running! Restarting...")
+                    consecutive_failures += 1
+                    try:
+                        self.audio_monitor.start_monitoring()
+                        time.sleep(2)
+                        if self.audio_monitor.running:
+                            logger.info("✅ Audio monitor restarted successfully")
+                            consecutive_failures = 0
+                        else:
+                            logger.error("❌ Audio monitor failed to start")
+                    except Exception as restart_error:
+                        logger.error(f"❌ Failed to restart audio monitor: {restart_error}")
                     self.stop_event.wait(check_interval)
                     continue
                 
@@ -360,7 +404,20 @@ class PulseHub:
                 current_db = self.audio_monitor.get_current_db()
                 current_time = time.time()
                 
-                # Detect if dB reading is stuck
+                # CRITICAL: Check if dB readings are stale (not updating at all)
+                # Better than checking if value changed - quiet environments might have constant dB
+                if hasattr(self.audio_monitor, '_last_db_ts'):
+                    db_age = current_time - self.audio_monitor._last_db_ts
+                    if db_age > db_stuck_threshold:
+                        logger.error(
+                            f"🚨 CRITICAL: dB readings stale for {db_age:.1f}s (last update: {self.audio_monitor._last_db_ts:.1f})"
+                        )
+                        consecutive_failures += 1
+                    elif db_age < db_stuck_threshold:
+                        # dB readings are fresh
+                        consecutive_failures = max(0, consecutive_failures - 1)  # Reduce failure count
+                
+                # Detect if dB reading is stuck (backup check)
                 if current_db == last_db_reading:
                     if (current_time - last_db_time) > db_stuck_threshold:
                         logger.error(
@@ -368,12 +425,12 @@ class PulseHub:
                         )
                         consecutive_failures += 1
                     else:
-                        consecutive_failures = 0  # Reset if within threshold
+                        consecutive_failures = max(0, consecutive_failures - 1)  # Reset if within threshold
                 else:
                     # dB reading changed - healthy
                     last_db_reading = current_db
                     last_db_time = current_time
-                    consecutive_failures = 0
+                    consecutive_failures = max(0, consecutive_failures - 1)
                 
                 # Check song detector health
                 song_stats = self.audio_monitor.get_song_detection_stats()
@@ -388,8 +445,10 @@ class PulseHub:
                                 self.audio_monitor.song_detector.detection_thread.is_alive()
                             )
                             if not thread_alive:
-                                logger.warning("⚠️ Song detector thread is not alive")
+                                logger.warning("🚨 CRITICAL: Song detector thread is not alive")
                                 consecutive_failures += 1
+                            else:
+                                consecutive_failures = max(0, consecutive_failures - 1)
                         # Check if watchdog thread is alive
                         if hasattr(self.audio_monitor.song_detector, 'watchdog_thread'):
                             watchdog_alive = (
@@ -397,51 +456,67 @@ class PulseHub:
                                 self.audio_monitor.song_detector.watchdog_thread.is_alive()
                             )
                             if not watchdog_alive:
-                                logger.warning("⚠️ Song detector watchdog thread is not alive")
+                                logger.warning("🚨 CRITICAL: Song detector watchdog thread is not alive")
                                 consecutive_failures += 1
+                            else:
+                                consecutive_failures = max(0, consecutive_failures - 1)
                 
-                # If consecutive failures detected, restart audio monitor
-                if consecutive_failures >= 3:
+                # CRITICAL: If consecutive failures detected, restart audio monitor IMMEDIATELY
+                if consecutive_failures >= 2:  # Reduced from 3 to 2 for faster recovery
                     logger.error(
-                        f"🚨 CRITICAL: Audio services failing ({consecutive_failures} consecutive checks). Restarting..."
+                        f"🚨 CRITICAL: Audio services failing ({consecutive_failures} consecutive checks). Restarting IMMEDIATELY..."
                     )
                     
-                    # Rate limit restarts
+                    # CRITICAL: Reduced rate limiting - allow more restarts
                     time_since_last_restart = current_time - self._last_audio_restart_time
-                    if time_since_last_restart < 3600:  # Less than an hour
+                    if time_since_last_restart < 60:  # Reduced from 3600s to 60s
                         self._audio_restart_count += 1
-                        if self._audio_restart_count > self._max_audio_restarts_per_hour:
+                        if self._audio_restart_count > 20:  # Increased from 5 to 20
                             logger.error(
                                 f"⚠️ Too many audio restarts ({self._audio_restart_count}). "
-                                "Waiting before next restart attempt."
+                                "Waiting 60s before next restart attempt."
                             )
-                            self.stop_event.wait(3600)  # Wait an hour
+                            self.stop_event.wait(60)  # Reduced from 3600s to 60s
                             self._audio_restart_count = 0
                             continue
                     else:
                         self._audio_restart_count = 0
                     
-                    # Restart audio monitor
+                    # Restart audio monitor IMMEDIATELY
                     try:
-                        logger.info("Restarting audio monitor...")
+                        logger.info("🚨 CRITICAL: Restarting audio monitor IMMEDIATELY...")
                         self.audio_monitor.stop_monitoring()
-                        time.sleep(2)
+                        time.sleep(1)  # Reduced from 2s
                         self.audio_monitor.start_monitoring()
-                        self._last_audio_restart_time = time.time()
-                        consecutive_failures = 0
-                        last_db_reading = None  # Reset tracking
-                        last_db_time = time.time()
-                        logger.info("✅ Audio monitor restarted successfully")
+                        time.sleep(2)  # Give it time to start
+                        
+                        # Verify it actually started
+                        if self.audio_monitor.running:
+                            self._last_audio_restart_time = time.time()
+                            consecutive_failures = 0
+                            last_db_reading = None  # Reset tracking
+                            last_db_time = time.time()
+                            logger.info("✅ Audio monitor restarted successfully")
+                        else:
+                            logger.error("❌ Audio monitor failed to start after restart")
+                            consecutive_failures += 1
                     except Exception as e:
                         logger.error(f"❌ Failed to restart audio monitor: {e}")
-                        consecutive_failures = 0  # Reset to prevent rapid restart loops
+                        import traceback
+                        logger.error(traceback.format_exc())
+                        consecutive_failures += 1
                 
                 self.stop_event.wait(check_interval)
                 
             except Exception as e:
-                logger.error(f"Error in audio health monitor: {e}")
+                consecutive_errors += 1
+                logger.error(f"🚨 CRITICAL ERROR in audio health monitor (consecutive: {consecutive_errors}): {e}")
                 import traceback
-                logger.debug(traceback.format_exc())
+                logger.error(traceback.format_exc())
+                # Don't let health monitor crash - always continue
+                if consecutive_errors >= 10:
+                    logger.error("🚨 CRITICAL: Health monitor has had 10 consecutive errors but continuing...")
+                    consecutive_errors = 0
                 self.stop_event.wait(check_interval)
     
     def _main_loop(self):
