@@ -84,6 +84,9 @@ class AudioMonitor:
         # Watchdog tracking
         self._monitoring_thread = None
         self._last_activity = 0.0
+        
+        # CRITICAL FIX: Track complete system stalls (25min issue)
+        self._system_completely_stalled_at = 0.0
 
         # Song detection configuration from environment (default: 10s)
         try:
@@ -114,6 +117,11 @@ class AudioMonitor:
         self._detection_loop_thread = None
         self._detection_loop_ready_event = None
         self._detection_loop_lock = Lock()
+        
+        # CRITICAL FIX: Event loop health tracking to detect stuck loops at 25min mark
+        self._loop_last_heartbeat = 0.0
+        self._loop_heartbeat_interval = 60.0  # Heartbeat every 60s
+        self._loop_heartbeat_timeout = 180.0  # Restart loop if no heartbeat for 3 minutes
 
         # Stream state tracking for watchdog-based recovery
         self._monitoring_backend = None
@@ -307,6 +315,14 @@ class AudioMonitor:
                     asyncio.set_event_loop(loop)
                     ready_event.set()
                     logger.debug("Song detection event loop started")
+                    
+                    # CRITICAL FIX: Schedule periodic heartbeat to detect stuck loops
+                    async def _heartbeat():
+                        while True:
+                            self._loop_last_heartbeat = time.time()
+                            await asyncio.sleep(self._loop_heartbeat_interval)
+                    
+                    loop.create_task(_heartbeat())
                     loop.run_forever()
 
                 thread = Thread(target=_loop_runner, name="AudioMonitorSongLoop", daemon=True)
@@ -633,7 +649,45 @@ class AudioMonitor:
                             )
                             self._stream_restart_request.set()
                             self._last_db_restart_ts = now
+                            
+                            # CRITICAL FIX: Track complete system stall (25min issue)
+                            if self._system_completely_stalled_at == 0.0:
+                                self._system_completely_stalled_at = now
+                            elif (now - self._system_completely_stalled_at) > 60.0:
+                                # System has been stalled for >60s despite restart attempts
+                                logger.error(
+                                    "🚨 CRITICAL: Audio system completely stalled for %.1fs - FORCING COMPLETE RESTART!",
+                                    now - self._system_completely_stalled_at
+                                )
+                                # Stop and restart the entire monitoring system
+                                try:
+                                    self.stop_monitoring()
+                                    time.sleep(2)
+                                    self.start_monitoring()
+                                    logger.info("✅ Complete audio system restart successful")
+                                    self._system_completely_stalled_at = 0.0
+                                except Exception as e:
+                                    logger.error(f"❌ Failed to restart audio system: {e}")
+                else:
+                    # dB readings are fresh - reset stall tracker
+                    self._system_completely_stalled_at = 0.0
 
+                # CRITICAL FIX: Check event loop heartbeat to detect stuck loops (25min issue)
+                if self._loop_last_heartbeat > 0:
+                    heartbeat_age = now - self._loop_last_heartbeat
+                    if heartbeat_age > self._loop_heartbeat_timeout:
+                        logger.error(
+                            "⚠️ CRITICAL: Event loop heartbeat stale (%.1fs) - loop is STUCK! Force restarting...",
+                            heartbeat_age
+                        )
+                        # Force restart the entire detection loop
+                        if not self._restart_detection_loop():
+                            logger.error("Failed to restart stuck event loop - audio detection will fail")
+                            self._song_detection_stats["last_error"] = "event_loop_stuck_restart_failed"
+                        else:
+                            logger.info("✅ Event loop restarted successfully after being stuck")
+                            self._song_detection_stats["last_error"] = "recovered_from_stuck_loop"
+                
                 # Validate the async song detection loop when detection not already running
                 if self.song_detector is not None and not self._song_detection_stats.get("active", False):
                     if not self._is_detection_loop_healthy():
@@ -1127,11 +1181,22 @@ class AudioMonitor:
                 
                 shazam = self._shazam_instance
             
-            # CRITICAL FIX: Reduce timeout from 15s to 10s to catch hangs faster
-            result = await asyncio.wait_for(
-                shazam.recognize(audio_file),
-                timeout=10.0
-            )
+            # CRITICAL FIX: Wrap in shield() to prevent cancellation from hanging the loop
+            # Also add multiple timeout layers for defense in depth
+            try:
+                recognition_task = asyncio.create_task(shazam.recognize(audio_file))
+                result = await asyncio.wait_for(
+                    asyncio.shield(recognition_task),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                # Force-cancel the task if it times out
+                recognition_task.cancel()
+                try:
+                    await asyncio.wait_for(recognition_task, timeout=2.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+                raise
             return result
         except ImportError as e:
             logger.error(f"ShazamIO not available: {e}")
