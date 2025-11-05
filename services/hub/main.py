@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import yaml
+import json
 from datetime import datetime, timedelta
 from threading import Thread, Event
 from pathlib import Path
@@ -577,13 +578,25 @@ class PulseHub:
         if self.light_sensor:
             data["light_level"] = self._sanitize_environment_value(self.light_sensor.get_light_level())
         
-        # Get decibel reading from simple detector
+        # Get decibel reading from simple detector OR cache file (if running as separate service)
         if self.decibel_detector:
             reading = self.decibel_detector.get_latest_reading()
             data["noise_db"] = self._sanitize_environment_value(reading.get("db_value", 0))
             logger.debug(f"dB reading: {reading.get('db_value', 0):.1f} dB")
+        elif os.getenv('PULSE_DISABLE_AUDIO') == '1':
+            # Audio is running as separate service - read from cache file
+            try:
+                import json
+                cache_file = Path("/opt/pulse/data/decibel_cache.json")
+                if cache_file.exists():
+                    with open(cache_file, 'r') as f:
+                        reading = json.load(f)
+                    data["noise_db"] = self._sanitize_environment_value(reading.get("db_value", 0))
+                    logger.debug(f"dB reading from cache: {reading.get('db_value', 0):.1f} dB")
+            except Exception as e:
+                logger.debug(f"Could not read decibel cache: {e}")
         
-        # Get song info from simple detector
+        # Get song info from simple detector OR cache file (if running as separate service)
         if self.song_detector:
             song_data = self.song_detector.get_latest_song()
             data["current_song"] = song_data
@@ -597,6 +610,27 @@ class PulseHub:
                 logger.debug(f"Song detected: {song_data.get('title')} - {song_data.get('artist')}")
             else:
                 logger.debug("No song detected (title: Unknown or None)")
+        elif os.getenv('PULSE_DISABLE_AUDIO') == '1':
+            # Audio is running as separate service - read from cache file
+            try:
+                import json
+                cache_file = Path("/opt/pulse/data/song_cache.json")
+                if cache_file.exists():
+                    with open(cache_file, 'r') as f:
+                        song_data = json.load(f)
+                    data["current_song"] = song_data
+                    data["song_detection"] = {
+                        "interval_sec": 60,
+                        "detector_enabled": True
+                    }
+                    logger.debug(f"Song from cache: {song_data.get('title', 'Unknown')} - {song_data.get('artist', 'Unknown')}")
+                else:
+                    # No cache file yet - return default
+                    data["current_song"] = {"title": "Unknown", "artist": "Unknown", "timestamp": None}
+                    data["song_detection"] = {"interval_sec": 60, "detector_enabled": True}
+            except Exception as e:
+                logger.debug(f"Could not read song cache: {e}")
+                data["current_song"] = {"title": "Unknown", "artist": "Unknown", "timestamp": None}
 
         # Fallback: if no song detected via mic, use music controller's current track
         if (not data.get("current_song") or data["current_song"].get("title") in (None, "Unknown")) and self.music_controller:

@@ -8,6 +8,7 @@ Isolated from other services for fault tolerance
 import logging
 import sys
 import os
+import json
 from pathlib import Path
 import time
 
@@ -57,6 +58,14 @@ def main():
     logger.info("Song Detector: Every 60 seconds")
     logger.info("="*80)
     
+    # Create necessary directories and define cache paths
+    data_dir = Path("/opt/pulse/data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    
+    decibel_cache = data_dir / "decibel_cache.json"
+    song_cache = data_dir / "song_cache.json"
+    logger.info(f"📁 Cache files: {decibel_cache}, {song_cache}")
+    
     try:
         from services.sensors.simple_decibel_detector import DecibelDetector
         from services.sensors.simple_song_detector import SongDetector
@@ -74,14 +83,36 @@ def main():
         logger.info("🎉 AUDIO SERVICE RUNNING")
         logger.info("="*80)
         
-        # Keep running and log status periodically
+        # Keep running, write cache files, and log status periodically
         last_status_log = 0
+        last_cache_write = 0
         
         while True:
-            time.sleep(30)
+            time.sleep(2)  # Check every 2 seconds for cache updates
             
             current_time = time.time()
-            if current_time - last_status_log >= 300:  # Log every 5 minutes
+            
+            # Write cache files every 5 seconds (or when data changes)
+            if current_time - last_cache_write >= 5:
+                try:
+                    # Write decibel cache
+                    db_reading = decibel_detector.get_latest_reading()
+                    with open(decibel_cache, 'w') as f:
+                        json.dump(db_reading, f, indent=2)
+                    
+                    # Write song cache
+                    song_info = song_detector.get_latest_song()
+                    with open(song_cache, 'w') as f:
+                        json.dump(song_info, f, indent=2)
+                    
+                    logger.debug(f"📁 Cache files updated (dB: {db_reading.get('db_value', 0):.1f}, Song: {song_info.get('title', 'Unknown')})")
+                    last_cache_write = current_time
+                    
+                except Exception as cache_err:
+                    logger.error(f"Error writing cache files: {cache_err}")
+            
+            # Log status every 5 minutes
+            if current_time - last_status_log >= 300:
                 # Get latest readings
                 db_reading = decibel_detector.get_latest_reading()
                 song_info = song_detector.get_latest_song()
@@ -98,6 +129,7 @@ def main():
                 
                 logger.info(f"✅ Decibel thread: {'Running' if decibel_detector.detection_thread and decibel_detector.detection_thread.is_alive() else 'Dead'}")
                 logger.info(f"✅ Song thread: {'Running' if song_detector.detection_thread and song_detector.detection_thread.is_alive() else 'Dead'}")
+                logger.info(f"📁 Cache files: {decibel_cache}, {song_cache}")
                 logger.info("="*80)
                 
                 last_status_log = current_time
