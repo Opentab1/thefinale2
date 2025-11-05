@@ -3,6 +3,8 @@ Pulse 1.0 - Microphone Audio Analysis
 Song detection and decibel level monitoring
 Integrated with party_box song detection for production-ready music recognition
 """
+from __future__ import annotations
+
 
 import asyncio
 import concurrent.futures
