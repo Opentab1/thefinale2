@@ -176,6 +176,14 @@ class SongDetector:
                     # Restart the thread
                     self.start_detection_thread()
                 
+                # CRITICAL FIX: Check event loop thread health
+                with self._event_loop_lock:
+                    if self._event_loop_thread is not None and not self._event_loop_thread.is_alive():
+                        logging.error("⚠️ Event loop thread died! Recreating...")
+                        self._event_loop = None
+                        self._event_loop_thread = None
+                        # Will be recreated on next detection attempt
+                
                 # Check heartbeat - thread should update this every loop iteration
                 heartbeat_age = time.time() - self.last_heartbeat
                 # CRITICAL: Much more aggressive heartbeat checking (30s instead of 2x interval + 30)
@@ -206,10 +214,9 @@ class SongDetector:
                 # Update heartbeat (required for watchdog)
                 self.last_heartbeat = time.time()
                 
-                # CRITICAL: Verify event loop is still healthy
-                if not self._ensure_event_loop():
-                    logging.error("🚨 Event loop died! Recreating...")
-                    # Will be recreated on next ensure_event_loop call
+                # CRITICAL FIX: Don't recreate event loop in the detection loop!
+                # Event loop is created once during initialization and reused.
+                # Watchdog will handle restart if the entire detector needs to be restarted.
                 
                 if self.use_buffer_mode:
                     # In buffer mode, we just maintain heartbeat for watchdog
@@ -341,10 +348,22 @@ class SongDetector:
     def _ensure_event_loop(self):
         """Ensure we have a working event loop for async operations"""
         with self._event_loop_lock:
+            # CRITICAL FIX: Check if event loop exists and is healthy
             if self._event_loop is None or self._event_loop.is_closed():
+                # CRITICAL FIX: Properly cleanup old thread if it exists
                 if self._event_loop_thread and self._event_loop_thread.is_alive():
-                    # Loop closed but thread still alive - wait for it to finish
-                    self._event_loop_thread.join(timeout=2.0)
+                    logging.warning("Event loop closed but thread still alive - forcing cleanup")
+                    # Try to stop the old loop gracefully
+                    if self._event_loop and not self._event_loop.is_closed():
+                        try:
+                            self._event_loop.call_soon_threadsafe(self._event_loop.stop)
+                        except Exception:
+                            pass
+                    # Wait for old thread to die
+                    self._event_loop_thread.join(timeout=3.0)
+                    if self._event_loop_thread.is_alive():
+                        logging.error("Old event loop thread won't die - abandoning it")
+                    self._event_loop_thread = None
                 
                 # Create new event loop in dedicated thread
                 loop_ready = threading.Event()
@@ -352,10 +371,19 @@ class SongDetector:
                 
                 def _loop_runner():
                     nonlocal loop
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop_ready.set()
-                    loop.run_forever()
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop_ready.set()
+                        loop.run_forever()
+                    except Exception as e:
+                        logging.error(f"Event loop runner error: {e}")
+                    finally:
+                        # Cleanup when loop stops
+                        try:
+                            loop.close()
+                        except Exception:
+                            pass
                 
                 thread = threading.Thread(target=_loop_runner, name="SongDetectorEventLoop", daemon=True)
                 thread.start()
@@ -363,10 +391,17 @@ class SongDetector:
                 if loop_ready.wait(timeout=5.0):
                     self._event_loop = loop
                     self._event_loop_thread = thread
-                    logging.info("Song detector event loop created")
+                    logging.info("✅ Song detector event loop created")
                 else:
-                    logging.error("Failed to create event loop within timeout")
+                    logging.error("❌ Failed to create event loop within timeout")
                     return False
+            
+            # CRITICAL FIX: Verify thread is actually alive
+            if self._event_loop_thread and not self._event_loop_thread.is_alive():
+                logging.error("❌ Event loop exists but thread is dead!")
+                self._event_loop = None
+                self._event_loop_thread = None
+                return False
             
             return True
     
@@ -508,32 +543,51 @@ class SongDetector:
     
     def stop(self):
         """Stop song detection thread"""
+        logging.info("Stopping song detector...")
         self.detection_active = False
         self.watchdog_active = False
         
         # Stop detection thread
         if self.detection_thread and self.detection_thread.is_alive():
-            self.detection_thread.join(timeout=2.0)
-            logging.info("Song detection thread stopped")
+            self.detection_thread.join(timeout=3.0)
+            if self.detection_thread.is_alive():
+                logging.warning("Detection thread did not stop gracefully")
+            else:
+                logging.info("✓ Song detection thread stopped")
         
         # Stop watchdog
         if self.watchdog_thread and self.watchdog_thread.is_alive():
-            self.watchdog_thread.join(timeout=2.0)
-            logging.info("Song detector watchdog stopped")
+            self.watchdog_thread.join(timeout=3.0)
+            if self.watchdog_thread.is_alive():
+                logging.warning("Watchdog thread did not stop gracefully")
+            else:
+                logging.info("✓ Song detector watchdog stopped")
         
-        # Clean up event loop
+        # CRITICAL FIX: Properly clean up event loop with better error handling
         with self._event_loop_lock:
             if self._event_loop and not self._event_loop.is_closed():
                 try:
                     self._event_loop.call_soon_threadsafe(self._event_loop.stop)
-                except Exception:
-                    pass
-                if self._event_loop_thread:
-                    self._event_loop_thread.join(timeout=2.0)
+                    logging.debug("Event loop stop requested")
+                except Exception as e:
+                    logging.warning(f"Error stopping event loop: {e}")
+                
+                # CRITICAL FIX: Wait for event loop thread to finish
+                if self._event_loop_thread and self._event_loop_thread.is_alive():
+                    self._event_loop_thread.join(timeout=3.0)
+                    if self._event_loop_thread.is_alive():
+                        logging.error("Event loop thread did not stop - abandoning")
+                    else:
+                        logging.info("✓ Event loop thread stopped")
+                
+                # Close the loop
                 try:
-                    self._event_loop.close()
-                except Exception:
-                    pass
+                    if not self._event_loop.is_closed():
+                        self._event_loop.close()
+                        logging.debug("Event loop closed")
+                except Exception as e:
+                    logging.warning(f"Error closing event loop: {e}")
+                
                 self._event_loop = None
                 self._event_loop_thread = None
         
@@ -543,18 +597,11 @@ class SongDetector:
                 # Try to close client if possible
                 client = getattr(self._shazam_instance, 'client', None)
                 if client and hasattr(client, 'close'):
-                    # Create temporary loop for cleanup
-                    cleanup_loop = asyncio.new_event_loop()
-                    try:
-                        cleanup_loop.run_until_complete(
-                            asyncio.wait_for(client.close(), timeout=2.0)
-                        )
-                    except Exception:
-                        pass
-                    finally:
-                        cleanup_loop.close()
-            except Exception:
-                pass
+                    # CRITICAL FIX: Don't create new event loop during cleanup
+                    # Just mark instance for cleanup and let it be garbage collected
+                    logging.debug("Marking Shazam instance for cleanup")
+            except Exception as e:
+                logging.debug(f"Error during Shazam cleanup: {e}")
             self._shazam_instance = None
         
-        logging.info("Song detector stopped and cleaned up")
+        logging.info("✅ Song detector stopped and cleaned up")
