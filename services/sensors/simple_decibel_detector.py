@@ -146,8 +146,10 @@ class DecibelDetector:
             else:
                 db_value = 0
             
-            # Apply adjustment for rough calibration (may need to be adjusted for specific microphone)
-            adjusted_db = max(0, min(100, db_value + 40))  # Add offset and cap at 100dB
+            # Apply adjustment for rough calibration (calibrated for typical USB microphones)
+            # Offset reduced from +40 to -10 based on real-world testing
+            # Max raised from 100 to 150 to accommodate full dB range
+            adjusted_db = max(0, min(150, db_value - 10))  # Adjusted offset and cap at 150dB
             
             # Update latest reading
             with self.lock:

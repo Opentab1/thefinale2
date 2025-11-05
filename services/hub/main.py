@@ -83,7 +83,10 @@ class PulseHub:
         
         # Initialize sensors
         logger.info("\n🎥 Initializing Camera/People Counter...")
-        if modules.get('camera'):
+        # Check if camera is disabled by environment variable (for separate service)
+        if os.getenv('PULSE_DISABLE_CAMERA') == '1':
+            logger.info("  - Disabled (running as separate service)")
+        elif modules.get('camera'):
             try:
                 use_ai_hat = modules.get('ai_hat', False)
                 logger.info(f"  - AI HAT acceleration: {'Enabled' if use_ai_hat else 'Disabled'}")
@@ -96,7 +99,10 @@ class PulseHub:
             logger.info("  - Disabled in config")
         
         logger.info("\n🎤 Initializing Microphone/Audio Services...")
-        if modules.get('mic'):
+        # Check if audio is disabled by environment variable (for separate service)
+        if os.getenv('PULSE_DISABLE_AUDIO') == '1':
+            logger.info("  - Disabled (running as separate service)")
+        elif modules.get('mic'):
             try:
                 # Initialize simple decibel detector (10 second updates)
                 self.decibel_detector = DecibelDetector(enabled=True, update_interval=10)
