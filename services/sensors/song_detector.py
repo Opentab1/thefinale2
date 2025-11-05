@@ -24,13 +24,21 @@ except ImportError:
     SOUNDDEVICE_AVAILABLE = False
     logging.warning("sounddevice library not available. Install with 'pip install sounddevice'")
 
-# Try to import ShazamIO
+# Try to import ShazamIO with detailed error handling
 try:
     from shazamio import Shazam
     SHAZAMIO_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     SHAZAMIO_AVAILABLE = False
-    logging.warning("ShazamIO library not available. Install with 'pip install shazamio'")
+    error_msg = str(e)
+    
+    # Python 3.13+ specific error: audioop removed from stdlib
+    if "audioop" in error_msg or "pyaudioop" in error_msg:
+        logging.warning("ShazamIO requires audioop (removed in Python 3.13+)")
+        logging.warning("Install with: pip3 install --break-system-packages audioop-lts shazamio")
+    else:
+        logging.warning(f"ShazamIO library not available: {error_msg}")
+        logging.warning("Install with: pip3 install --break-system-packages shazamio aiohttp")
 
 class SongDetector:
     """Class for handling background song detection using ShazamIO"""
