@@ -62,6 +62,7 @@ class PulseHub:
         self._last_audio_restart_time = 0
         self._last_successful_db_reading = 0
         self._last_successful_song_check = 0
+        self._audio_restart_count_reset_time = time.time()  # CRITICAL FIX: Track counter reset
         
         self._init_components()
     
@@ -348,7 +349,7 @@ class PulseHub:
         """Monitor audio services (dB reader and song detector) and restart if needed"""
         check_interval = 15  # Check every 15 seconds (balanced approach)
         last_db_update_time = None
-        db_update_timeout = 45  # dB should update at least once every 45s
+        db_update_timeout = 60  # CRITICAL FIX: Increased to 60s (was 45s) to reduce false positives
         consecutive_failures = 0
         
         logger.info("🛡️ Audio health monitor active - checking every {}s".format(check_interval))
@@ -423,6 +424,13 @@ class PulseHub:
                                     logger.warning("⚠️ Song detector event loop thread is not alive")
                                     consecutive_failures += 1
                 
+                # CRITICAL FIX: Reset restart counter every hour for long-running stability
+                if (current_time - self._audio_restart_count_reset_time) > 3600:
+                    if self._audio_restart_count > 0:
+                        logger.info(f"🔄 Resetting audio restart counter ({self._audio_restart_count} -> 0) after 1 hour")
+                    self._audio_restart_count = 0
+                    self._audio_restart_count_reset_time = current_time
+                
                 # CRITICAL FIX: Require more consecutive failures before restart (was 2, now 3)
                 # This prevents false positives and unnecessary restarts
                 if consecutive_failures >= 3:
@@ -430,20 +438,18 @@ class PulseHub:
                         f"🚨 CRITICAL: Audio services failing ({consecutive_failures} consecutive checks). RESTARTING IMMEDIATELY!"
                     )
                     
-                    # Rate limit restarts
-                    time_since_last_restart = current_time - self._last_audio_restart_time
-                    if time_since_last_restart < 3600:  # Less than an hour
-                        self._audio_restart_count += 1
-                        if self._audio_restart_count > self._max_audio_restarts_per_hour:
-                            logger.error(
-                                f"⚠️ Too many audio restarts ({self._audio_restart_count}). "
-                                "Waiting before next restart attempt."
-                            )
-                            self.stop_event.wait(3600)  # Wait an hour
-                            self._audio_restart_count = 0
-                            continue
-                    else:
-                        self._audio_restart_count = 0
+                    # Rate limit restarts with improved logic
+                    self._audio_restart_count += 1
+                    
+                    if self._audio_restart_count > self._max_audio_restarts_per_hour:
+                        logger.error(
+                            f"⚠️ Too many audio restarts ({self._audio_restart_count}). "
+                            "Waiting 10 minutes before next restart attempt."
+                        )
+                        self.stop_event.wait(600)  # Wait 10 minutes (was 1 hour)
+                        self._audio_restart_count = max(0, self._audio_restart_count - 3)  # Decay counter
+                        consecutive_failures = 0
+                        continue
                     
                     # Restart audio monitor with comprehensive cleanup
                     try:
