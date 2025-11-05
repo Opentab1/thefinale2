@@ -557,9 +557,18 @@ class AudioMonitor:
         # Start monitoring thread
         self._start_monitoring_thread()
         
+        # CRITICAL FIX: Verify monitoring thread started
+        time.sleep(0.2)
+        if self._monitoring_thread is None or not self._monitoring_thread.is_alive():
+            logger.error("⚠️ Monitoring thread failed to start - will retry via watchdog")
+            # Don't fail completely - watchdog will restart it
+        
         # Start watchdog thread to restart if monitoring crashes
-        watchdog_thread = Thread(target=self._watchdog_loop, daemon=True)
+        watchdog_thread = Thread(target=self._watchdog_loop, daemon=True, name="AudioMonitorWatchdog")
         watchdog_thread.start()
+        time.sleep(0.1)
+        if not watchdog_thread.is_alive():
+            logger.error("⚠️ Watchdog thread failed to start")
 
         if self._health_thread is None or not self._health_thread.is_alive():
             self._health_thread = Thread(
@@ -568,7 +577,11 @@ class AudioMonitor:
                 daemon=True,
             )
             self._health_thread.start()
-            logger.debug("Audio monitor healthcheck thread launched")
+            time.sleep(0.1)
+            if self._health_thread.is_alive():
+                logger.debug("Audio monitor healthcheck thread launched")
+            else:
+                logger.error("⚠️ Health check thread failed to start")
         
         logger.info("Started audio monitoring with watchdog")
     
@@ -1278,6 +1291,14 @@ class AudioMonitor:
         """Cleanup resources"""
         self.stop_monitoring()
         self._stream_restart_request.clear()
+        
+        # CRITICAL FIX: Stop song detector if it exists
+        if hasattr(self, 'song_detector') and self.song_detector is not None:
+            try:
+                self.song_detector.stop()
+                logger.info("Song detector stopped during cleanup")
+            except Exception as e:
+                logger.warning(f"Error stopping song detector during cleanup: {e}")
         
         # Cleanup Shazam instance and its ClientSession
         try:
