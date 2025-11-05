@@ -1,18 +1,24 @@
 """
 Pulse 1.0 - Database Storage Layer
 SQLite-based local storage with offline-first behavior
+WITH CONNECTION POOLING AND AUTO-RECOVERY
 """
 
 import os
 import sqlite3
 import time
+import threading
 from datetime import datetime
 from contextlib import contextmanager
+from queue import Queue, Empty
 import json
 from typing import Dict, List, Optional, Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 class PulseDB:
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str = None, pool_size: int = 5):
         # Prefer system path, but fall back to workspace-local when not writable
         preferred = "/opt/pulse/data/pulse.db"
         path = db_path or preferred
@@ -23,32 +29,131 @@ class PulseDB:
             os.makedirs(local_dir, exist_ok=True)
             path = os.path.join(local_dir, "pulse.db")
         self.db_path = path
+        
+        # CRITICAL FIX: Implement connection pooling to prevent exhaustion
+        self.pool_size = pool_size
+        self._connection_pool = Queue(maxsize=pool_size)
+        self._pool_lock = threading.Lock()
+        self._connections_created = 0
+        self._last_health_check = 0.0
+        self._health_check_interval = 30.0  # Check health every 30 seconds
+        
+        # Initialize database schema
         self._init_database()
+        
+        # Pre-populate connection pool
+        self._populate_pool()
+        
+        logger.info(f"✅ Database initialized with connection pool (size={pool_size}, path={self.db_path})")
+    
+    def _create_connection(self) -> sqlite3.Connection:
+        """Create a new database connection with optimal settings"""
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            # Enable WAL mode for better concurrent access
+            conn.execute('PRAGMA journal_mode=WAL')
+            # Set busy timeout to handle lock contention
+            conn.execute('PRAGMA busy_timeout=5000')
+            # CRITICAL FIX: Set synchronous mode for better performance
+            conn.execute('PRAGMA synchronous=NORMAL')
+            # CRITICAL FIX: Enable automatic checkpoint management
+            conn.execute('PRAGMA wal_autocheckpoint=1000')
+            # Cache size for better performance
+            conn.execute('PRAGMA cache_size=-64000')  # 64MB cache
+            self._connections_created += 1
+            logger.debug(f"Created new database connection (total: {self._connections_created})")
+            return conn
+        except Exception as e:
+            logger.error(f"Failed to create database connection: {e}")
+            raise
+    
+    def _populate_pool(self):
+        """Pre-populate the connection pool"""
+        for _ in range(self.pool_size):
+            try:
+                conn = self._create_connection()
+                self._connection_pool.put(conn, block=False)
+            except Exception as e:
+                logger.error(f"Failed to populate connection pool: {e}")
+                break
+    
+    def _validate_connection(self, conn: sqlite3.Connection) -> bool:
+        """Validate a connection is still healthy"""
+        try:
+            conn.execute("SELECT 1").fetchone()
+            return True
+        except Exception:
+            return False
+    
+    def _get_pooled_connection(self, timeout: float = 5.0) -> sqlite3.Connection:
+        """Get a connection from the pool with health check"""
+        try:
+            # Try to get from pool
+            conn = self._connection_pool.get(timeout=timeout)
+            
+            # Validate connection
+            if self._validate_connection(conn):
+                return conn
+            else:
+                # Connection is dead, create new one
+                logger.warning("Pooled connection failed validation, creating new one")
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                return self._create_connection()
+        except Empty:
+            # Pool is exhausted, create temporary connection
+            logger.warning("Connection pool exhausted, creating temporary connection")
+            return self._create_connection()
+    
+    def _return_connection(self, conn: sqlite3.Connection):
+        """Return a connection to the pool"""
+        try:
+            if self._validate_connection(conn):
+                self._connection_pool.put(conn, block=False)
+            else:
+                # Connection is bad, close it and create new one for pool
+                logger.warning("Returning invalid connection, creating replacement")
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                # Create replacement
+                new_conn = self._create_connection()
+                self._connection_pool.put(new_conn, block=False)
+        except Exception as e:
+            logger.error(f"Error returning connection to pool: {e}")
+            # Try to close the connection at least
+            try:
+                conn.close()
+            except Exception:
+                pass
     
     @contextmanager
     def get_connection(self):
-        """Context manager for database connections with timeout and retry"""
+        """Context manager for database connections WITH CONNECTION POOLING"""
+        conn = None
         max_retries = 3
         retry_delay = 0.5
-        conn = None
+        
+        # Periodic health check
+        current_time = time.time()
+        if current_time - self._last_health_check > self._health_check_interval:
+            self._check_pool_health()
+            self._last_health_check = current_time
         
         for attempt in range(max_retries):
             try:
-                # Use timeout to prevent indefinite blocking
-                conn = sqlite3.connect(self.db_path, timeout=10.0)
-                conn.row_factory = sqlite3.Row
-                # Enable WAL mode for better concurrent access
-                conn.execute('PRAGMA journal_mode=WAL')
-                # Set busy timeout to handle lock contention
-                conn.execute('PRAGMA busy_timeout=5000')
+                conn = self._get_pooled_connection()
                 break
-            except sqlite3.OperationalError as e:
+            except Exception as e:
                 if attempt < max_retries - 1:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"Database connection attempt {attempt + 1} failed: {e}, retrying...")
+                    logger.warning(f"Failed to get connection (attempt {attempt + 1}): {e}, retrying...")
                     time.sleep(retry_delay)
                 else:
+                    logger.error(f"Failed to get connection after {max_retries} attempts")
                     raise
         
         try:
@@ -56,18 +161,70 @@ class PulseDB:
             conn.commit()
         except Exception as e:
             if conn:
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             raise e
         finally:
             if conn:
+                self._return_connection(conn)
+    
+    def _check_pool_health(self):
+        """Check and repair connection pool health"""
+        try:
+            # Count healthy connections
+            healthy_count = 0
+            temp_conns = []
+            
+            # Drain and check all connections
+            while not self._connection_pool.empty():
                 try:
-                    conn.close()
+                    conn = self._connection_pool.get(block=False)
+                    if self._validate_connection(conn):
+                        healthy_count += 1
+                        temp_conns.append(conn)
+                    else:
+                        # Close bad connection
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                except Empty:
+                    break
+            
+            # Return healthy connections to pool
+            for conn in temp_conns:
+                try:
+                    self._connection_pool.put(conn, block=False)
                 except Exception:
-                    pass
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            
+            # Create new connections if pool is under-populated
+            needed = self.pool_size - healthy_count
+            if needed > 0:
+                logger.warning(f"Connection pool has {healthy_count}/{self.pool_size} healthy connections, creating {needed} new ones")
+                for _ in range(needed):
+                    try:
+                        new_conn = self._create_connection()
+                        self._connection_pool.put(new_conn, block=False)
+                    except Exception as e:
+                        logger.error(f"Failed to create replacement connection: {e}")
+                        break
+            
+            logger.debug(f"Connection pool health check: {healthy_count + needed}/{self.pool_size} connections")
+        except Exception as e:
+            logger.error(f"Error during connection pool health check: {e}")
     
     def _init_database(self):
         """Initialize database schema"""
-        with self.get_connection() as conn:
+        # Use a temporary connection for initialization
+        conn = None
+        try:
+            conn = self._create_connection()
             cursor = conn.cursor()
             
             # Sensor readings table
@@ -172,6 +329,16 @@ class PulseDB:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_automation_timestamp ON automation_log(timestamp)')
             
             conn.commit()
+            logger.info("✅ Database schema initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize database schema: {e}")
+            raise
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     
     # Sensor readings
     def log_sensor_reading(self, sensor_type: str, value: float, unit: str = "", 
@@ -366,3 +533,26 @@ class PulseDB:
                 ''', (days,))
             
             conn.commit()
+    
+    def close_all_connections(self):
+        """Close all pooled connections (call on shutdown)"""
+        logger.info("Closing all database connections...")
+        closed_count = 0
+        while not self._connection_pool.empty():
+            try:
+                conn = self._connection_pool.get(block=False)
+                conn.close()
+                closed_count += 1
+            except Exception:
+                pass
+        logger.info(f"Closed {closed_count} database connections")
+    
+    def get_pool_stats(self) -> Dict[str, Any]:
+        """Get connection pool statistics for monitoring"""
+        return {
+            "pool_size": self.pool_size,
+            "available_connections": self._connection_pool.qsize(),
+            "connections_created": self._connections_created,
+            "last_health_check": self._last_health_check,
+            "db_path": self.db_path
+        }

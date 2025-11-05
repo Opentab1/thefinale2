@@ -23,6 +23,7 @@ from sensors.mic_song_detect import AudioMonitor
 from sensors.bme280_reader import BME280Reader
 from sensors.light_level import LightSensor
 from sensors.pan_tilt import PanTiltController
+from sensors.system_watchdog import SystemWatchdog
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,9 @@ class PulseHub:
         self.config = self._load_config()
         self.db = PulseDB()
         self.health_monitor = HealthMonitor()
+        
+        # CRITICAL: Initialize system watchdog for auto-recovery
+        self.watchdog = SystemWatchdog(check_interval=5.0)
         
         # Sensors
         self.people_counter = None
@@ -94,7 +98,37 @@ class PulseHub:
             try:
                 self.audio_monitor = AudioMonitor()
                 self.health_monitor.register_test("mic", lambda: True)
-                logger.info("  ✓ Audio monitor initialized successfully")
+                
+                # CRITICAL: Register audio monitor with watchdog
+                def check_audio_health():
+                    if not self.audio_monitor or not self.audio_monitor.running:
+                        return False
+                    # Check if dB readings are recent
+                    if self.audio_monitor._last_db_ts == 0:
+                        return True  # Just started, give it time
+                    age = time.time() - self.audio_monitor._last_db_ts
+                    return age < 30.0  # Fail if no reading in 30 seconds
+                
+                def restart_audio():
+                    logger.warning("🔄 Restarting audio monitor...")
+                    if self.audio_monitor:
+                        try:
+                            self.audio_monitor.stop_monitoring()
+                            time.sleep(1)
+                        except Exception:
+                            pass
+                    self.audio_monitor = AudioMonitor()
+                    self.audio_monitor.start_monitoring()
+                
+                self.watchdog.register_component(
+                    "audio_monitor", 
+                    check_audio_health, 
+                    restart_audio,
+                    check_interval=15.0,  # Check every 15 seconds
+                    failure_threshold=2   # Restart after 2 failures
+                )
+                
+                logger.info("  ✓ Audio monitor initialized successfully with watchdog")
             except ImportError as e:
                 logger.error(f"  ✗ Audio monitor dependencies missing: {e}")
                 logger.error("  → Install with: pip install numpy pyaudio sounddevice")
@@ -162,8 +196,41 @@ class PulseHub:
         self._init_tv(integrations.get('tv', {}))
         self._init_music(integrations.get('music', {}))
         
+        # CRITICAL: Register database with watchdog
+        def check_db_health():
+            try:
+                # Try to get a connection and execute a simple query
+                with self.db.get_connection() as conn:
+                    conn.execute("SELECT 1").fetchone()
+                return True
+            except Exception as e:
+                logger.error(f"Database health check failed: {e}")
+                return False
+        
+        def restart_db():
+            logger.warning("🔄 Restarting database connection pool...")
+            try:
+                # Close all existing connections
+                self.db.close_all_connections()
+                time.sleep(1)
+                # Repopulate pool
+                self.db._populate_pool()
+            except Exception as e:
+                logger.error(f"Failed to restart database pool: {e}")
+                raise
+        
+        self.watchdog.register_component(
+            "database",
+            check_db_health,
+            restart_db,
+            check_interval=30.0,  # Check every 30 seconds
+            failure_threshold=2   # Restart after 2 failures
+        )
+        
         logger.info("\n" + "="*80)
         logger.info("COMPONENT INITIALIZATION COMPLETE")
+        logger.info("  🐕 System Watchdog: ACTIVE")
+        logger.info(f"  📊 Monitoring: {len(self.watchdog.components)} critical components")
         logger.info("="*80)
     
     def _init_hvac(self, config: dict):
@@ -292,6 +359,10 @@ class PulseHub:
             except Exception as e:
                 logger.error(f"  ✗ Failed to start light sensor: {e}", exc_info=True)
         
+        # CRITICAL: Start watchdog first
+        logger.info("🐕 Starting system watchdog...")
+        self.watchdog.start()
+        
         # Start main loop
         logger.info("🔄 Starting main control loop...")
         thread = Thread(target=self._main_loop)
@@ -300,6 +371,7 @@ class PulseHub:
         
         logger.info("\n" + "="*80)
         logger.info("✓ PULSE HUB STARTED SUCCESSFULLY")
+        logger.info("  🐕 Watchdog: MONITORING & AUTO-RECOVERY ENABLED")
         logger.info("="*80 + "\n")
     
     def _main_loop(self):
@@ -774,6 +846,11 @@ class PulseHub:
         self.running = False
         self.stop_event.set()
         
+        # Stop watchdog first
+        logger.info("Stopping watchdog...")
+        if self.watchdog:
+            self.watchdog.stop()
+        
         # Stop sensors
         if self.people_counter:
             self.people_counter.stop_counting()
@@ -786,6 +863,10 @@ class PulseHub:
         
         if self.light_sensor:
             self.light_sensor.stop_monitoring()
+        
+        # Close database connections
+        if self.db:
+            self.db.close_all_connections()
         
         logger.info("Pulse Hub stopped")
     
@@ -808,7 +889,9 @@ class PulseHub:
                 "lighting": self.lighting_controller is not None,
                 "tv": self.tv_controller is not None,
                 "music": self.music_controller is not None
-            }
+            },
+            "watchdog": self.watchdog.get_status() if self.watchdog else None,
+            "database_pool": self.db.get_pool_stats() if self.db else None
         }
 
 

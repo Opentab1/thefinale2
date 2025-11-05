@@ -110,8 +110,8 @@ class AudioMonitor:
         }
 
         self._health_thread = None
-        # CRITICAL FIX: Check health more frequently (every 5 seconds)
-        self._health_check_interval = 5.0  # Fixed: Always 5 seconds
+        # CRITICAL FIX: Check health more frequently (every 3 seconds for faster failure detection)
+        self._health_check_interval = 3.0  # Fixed: Always 3 seconds for rapid detection
         self._last_db_restart_ts = 0.0
 
         # Dedicated async event loop for song recognition to keep Shazam stable
@@ -120,23 +120,23 @@ class AudioMonitor:
         self._detection_loop_ready_event = None
         self._detection_loop_lock = Lock()
         
-        # CRITICAL FIX: Event loop health tracking to detect stuck loops at 25min mark
+        # CRITICAL FIX: Event loop health tracking to detect stuck loops FAST
         self._loop_last_heartbeat = 0.0
-        self._loop_heartbeat_interval = 60.0  # Heartbeat every 60s
-        self._loop_heartbeat_timeout = 180.0  # Restart loop if no heartbeat for 3 minutes
+        self._loop_heartbeat_interval = 30.0  # Heartbeat every 30s (faster detection)
+        self._loop_heartbeat_timeout = 90.0  # Restart loop if no heartbeat for 90s (faster recovery)
 
         # Stream state tracking for watchdog-based recovery
         self._monitoring_backend = None
         self._stream_restart_count = 0
         self._max_consecutive_read_errors = 3
-        # CRITICAL FIX: Reduce watchdog threshold to catch failures faster (was 60s, now 20s)
-        self._watchdog_restart_threshold = 20.0  # Fixed: Always 20 seconds
+        # CRITICAL FIX: Reduce watchdog threshold to catch failures VERY fast
+        self._watchdog_restart_threshold = 15.0  # Fixed: Always 15 seconds for faster detection
         self._stream_restart_request = Event()
         
-        # CRITICAL FIX: Track song detection thread to force-kill if stuck
+        # CRITICAL FIX: Track song detection thread to force-kill if stuck (reduced timeout)
         self._song_detection_thread = None
         self._song_detection_started_at = 0.0
-        self._song_detection_max_duration = 30.0  # Kill if running longer than 30s
+        self._song_detection_max_duration = 20.0  # Kill if running longer than 20s (was 30s)
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
         # This allows song detection without opening a separate audio stream
@@ -149,7 +149,9 @@ class AudioMonitor:
         self._shazam_instance = None
         self._shazam_lock = Lock()
         self._shazam_created_at = 0.0  # Track when instance was created
-        self._shazam_refresh_interval = 3600.0  # Refresh every hour to prevent stale sessions
+        self._shazam_refresh_interval = 600.0  # Refresh every 10 minutes to prevent stale sessions (was 1hr)
+        self._shazam_consecutive_failures = 0  # Track failures for circuit breaker
+        self._shazam_max_failures = 3  # Circuit breaker threshold
 
         # Initialize song detector if available
         if SongDetector is not None:
@@ -602,7 +604,7 @@ class AudioMonitor:
                     elif inactivity > self._watchdog_restart_threshold:
                         self._last_activity = now  # Prevent repeated warnings when backend is inactive
                 
-                # CRITICAL FIX: Force-kill stuck song detection threads
+                # CRITICAL FIX: Force-kill stuck song detection threads (NOW WITH CIRCUIT BREAKER)
                 if self._song_detection_thread is not None and self._song_detection_thread.is_alive():
                     detection_duration = now - self._song_detection_started_at
                     if detection_duration > self._song_detection_max_duration:
@@ -617,6 +619,9 @@ class AudioMonitor:
                             except RuntimeError:
                                 pass  # Already unlocked
                         
+                        # Increment failure counter for circuit breaker
+                        self._shazam_consecutive_failures += 1
+                        
                         # Reset Shazam instance to clear any stuck connections
                         self._reset_shazam_instance(reason="stuck_detection")
                         
@@ -627,7 +632,7 @@ class AudioMonitor:
                         self._song_detection_thread = None
                         self._song_detection_started_at = 0.0
                         self._song_detection_stats["active"] = False
-                        self._song_detection_stats["last_error"] = "force_killed_stuck_thread"
+                        self._song_detection_stats["last_error"] = f"force_killed_stuck_thread_failures_{self._shazam_consecutive_failures}"
                 
                 self.stop_event.wait(5)  # CRITICAL FIX: Check every 5 seconds (was 10)
             except Exception as e:
@@ -1036,25 +1041,46 @@ class AudioMonitor:
                     return
 
                 result = None
-                # CRITICAL FIX: Reduce timeout from 20s to 15s and add better error handling
+                # CRITICAL FIX: Reduce timeout from 20s to 12s and add circuit breaker
                 try:
+                    # Check circuit breaker before attempting detection
+                    if self._shazam_consecutive_failures >= self._shazam_max_failures:
+                        logger.warning(
+                            f"⚠️ Circuit breaker OPEN: {self._shazam_consecutive_failures} consecutive failures - "
+                            f"resetting Shazam and clearing failures"
+                        )
+                        self._reset_shazam_instance(reason="circuit_breaker")
+                        self._shazam_consecutive_failures = 0
+                        # Wait a bit before next attempt
+                        time.sleep(5)
+                    
                     future = asyncio.run_coroutine_threadsafe(
                         self._recognize_song_async(temp_filename),
                         self._detection_loop
                     )
-                    result = future.result(timeout=15.0)  # Reduced from 20s
+                    result = future.result(timeout=12.0)  # Reduced from 15s to 12s
+                    # Success - reset failure counter
+                    self._shazam_consecutive_failures = 0
                 except concurrent.futures.TimeoutError:
+                    self._shazam_consecutive_failures += 1
                     if future:
                         future.cancel()
-                    logger.warning("⚠️ Song detection timed out (15s) - forcing Shazam reset")
-                    self._song_detection_stats["last_error"] = "timeout"
+                    logger.warning(
+                        f"⚠️ Song detection timed out (12s) - forcing Shazam reset "
+                        f"(failure {self._shazam_consecutive_failures}/{self._shazam_max_failures})"
+                    )
+                    self._song_detection_stats["last_error"] = f"timeout_failure_{self._shazam_consecutive_failures}"
                     # CRITICAL FIX: Force reset of detection loop on timeout
                     try:
                         self._reset_shazam_instance(reason="detection_timeout")
                     except Exception as reset_error:
                         logger.error(f"Error resetting Shazam after timeout: {reset_error}")
                 except Exception as detect_error:
-                    logger.error(f"Song detection error: {detect_error}")
+                    self._shazam_consecutive_failures += 1
+                    logger.error(
+                        f"Song detection error: {detect_error} "
+                        f"(failure {self._shazam_consecutive_failures}/{self._shazam_max_failures})"
+                    )
                     self._song_detection_stats["last_error"] = f"{type(detect_error).__name__}: {detect_error}"
                     # CRITICAL FIX: Reset on any detection error to prevent cascading failures
                     try:
@@ -1091,6 +1117,8 @@ class AudioMonitor:
                     self.current_song = payload
                     self._song_detection_stats["last_success_at"] = payload["timestamp"]
                     self._song_detection_stats["last_error"] = None
+                    # Success - reset failure counter
+                    self._shazam_consecutive_failures = 0
                 else:
                     if result:
                         logger.debug(f"No song detected from buffer (keys: {list(result.keys())})")
@@ -1184,20 +1212,21 @@ class AudioMonitor:
                 shazam = self._shazam_instance
             
             # CRITICAL FIX: Wrap in shield() to prevent cancellation from hanging the loop
-            # Also add multiple timeout layers for defense in depth
+            # Also add multiple timeout layers for defense in depth (reduced from 10s to 8s)
             try:
                 recognition_task = asyncio.create_task(shazam.recognize(audio_file))
                 result = await asyncio.wait_for(
                     asyncio.shield(recognition_task),
-                    timeout=10.0
+                    timeout=8.0  # Reduced from 10s to 8s for faster failure detection
                 )
             except asyncio.TimeoutError:
                 # Force-cancel the task if it times out
                 recognition_task.cancel()
                 try:
-                    await asyncio.wait_for(recognition_task, timeout=2.0)
+                    await asyncio.wait_for(recognition_task, timeout=1.0)  # Reduced from 2s to 1s
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     pass
+                logger.warning("⚠️ Shazam recognition task timed out after 8s - task cancelled")
                 raise
             return result
         except ImportError as e:
