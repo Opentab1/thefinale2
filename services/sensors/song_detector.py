@@ -105,55 +105,89 @@ class SongDetector:
         
         # Start detection thread if enabled
         if self.enabled:
+            # CRITICAL FIX: Don't fail initialization if event loop creation fails
+            # It will be created on-demand when needed
             try:
-                # CRITICAL FIX: Create event loop proactively so it's ready when needed
-                # This is especially important in buffer mode where detection happens on-demand
+                logging.info("Creating event loop for song detection...")
                 if not self._ensure_event_loop():
-                    logging.error("⚠️ Failed to create event loop during initialization")
-                    # Don't disable entirely - will retry when detection is attempted
-                
+                    logging.warning("⚠️ Event loop creation failed during init - will retry on first detection")
+                else:
+                    logging.info("✓ Event loop created successfully")
+            except Exception as e:
+                logging.warning(f"Event loop creation error (will retry later): {e}")
+            
+            # Start threads - these should not fail initialization even if event loop fails
+            try:
                 self.start_detection_thread()
                 self._start_watchdog()
-                # CRITICAL FIX: Verify threads started successfully
+                
+                # Verify threads started (but don't fail init if they didn't)
                 if self.detection_thread is None or not self.detection_thread.is_alive():
-                    logging.error("⚠️ Failed to start detection thread - will retry via watchdog")
+                    logging.error("⚠️ Detection thread failed to start - watchdog will retry")
                 if self.watchdog_thread is None or not self.watchdog_thread.is_alive():
-                    logging.error("⚠️ Failed to start watchdog thread - attempting restart")
-                    self._start_watchdog()
+                    logging.error("⚠️ Watchdog failed to start - attempting one more time")
+                    try:
+                        self._start_watchdog()
+                    except Exception as retry_err:
+                        logging.error(f"Watchdog restart failed: {retry_err}")
             except Exception as e:
                 logging.error(f"⚠️ Error starting song detector threads: {e}")
                 import traceback
                 logging.debug(traceback.format_exc())
-                # Will be retried by watchdog if it starts
+                # Try to at least start watchdog so it can recover
                 try:
-                    self._start_watchdog()
-                except Exception:
-                    logging.error("⚠️ CRITICAL: Failed to start watchdog thread")
+                    if self.watchdog_thread is None or not self.watchdog_thread.is_alive():
+                        self._start_watchdog()
+                except Exception as watchdog_err:
+                    logging.error(f"CRITICAL: Could not start watchdog: {watchdog_err}")
 
     def start_detection_thread(self):
         """Start background thread for song detection"""
-        if self.detection_thread is None or not self.detection_thread.is_alive():
-            self.detection_active = True
-            self.last_heartbeat = time.time()  # Reset heartbeat
-            self.detection_thread = threading.Thread(target=self._detection_loop, name="SongDetectorLoop")
-            self.detection_thread.daemon = True
-            self.detection_thread.start()
-            logging.info("Song detection thread started")
+        # CRITICAL FIX: Ensure old thread is completely stopped before starting new one
+        if self.detection_thread is not None and self.detection_thread.is_alive():
+            logging.warning("Detection thread still alive during restart - waiting for it to stop")
+            self.detection_active = False
+            self.detection_thread.join(timeout=2.0)
+            if self.detection_thread.is_alive():
+                logging.error("Old detection thread won't stop - abandoning it")
+        
+        # Now start new thread
+        self.detection_active = True
+        self.last_heartbeat = time.time()  # Reset heartbeat
+        self.detection_thread = threading.Thread(target=self._detection_loop, name="SongDetectorLoop")
+        self.detection_thread.daemon = True
+        self.detection_thread.start()
+        
+        # CRITICAL FIX: Verify thread actually started
+        time.sleep(0.1)
+        if self.detection_thread.is_alive():
+            logging.info("✓ Song detection thread started")
+        else:
+            logging.error("✗ Song detection thread failed to start")
     
     def _start_watchdog(self):
         """Start watchdog thread to monitor and restart detection thread if it dies"""
-        if self.watchdog_thread is None or not self.watchdog_thread.is_alive():
-            self.watchdog_active = True
-            self.watchdog_thread = threading.Thread(target=self._watchdog_loop, name="SongDetectorWatchdog")
-            self.watchdog_thread.daemon = True
-            self.watchdog_thread.start()
-            # CRITICAL FIX: Wait a moment and verify thread started
-            time.sleep(0.1)
+        # CRITICAL FIX: Ensure old watchdog is stopped before starting new one
+        if self.watchdog_thread is not None and self.watchdog_thread.is_alive():
+            logging.warning("Watchdog thread still alive during restart - stopping it")
+            self.watchdog_active = False
+            self.watchdog_thread.join(timeout=2.0)
             if self.watchdog_thread.is_alive():
-                logging.info("✅ Song detector watchdog started")
-            else:
-                logging.error("⚠️ Watchdog thread failed to start")
-                self.watchdog_thread = None
+                logging.error("Old watchdog thread won't stop - abandoning it")
+        
+        # Now start new watchdog
+        self.watchdog_active = True
+        self.watchdog_thread = threading.Thread(target=self._watchdog_loop, name="SongDetectorWatchdog")
+        self.watchdog_thread.daemon = True
+        self.watchdog_thread.start()
+        
+        # CRITICAL FIX: Verify thread started
+        time.sleep(0.1)
+        if self.watchdog_thread.is_alive():
+            logging.info("✅ Song detector watchdog started")
+        else:
+            logging.error("⚠️ Watchdog thread failed to start")
+            self.watchdog_thread = None
     
     def _watchdog_loop(self):
         """Watchdog loop to monitor thread health and restart if needed"""
@@ -189,11 +223,8 @@ class SongDetector:
                 # CRITICAL: Much more aggressive heartbeat checking (30s instead of 2x interval + 30)
                 if heartbeat_age > 30:  # HARDCODED: Thread must respond within 30s
                     logging.error(f"🚨 CRITICAL: Song detection thread heartbeat stale ({heartbeat_age:.1f}s). FORCING RESTART!")
-                    # Force restart immediately
-                    self.detection_active = False
-                    if self.detection_thread and self.detection_thread.is_alive():
-                        # Don't wait long - kill and restart
-                        self.detection_thread.join(timeout=0.5)
+                    # CRITICAL FIX: Use start_detection_thread which properly handles old thread
+                    # Don't manually set detection_active or join here - let start_detection_thread do it
                     self.start_detection_thread()
                     self.thread_restart_count += 1
                     

@@ -510,26 +510,58 @@ class PulseHub:
     def _main_loop(self):
         """Main hub loop"""
         loop_interval = 30  # seconds
+        consecutive_errors = 0
+        max_consecutive_errors = 5
         
         while self.running and not self.stop_event.is_set():
             try:
                 # Collect sensor data
                 sensor_data = self._collect_sensor_data()
                 
-                # Store in database
-                self._store_sensor_data(sensor_data)
+                # Store in database (has its own error handling now)
+                try:
+                    self._store_sensor_data(sensor_data)
+                except Exception as db_err:
+                    # CRITICAL FIX: Catch any DB errors that escape the retry logic
+                    logger.error(f"Database storage failed catastrophically: {db_err}")
+                    consecutive_errors += 1
                 
                 # Run automation rules
-                self._run_automation_rules(sensor_data)
+                try:
+                    self._run_automation_rules(sensor_data)
+                except Exception as auto_err:
+                    logger.error(f"Automation rules failed: {auto_err}")
                 
                 # Update learning data
-                self._update_learning_data(sensor_data)
+                try:
+                    self._update_learning_data(sensor_data)
+                except Exception as learn_err:
+                    logger.error(f"Learning data update failed: {learn_err}")
+                
+                # Reset error count on successful iteration
+                consecutive_errors = 0
                 
                 # Wait for next iteration
                 self.stop_event.wait(loop_interval)
                 
             except Exception as e:
-                logger.error(f"Error in main loop: {e}")
+                consecutive_errors += 1
+                logger.error(f"Error in main loop (consecutive: {consecutive_errors}): {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                
+                # CRITICAL FIX: If too many consecutive errors, try to recover
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(f"🚨 Too many consecutive errors ({consecutive_errors}) - attempting recovery")
+                    try:
+                        # Try to reinitialize database connection
+                        self.db = PulseDB()
+                        logger.info("✓ Database connection reinitialized")
+                        consecutive_errors = 0
+                    except Exception as recovery_err:
+                        logger.error(f"Failed to recover: {recovery_err}")
+                        # Continue anyway, hope for the best
+                
                 self.stop_event.wait(loop_interval)
     
     def _collect_sensor_data(self) -> dict:
@@ -815,9 +847,16 @@ class PulseHub:
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
                 else:
-                    logger.error("Failed to store sensor data after all retries")
+                    # CRITICAL FIX: Don't crash the main loop if DB fails
+                    # Log error and continue - data will be lost but system stays running
+                    logger.error("❌ Failed to store sensor data after all retries - continuing anyway")
                     import traceback
                     logger.error(traceback.format_exc())
+                    # Try to log the failure to system health if possible
+                    try:
+                        self.db.log_health("database", "error", f"Failed to store sensor data: {str(e)}")
+                    except Exception:
+                        pass  # Even health logging failed, just continue
     
     def _run_automation_rules(self, data: dict):
         """Run automation rules based on sensor data"""
