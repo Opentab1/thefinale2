@@ -274,7 +274,27 @@ class PulseHub:
             logger.info("🎤 Starting audio monitor...")
             try:
                 self.audio_monitor.start_monitoring()
-                logger.info("  ✓ Audio monitor started")
+                # CRITICAL FIX: Verify monitoring actually started
+                time.sleep(1)  # Give it a moment to initialize
+                if self.audio_monitor.running:
+                    logger.info("  ✓ Audio monitor started")
+                    
+                    # Verify song detector if present
+                    if hasattr(self.audio_monitor, 'song_detector') and self.audio_monitor.song_detector:
+                        if self.audio_monitor.song_detector.enabled:
+                            # Check if threads are alive
+                            if hasattr(self.audio_monitor.song_detector, 'detection_thread'):
+                                if self.audio_monitor.song_detector.detection_thread and self.audio_monitor.song_detector.detection_thread.is_alive():
+                                    logger.info("  ✓ Song detector thread running")
+                                else:
+                                    logger.warning("  ⚠ Song detector thread not running (will be monitored)")
+                            if hasattr(self.audio_monitor.song_detector, 'watchdog_thread'):
+                                if self.audio_monitor.song_detector.watchdog_thread and self.audio_monitor.song_detector.watchdog_thread.is_alive():
+                                    logger.info("  ✓ Song detector watchdog running")
+                        else:
+                            logger.info("  ℹ Song detector initialized (using AudioMonitor's detection loop)")
+                else:
+                    logger.error("  ✗ Audio monitor failed to start (running=False)")
             except Exception as e:
                 logger.error(f"  ✗ Failed to start audio monitor: {e}", exc_info=True)
         
@@ -306,10 +326,17 @@ class PulseHub:
         
         # CRITICAL FIX: Start health monitoring for audio services
         if self.audio_monitor:
-            self._health_monitor_thread = Thread(target=self._audio_health_monitor, name="AudioHealthMonitor")
-            self._health_monitor_thread.daemon = True
-            self._health_monitor_thread.start()
-            logger.info("  ✓ Audio health monitor started")
+            try:
+                self._health_monitor_thread = Thread(target=self._audio_health_monitor, name="AudioHealthMonitor")
+                self._health_monitor_thread.daemon = True
+                self._health_monitor_thread.start()
+                time.sleep(0.2)  # Brief pause to verify thread started
+                if self._health_monitor_thread.is_alive():
+                    logger.info("  ✓ Audio health monitor started")
+                else:
+                    logger.error("  ✗ Audio health monitor failed to start")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to start audio health monitor: {e}", exc_info=True)
         
         logger.info("\n" + "="*80)
         logger.info("✓ PULSE HUB STARTED SUCCESSFULLY")

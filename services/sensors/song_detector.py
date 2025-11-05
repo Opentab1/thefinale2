@@ -93,8 +93,22 @@ class SongDetector:
         
         # Start detection thread if enabled
         if self.enabled:
-            self.start_detection_thread()
-            self._start_watchdog()
+            try:
+                self.start_detection_thread()
+                self._start_watchdog()
+                # CRITICAL FIX: Verify threads started successfully
+                if self.detection_thread is None or not self.detection_thread.is_alive():
+                    logging.error("⚠️ Failed to start detection thread - will retry via watchdog")
+                if self.watchdog_thread is None or not self.watchdog_thread.is_alive():
+                    logging.error("⚠️ Failed to start watchdog thread - attempting restart")
+                    self._start_watchdog()
+            except Exception as e:
+                logging.error(f"⚠️ Error starting song detector threads: {e}")
+                # Will be retried by watchdog if it starts
+                try:
+                    self._start_watchdog()
+                except Exception:
+                    logging.error("⚠️ CRITICAL: Failed to start watchdog thread")
 
     def start_detection_thread(self):
         """Start background thread for song detection"""
@@ -113,7 +127,13 @@ class SongDetector:
             self.watchdog_thread = threading.Thread(target=self._watchdog_loop, name="SongDetectorWatchdog")
             self.watchdog_thread.daemon = True
             self.watchdog_thread.start()
-            logging.info("Song detector watchdog started")
+            # CRITICAL FIX: Wait a moment and verify thread started
+            time.sleep(0.1)
+            if self.watchdog_thread.is_alive():
+                logging.info("✅ Song detector watchdog started")
+            else:
+                logging.error("⚠️ Watchdog thread failed to start")
+                self.watchdog_thread = None
     
     def _watchdog_loop(self):
         """Watchdog loop to monitor thread health and restart if needed"""
