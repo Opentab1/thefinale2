@@ -395,9 +395,10 @@ class AudioMonitor:
             try:
                 now = time.time()
 
-                # CRITICAL FIX: Guard against stale dB readings with shorter threshold
-                if self._last_db_ts and (now - self._last_db_ts) > self._watchdog_restart_threshold:
-                    if self._monitoring_thread and self._monitoring_thread.is_alive():
+                # CRITICAL FIX: Guard against stale dB readings with balanced threshold
+                # Only trigger if monitoring thread is alive (otherwise watchdog will handle it)
+                if self._monitoring_thread and self._monitoring_thread.is_alive():
+                    if self._last_db_ts and (now - self._last_db_ts) > self._watchdog_restart_threshold:
                         if not self._stream_restart_request.is_set() and (now - self._last_db_restart_ts) > self._db_interval:
                             logger.warning(
                                 "⚠️ dB readings stale for %.1fs - requesting audio stream restart",
@@ -406,11 +407,11 @@ class AudioMonitor:
                             self._stream_restart_request.set()
                             self._last_db_restart_ts = now
                             
-                            # CRITICAL FIX: Track complete system stall (25min issue) - FASTER DETECTION
+                            # CRITICAL FIX: Track complete system stall
                             if self._system_completely_stalled_at == 0.0:
                                 self._system_completely_stalled_at = now
-                            elif (now - self._system_completely_stalled_at) > 30.0:  # Reduced from 60s to 30s
-                                # System has been stalled for >30s despite restart attempts
+                            elif (now - self._system_completely_stalled_at) > 45.0:  # Give it 45s
+                                # System has been stalled for >45s despite restart attempts
                                 logger.error(
                                     "🚨 CRITICAL: Audio system completely stalled for %.1fs - FORCING COMPLETE RESTART!",
                                     now - self._system_completely_stalled_at
@@ -424,11 +425,16 @@ class AudioMonitor:
                                     self._system_completely_stalled_at = 0.0
                                 except Exception as e:
                                     logger.error(f"❌ Failed to restart audio system: {e}")
+                        else:
+                            # dB readings are fresh - reset stall tracker
+                            self._system_completely_stalled_at = 0.0
                 else:
-                    # dB readings are fresh - reset stall tracker
+                    # Monitoring thread not alive - watchdog will handle restart
+                    # Reset stall tracker
                     self._system_completely_stalled_at = 0.0
 
                 # SongDetector handles its own health monitoring via its watchdog thread
+                # We don't need to check it here to avoid redundant monitoring
 
                 self.stop_event.wait(self._health_check_interval)
             except Exception as exc:
@@ -784,22 +790,34 @@ class AudioMonitor:
     
     def cleanup(self):
         """Cleanup resources"""
+        logger.info("AudioMonitor cleanup started")
+        
+        # Stop monitoring first
         self.stop_monitoring()
         self._stream_restart_request.clear()
         
-        # Stop song detector if it exists - it handles its own cleanup
+        # CRITICAL FIX: Stop song detector with proper error handling
         if hasattr(self, 'song_detector') and self.song_detector is not None:
             try:
+                logger.debug("Stopping song detector...")
                 self.song_detector.stop()
-                logger.info("Song detector stopped during cleanup")
+                # Give it a moment to cleanup
+                time.sleep(0.5)
+                logger.info("✓ Song detector stopped during cleanup")
             except Exception as e:
                 logger.warning(f"Error stopping song detector during cleanup: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
         
+        # Cleanup PyAudio instance
         try:
             if self.pyaudio_instance:
                 self.pyaudio_instance.terminate()
-        except Exception:
-            pass
+                logger.debug("PyAudio instance terminated")
+        except Exception as e:
+            logger.debug(f"Error terminating PyAudio: {e}")
+        
+        logger.info("✓ AudioMonitor cleanup completed")
 
 
 if __name__ == "__main__":
