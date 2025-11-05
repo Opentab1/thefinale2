@@ -78,6 +78,9 @@ class AudioMonitor:
         self.running = False
         self.stop_event = Event()
         self._song_detection_lock = Lock()
+        self._song_detection_supported = SongDetector is not None
+        self._song_detection_enabled = False
+        self._next_song_detection_retry = 0.0
 
         self.current_db = 0.0
         self.peak_db = 0.0
@@ -151,8 +154,9 @@ class AudioMonitor:
         self._shazam_created_at = 0.0  # Track when instance was created
         self._shazam_refresh_interval = 3600.0  # Refresh every hour to prevent stale sessions
 
-        # Initialize song detector if available
-        if SongDetector is not None:
+        # Initialize song detector support if available
+        self.song_detector = None
+        if self._song_detection_supported:
             try:
                 # Pass enabled=False so it doesn't start its own recording thread
                 # We'll call detect_song_from_buffer() manually with our buffered audio
@@ -162,9 +166,11 @@ class AudioMonitor:
                 )
 
                 if not self._ensure_detection_loop():
-                    logger.warning("Song detection event loop failed to initialize; disabling detection")
-                    self.song_detector = None
+                    logger.warning("Song detection event loop failed to initialize; will retry shortly")
+                    self._song_detection_enabled = False
+                    self._next_song_detection_retry = time.time() + 30.0
                 else:
+                    self._song_detection_enabled = True
                     logger.info("✅ Song detector initialized (using shared audio buffer)")
                     # Check if ShazamIO is actually available
                     try:
@@ -179,8 +185,9 @@ class AudioMonitor:
                 import traceback
                 logger.debug(traceback.format_exc())
                 self.song_detector = None
+                self._song_detection_supported = False
+                self._song_detection_enabled = False
         else:
-            self.song_detector = None
             logger.warning("⚠️ Song detector disabled (SongDetector class not available)")
             logger.warning("   Check if song_detector.py is properly imported")
 
@@ -684,21 +691,42 @@ class AudioMonitor:
                         )
                         # Force restart the entire detection loop
                         if not self._restart_detection_loop():
-                            logger.error("Failed to restart stuck event loop - audio detection will fail")
+                            logger.error("Failed to restart stuck event loop - song detection will pause")
                             self._song_detection_stats["last_error"] = "event_loop_stuck_restart_failed"
+                            if self._song_detection_supported:
+                                self._song_detection_enabled = False
+                                self._next_song_detection_retry = max(self._next_song_detection_retry, now + 60.0)
                         else:
                             logger.info("✅ Event loop restarted successfully after being stuck")
                             self._song_detection_stats["last_error"] = "recovered_from_stuck_loop"
-                
-                # Validate the async song detection loop when detection not already running
-                if self.song_detector is not None and not self._song_detection_stats.get("active", False):
-                    if not self._is_detection_loop_healthy():
-                        logger.warning("Song detection loop unresponsive - attempting restart")
-                        if not self._restart_detection_loop():
-                            logger.error("Failed to restart song detection loop - disabling detection")
-                            self._song_detection_stats["last_error"] = "loop_restart_failed"
-                            self._song_detection_stats["active"] = False
-                            self.song_detector = None
+                            self._loop_last_heartbeat = time.time()
+
+                # Validate the async song detection loop status and retry if needed
+                if self._song_detection_supported:
+                    if not self._song_detection_enabled:
+                        if self._next_song_detection_retry == 0.0 or now >= self._next_song_detection_retry:
+                            logger.info("Attempting to re-enable song detection after previous failure")
+                            if self._restart_detection_loop():
+                                self._song_detection_enabled = True
+                                self._song_detection_stats["last_error"] = "restarted_after_backoff"
+                                self._loop_last_heartbeat = time.time()
+                                self._next_song_detection_retry = 0.0
+                            else:
+                                logger.error("Song detection event loop restart failed during backoff")
+                                self._song_detection_stats["last_error"] = "loop_restart_failed_retry"
+                                self._next_song_detection_retry = now + 60.0
+                    elif not self._song_detection_stats.get("active", False):
+                        if not self._is_detection_loop_healthy():
+                            logger.warning("Song detection loop unresponsive - attempting restart")
+                            if not self._restart_detection_loop():
+                                logger.error("Failed to restart song detection loop - entering backoff")
+                                self._song_detection_stats["last_error"] = "loop_restart_failed"
+                                self._song_detection_enabled = False
+                                self._next_song_detection_retry = now + 60.0
+                            else:
+                                logger.info("✅ Song detection loop restarted successfully")
+                                self._song_detection_stats["last_error"] = "recovered_from_unresponsive_loop"
+                                self._loop_last_heartbeat = time.time()
 
                 self.stop_event.wait(self._health_check_interval)
             except Exception as exc:
@@ -916,7 +944,7 @@ class AudioMonitor:
 
             # Trigger song detection on cadence using buffered audio
             now_song = time.time()
-            if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
+            if self._song_detection_enabled and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
                 if self._buffer_index >= self._audio_buffer_size:
                     try:
                         # CRITICAL FIX: Check if previous detection is stuck before starting new one
@@ -943,7 +971,7 @@ class AudioMonitor:
                         self._audio_buffer_size,
                     )
                     self._last_song_detect_ts = now_song
-            elif self.song_detector is None and int(now_song) % 60 == 0:
+            elif not self._song_detection_supported and int(now_song) % 60 == 0:
                 logger.debug("Song detector not available - song detection disabled")
 
             # Update activity timestamp for watchdog

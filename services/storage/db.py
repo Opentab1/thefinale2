@@ -202,14 +202,15 @@ class PulseDB:
                 cursor.execute('''
                     SELECT count FROM occupancy 
                     WHERE zone = ? 
-                    ORDER BY timestamp DESC LIMIT 1
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT 1
                 ''', (zone,))
             else:
                 cursor.execute('''
-                    SELECT SUM(count) as total FROM (
-                        SELECT DISTINCT ON (zone) count, zone 
-                        FROM occupancy 
-                        ORDER BY zone, timestamp DESC
+                    SELECT SUM(count) AS total
+                    FROM occupancy
+                    WHERE id IN (
+                        SELECT MAX(id) FROM occupancy GROUP BY zone
                     )
                 ''')
             result = cursor.fetchone()
