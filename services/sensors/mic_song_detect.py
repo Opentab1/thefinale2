@@ -139,7 +139,9 @@ class AudioMonitor:
         self._shazam_instance = None
         self._shazam_lock = Lock()
         self._shazam_created_at = 0.0  # Track when instance was created
-        self._shazam_refresh_interval = 3600.0  # Refresh every hour to prevent stale sessions
+        # CRITICAL FIX: Refresh every 20 minutes (1200s) to prevent 25-minute timeout failures
+        # aiohttp ClientSession has default timeouts that can cause failures around 25 minutes
+        self._shazam_refresh_interval = 1200.0  # 20 minutes - proactive refresh before timeout
 
         # Initialize song detector if available
         if SongDetector is not None:
@@ -644,6 +646,18 @@ class AudioMonitor:
                             self._song_detection_stats["active"] = False
                             self.song_detector = None
 
+                # CRITICAL FIX: Proactively refresh Shazam instance before 25-minute timeout
+                # This prevents connection failures that occur around 25 minutes
+                if self.song_detector is not None:
+                    current_time = time.time()
+                    if self._shazam_instance is not None:
+                        age = current_time - self._shazam_created_at
+                        if age >= self._shazam_refresh_interval:
+                            logger.info(f"Proactively refreshing Shazam instance (age: {age:.1f}s, threshold: {self._shazam_refresh_interval:.1f}s)")
+                            self._reset_shazam_instance(reason="proactive_refresh")
+                        elif age >= (self._shazam_refresh_interval * 0.8):  # Warn at 80% of refresh interval
+                            logger.debug(f"Shazam instance approaching refresh threshold (age: {age:.1f}s / {self._shazam_refresh_interval:.1f}s)")
+
                 self.stop_event.wait(self._health_check_interval)
             except Exception as exc:
                 logger.error(f"Error in audio monitor healthcheck: {exc}", exc_info=True)
@@ -1111,26 +1125,60 @@ class AudioMonitor:
                         try:
                             if hasattr(self._shazam_instance, 'client') and hasattr(self._shazam_instance.client, 'close'):
                                 # CRITICAL FIX: Timeout the close operation to prevent hangs
-                                await asyncio.wait_for(
+                                # Also ensure we don't wait forever on stale connections
+                                close_task = asyncio.wait_for(
                                     self._shazam_instance.client.close(),
                                     timeout=2.0
                                 )
+                                await close_task
                         except asyncio.TimeoutError:
                             logger.warning("Timeout closing old Shazam client - forcing new instance")
+                            # Force cleanup of the old instance
+                            self._shazam_instance = None
                         except Exception as e:
                             logger.debug(f"Error closing old Shazam instance: {e}")
+                            # Force cleanup on any error
+                            self._shazam_instance = None
                     
-                    # Create new instance
-                    self._shazam_instance = Shazam()
+                    # Create new instance with explicit timeout configuration
+                    # CRITICAL FIX: Create Shazam instance with timeout settings to prevent 25-min hangs
+                    try:
+                        self._shazam_instance = Shazam()
+                        # Try to configure aiohttp timeout if ShazamIO uses aiohttp internally
+                        # This prevents connection timeouts that occur around 25 minutes
+                        try:
+                            import aiohttp
+                            # Check if Shazam instance has a client with aiohttp session
+                            if hasattr(self._shazam_instance, 'client'):
+                                client = self._shazam_instance.client
+                                # Set timeout on the aiohttp ClientSession if available
+                                if hasattr(client, 'timeout'):
+                                    # Configure total timeout to be less than 25 minutes (20 min = 1200s)
+                                    client.timeout = aiohttp.ClientTimeout(total=1200.0, connect=10.0, sock_read=30.0)
+                                    logger.debug("Configured Shazam client timeout to 20 minutes")
+                            # Also check for session attribute (some ShazamIO versions)
+                            elif hasattr(self._shazam_instance, 'session'):
+                                session = self._shazam_instance.session
+                                if hasattr(session, 'timeout'):
+                                    session.timeout = aiohttp.ClientTimeout(total=1200.0, connect=10.0, sock_read=30.0)
+                                    logger.debug("Configured Shazam session timeout to 20 minutes")
+                        except (ImportError, AttributeError) as timeout_config_error:
+                            # If we can't configure timeout, log but continue - proactive refresh will handle it
+                            logger.debug(f"Could not configure Shazam timeout (non-critical): {timeout_config_error}")
+                    except Exception as create_error:
+                        logger.error(f"Failed to create Shazam instance: {create_error}")
+                        raise
+                    
                     self._shazam_created_at = current_time
                     logger.info("Created new Shazam instance for song detection")
                 
                 shazam = self._shazam_instance
             
-            # CRITICAL FIX: Reduce timeout from 15s to 10s to catch hangs faster
+            # CRITICAL FIX: Use 15s timeout for recognition (balance between responsiveness and reliability)
+            # The proactive refresh (every 20 min) prevents connection timeouts
             result = await asyncio.wait_for(
                 shazam.recognize(audio_file),
-                timeout=10.0
+                timeout=15.0
             )
             return result
         except ImportError as e:
