@@ -50,6 +50,12 @@ class PulseHub:
         self.running = False
         self.stop_event = Event()
         
+        # CRITICAL FIX: Audio monitoring watchdog tracking
+        self._audio_last_db_reading = None
+        self._audio_last_db_timestamp = None
+        self._audio_stall_count = 0
+        self._audio_max_stall_before_restart = 3  # Restart after 3 consecutive stalls
+        
         # Rate limiting for automation
         self.last_hvac_change = datetime.now() - timedelta(minutes=10)
         self.last_lighting_change = datetime.now() - timedelta(minutes=10)
@@ -458,10 +464,71 @@ class PulseHub:
             data["light_level"] = self._sanitize_environment_value(self.light_sensor.get_light_level())
         
         if self.audio_monitor:
-            data["noise_db"] = self._sanitize_environment_value(self.audio_monitor.get_current_db())
+            current_db = self._sanitize_environment_value(self.audio_monitor.get_current_db())
+            data["noise_db"] = current_db
             song_data = self.audio_monitor.get_current_song()
             data["current_song"] = song_data
             data["song_detection"] = self.audio_monitor.get_song_detection_stats()
+            
+            # CRITICAL FIX: Watchdog to detect and restart stalled audio monitoring
+            now = time.time()
+            
+            # Check if dB readings are updating (they should update every 2 seconds)
+            if current_db is not None and current_db != self._audio_last_db_reading:
+                # dB reading changed - audio monitoring is working
+                self._audio_last_db_reading = current_db
+                self._audio_last_db_timestamp = now
+                self._audio_stall_count = 0
+            elif current_db is not None:
+                # dB reading is the same - check if it's stale
+                if self._audio_last_db_timestamp is None:
+                    self._audio_last_db_timestamp = now
+                elif (now - self._audio_last_db_timestamp) > 60.0:  # No change for 60 seconds = stalled
+                    self._audio_stall_count += 1
+                    logger.warning(
+                        f"⚠️ Audio monitoring appears stalled (dB unchanged for {now - self._audio_last_db_timestamp:.1f}s, "
+                        f"stall_count={self._audio_stall_count})"
+                    )
+                    
+                    # Force restart if repeatedly stalled
+                    if self._audio_stall_count >= self._audio_max_stall_before_restart:
+                        logger.error(
+                            f"🚨 CRITICAL: Audio monitoring stalled {self._audio_stall_count} times - "
+                            "FORCING COMPLETE RESTART!"
+                        )
+                        try:
+                            self.audio_monitor.stop_monitoring()
+                            time.sleep(2)
+                            self.audio_monitor.start_monitoring()
+                            logger.info("✅ Audio monitoring restarted successfully")
+                            self._audio_stall_count = 0
+                            self._audio_last_db_timestamp = time.time()
+                        except Exception as restart_error:
+                            logger.error(f"❌ Failed to restart audio monitoring: {restart_error}", exc_info=True)
+            elif self._audio_last_db_timestamp is None:
+                # First reading - initialize
+                self._audio_last_db_reading = current_db
+                self._audio_last_db_timestamp = now
+            else:
+                # No dB reading at all - check if it's been too long
+                age = now - self._audio_last_db_timestamp if self._audio_last_db_timestamp else 0
+                if age > 120.0:  # No dB reading for 2 minutes = critical failure
+                    self._audio_stall_count += 1
+                    logger.error(
+                        f"🚨 CRITICAL: No dB readings for {age:.1f}s (stall_count={self._audio_stall_count})"
+                    )
+                    
+                    if self._audio_stall_count >= self._audio_max_stall_before_restart:
+                        logger.error("🚨 FORCING COMPLETE AUDIO MONITOR RESTART!")
+                        try:
+                            self.audio_monitor.stop_monitoring()
+                            time.sleep(2)
+                            self.audio_monitor.start_monitoring()
+                            logger.info("✅ Audio monitoring restarted after complete failure")
+                            self._audio_stall_count = 0
+                            self._audio_last_db_timestamp = time.time()
+                        except Exception as restart_error:
+                            logger.error(f"❌ Failed to restart audio monitoring: {restart_error}", exc_info=True)
             
             # Log song detection status for debugging
             if song_data and song_data.get("title") not in (None, "Unknown"):
