@@ -99,6 +99,12 @@ class SongDetector:
         # Start detection thread if enabled
         if self.enabled:
             try:
+                # CRITICAL FIX: Create event loop proactively so it's ready when needed
+                # This is especially important in buffer mode where detection happens on-demand
+                if not self._ensure_event_loop():
+                    logging.error("⚠️ Failed to create event loop during initialization")
+                    # Don't disable entirely - will retry when detection is attempted
+                
                 self.start_detection_thread()
                 self._start_watchdog()
                 # CRITICAL FIX: Verify threads started successfully
@@ -109,6 +115,8 @@ class SongDetector:
                     self._start_watchdog()
             except Exception as e:
                 logging.error(f"⚠️ Error starting song detector threads: {e}")
+                import traceback
+                logging.debug(traceback.format_exc())
                 # Will be retried by watchdog if it starts
                 try:
                     self._start_watchdog()
@@ -261,6 +269,7 @@ class SongDetector:
             bool: True if detection was started successfully
         """
         if not self.enabled:
+            logging.debug("Song detection disabled - skipping")
             return False
         
         try:
@@ -269,6 +278,17 @@ class SongDetector:
             # Ensure buffer is numpy array
             if not isinstance(audio_buffer, np.ndarray):
                 audio_buffer = np.array(audio_buffer, dtype=np.int16)
+            
+            # CRITICAL FIX: Check if buffer has actual audio data (not all zeros)
+            buffer_sum = np.sum(np.abs(audio_buffer))
+            if buffer_sum == 0:
+                logging.debug("Audio buffer is empty (all zeros) - skipping detection")
+                return False
+            
+            # CRITICAL FIX: Ensure event loop exists before attempting detection
+            if not self._ensure_event_loop():
+                logging.error("⚠️ Event loop unavailable - cannot process audio")
+                return False
             
             # Create temporary file for the recording
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
@@ -281,7 +301,7 @@ class SongDetector:
                 wf.setframerate(sample_rate)
                 wf.writeframes(audio_buffer.tobytes())
             
-            logging.debug(f"Audio buffer saved to {temp_filename} for song detection")
+            logging.debug(f"Audio buffer saved to {temp_filename} for song detection (buffer sum: {buffer_sum})")
             
             # Process in a separate thread
             processing_thread = threading.Thread(

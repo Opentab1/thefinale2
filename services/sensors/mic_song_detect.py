@@ -646,14 +646,24 @@ class AudioMonitor:
             now_song = time.time()
             if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
                 if self._buffer_index >= self._audio_buffer_size:
-                    try:
-                        # Use SongDetector's buffer-based detection method
-                        if self.song_detector.detect_song_from_buffer(self._audio_buffer, self.sample_rate):
-                            logger.debug("🎵 Song detection started from audio buffer")
+                    # CRITICAL FIX: Validate buffer has actual audio data before detection
+                    buffer_sum = np.sum(np.abs(self._audio_buffer))
+                    if buffer_sum == 0:
+                        logger.debug("Skipping song detection - audio buffer is empty (all zeros)")
                         self._last_song_detect_ts = now_song
-                    except Exception as e:
-                        logger.error(f"Failed to start song detection: {e}")
-                        self._last_song_detect_ts = now_song
+                    else:
+                        try:
+                            # Use SongDetector's buffer-based detection method
+                            if self.song_detector.detect_song_from_buffer(self._audio_buffer, self.sample_rate):
+                                logger.debug(f"🎵 Song detection started from audio buffer (buffer sum: {buffer_sum})")
+                            else:
+                                logger.debug("Song detection returned False - check logs for errors")
+                            self._last_song_detect_ts = now_song
+                        except Exception as e:
+                            logger.error(f"Failed to start song detection: {e}")
+                            import traceback
+                            logger.debug(traceback.format_exc())
+                            self._last_song_detect_ts = now_song
                 else:
                     logger.debug(
                         "Audio buffer not ready for song detection (index: %s/%s)",
