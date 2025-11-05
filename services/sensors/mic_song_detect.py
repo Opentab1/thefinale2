@@ -100,8 +100,8 @@ class AudioMonitor:
         self._last_song_detect_ts = 0.0
 
         self._health_thread = None
-        # CRITICAL FIX: Check health MORE frequently (every 3 seconds for faster detection)
-        self._health_check_interval = 3.0  # Fixed: Always 3 seconds (ULTRA AGGRESSIVE)
+        # CRITICAL FIX: Balanced health check interval (every 5 seconds)
+        self._health_check_interval = 5.0  # Increased from 3s to reduce false positives
         self._last_db_restart_ts = 0.0
 
         # Event loop and Shazam instance management now handled by SongDetector
@@ -110,8 +110,8 @@ class AudioMonitor:
         self._monitoring_backend = None
         self._stream_restart_count = 0
         self._max_consecutive_read_errors = 3
-        # CRITICAL FIX: Reduce watchdog threshold to catch failures IMMEDIATELY (was 60s, then 20s, now 15s)
-        self._watchdog_restart_threshold = 15.0  # Fixed: Always 15 seconds (ULTRA AGGRESSIVE)
+        # CRITICAL FIX: Balanced watchdog threshold for long-running stability
+        self._watchdog_restart_threshold = 30.0  # Increased from 15s to 30s to reduce false positives
         self._stream_restart_request = Event()
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
@@ -381,7 +381,7 @@ class AudioMonitor:
                 
                 # SongDetector now handles its own thread monitoring via its watchdog
                 
-                self.stop_event.wait(3)  # CRITICAL FIX: Check every 3 seconds (ULTRA AGGRESSIVE, was 5)
+                self.stop_event.wait(5)  # Check every 5 seconds (balanced for long-running stability)
             except Exception as e:
                 logger.error(f"🚨 CRITICAL ERROR in watchdog: {e}")
                 import traceback

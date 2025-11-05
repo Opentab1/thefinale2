@@ -92,6 +92,7 @@ class SongDetector:
         self.last_heartbeat = time.time()
         self.thread_restart_count = 0
         self.max_restarts_per_hour = 20  # Allow more restarts (was 10)
+        self.restart_count_reset_time = time.time()  # CRITICAL FIX: Track when to reset counter
         
         # CRITICAL FIX: Watchdog thread ID to prevent race conditions
         self._watchdog_thread_id = 0
@@ -239,16 +240,24 @@ class SongDetector:
             try:
                 time.sleep(self.watchdog_interval)
                 
+                # CRITICAL FIX: Reset restart counter every hour for long-running stability
+                current_time = time.time()
+                if (current_time - self.restart_count_reset_time) > 3600:
+                    if self.thread_restart_count > 0:
+                        logging.info(f"🔄 Resetting thread restart counter ({self.thread_restart_count} -> 0) after 1 hour")
+                    self.thread_restart_count = 0
+                    self.restart_count_reset_time = current_time
+                
                 # Check if detection thread is alive
                 if self.detection_thread is None or not self.detection_thread.is_alive():
                     logging.error("⚠️ Song detection thread died! Restarting...")
                     self.thread_restart_count += 1
                     
-                    # Rate limit restarts
+                    # Rate limit restarts - but use a sliding window
                     if self.thread_restart_count > self.max_restarts_per_hour:
-                        logging.error(f"⚠️ Too many thread restarts ({self.thread_restart_count}). Disabling watchdog temporarily.")
-                        time.sleep(3600)  # Wait an hour before allowing more restarts
-                        self.thread_restart_count = 0
+                        logging.error(f"⚠️ Too many thread restarts ({self.thread_restart_count}). Waiting 5 minutes before retry.")
+                        time.sleep(300)  # Wait 5 minutes (was 1 hour) for more responsive recovery
+                        self.thread_restart_count = max(0, self.thread_restart_count - 5)  # Decay counter
                         continue
                     
                     # Restart the thread
@@ -264,8 +273,9 @@ class SongDetector:
                 
                 # Check heartbeat - thread should update this every loop iteration
                 heartbeat_age = time.time() - self.last_heartbeat
-                # CRITICAL: Much more aggressive heartbeat checking (30s instead of 2x interval + 30)
-                if heartbeat_age > 30:  # HARDCODED: Thread must respond within 30s
+                # CRITICAL FIX: Increased heartbeat timeout to 60s to reduce false positives
+                # API calls can legitimately take 10-15s, plus processing time
+                if heartbeat_age > 60:  # Thread must respond within 60s (was 30s)
                     logging.error(f"🚨 CRITICAL: Song detection thread heartbeat stale ({heartbeat_age:.1f}s). FORCING RESTART!")
                     # CRITICAL FIX: Use start_detection_thread which properly handles old thread
                     # Don't manually set detection_active or join here - let start_detection_thread do it
@@ -625,8 +635,9 @@ class SongDetector:
     
     def _handle_api_failure(self, error_msg):
         """Handle API failures with circuit breaker pattern"""
+        current_time = time.time()
         self._api_failure_count += 1
-        self._api_last_failure_time = time.time()
+        self._api_last_failure_time = current_time
         
         if self._api_failure_count >= self._api_max_failures_before_open:
             self._api_circuit_open = True
@@ -638,6 +649,14 @@ class SongDetector:
             logging.warning(
                 f"⚠️ API failure {self._api_failure_count}/{self._api_max_failures_before_open}: {error_msg}"
             )
+        
+        # CRITICAL FIX: Auto-decay failure count over time to prevent permanent circuit open
+        # If last failure was >1 hour ago, reduce failure count
+        if self._api_failure_count > 0 and (current_time - self._api_last_failure_time) > 3600:
+            old_count = self._api_failure_count
+            self._api_failure_count = max(0, self._api_failure_count - 1)
+            if old_count != self._api_failure_count:
+                logging.info(f"✅ API failure count decayed: {old_count} -> {self._api_failure_count}")
     
     def get_latest_song(self):
         """Get the latest detected song information"""
