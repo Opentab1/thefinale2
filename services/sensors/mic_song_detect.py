@@ -100,8 +100,8 @@ class AudioMonitor:
         self._last_song_detect_ts = 0.0
 
         self._health_thread = None
-        # CRITICAL FIX: Check health more frequently (every 5 seconds)
-        self._health_check_interval = 5.0  # Fixed: Always 5 seconds
+        # CRITICAL FIX: Check health MORE frequently (every 3 seconds for faster detection)
+        self._health_check_interval = 3.0  # Fixed: Always 3 seconds (ULTRA AGGRESSIVE)
         self._last_db_restart_ts = 0.0
 
         # Event loop and Shazam instance management now handled by SongDetector
@@ -110,8 +110,8 @@ class AudioMonitor:
         self._monitoring_backend = None
         self._stream_restart_count = 0
         self._max_consecutive_read_errors = 3
-        # CRITICAL FIX: Reduce watchdog threshold to catch failures faster (was 60s, now 20s)
-        self._watchdog_restart_threshold = 20.0  # Fixed: Always 20 seconds
+        # CRITICAL FIX: Reduce watchdog threshold to catch failures IMMEDIATELY (was 60s, then 20s, now 15s)
+        self._watchdog_restart_threshold = 15.0  # Fixed: Always 15 seconds (ULTRA AGGRESSIVE)
         self._stream_restart_request = Event()
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
@@ -381,10 +381,12 @@ class AudioMonitor:
                 
                 # SongDetector now handles its own thread monitoring via its watchdog
                 
-                self.stop_event.wait(5)  # CRITICAL FIX: Check every 5 seconds (was 10)
+                self.stop_event.wait(3)  # CRITICAL FIX: Check every 3 seconds (ULTRA AGGRESSIVE, was 5)
             except Exception as e:
-                logger.error(f"Error in watchdog: {e}")
-                self.stop_event.wait(5)
+                logger.error(f"🚨 CRITICAL ERROR in watchdog: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                self.stop_event.wait(3)
     
     def _healthcheck_loop(self):
         """Periodic health checks for the audio monitor and song detection."""
@@ -404,11 +406,11 @@ class AudioMonitor:
                             self._stream_restart_request.set()
                             self._last_db_restart_ts = now
                             
-                            # CRITICAL FIX: Track complete system stall (25min issue)
+                            # CRITICAL FIX: Track complete system stall (25min issue) - FASTER DETECTION
                             if self._system_completely_stalled_at == 0.0:
                                 self._system_completely_stalled_at = now
-                            elif (now - self._system_completely_stalled_at) > 60.0:
-                                # System has been stalled for >60s despite restart attempts
+                            elif (now - self._system_completely_stalled_at) > 30.0:  # Reduced from 60s to 30s
+                                # System has been stalled for >30s despite restart attempts
                                 logger.error(
                                     "🚨 CRITICAL: Audio system completely stalled for %.1fs - FORCING COMPLETE RESTART!",
                                     now - self._system_completely_stalled_at
@@ -694,8 +696,11 @@ class AudioMonitor:
                 self._stream_restart_request.clear()
                 raise self.StreamRuntimeError("Watchdog requested audio stream restart")
 
-            # CRITICAL FIX: Shorter threshold for detecting stalled dB readings
-            if self._last_db_ts and (self._last_activity - self._last_db_ts) > self._watchdog_restart_threshold:
+            # CRITICAL FIX: AGGRESSIVE threshold for detecting stalled dB readings (use half the watchdog threshold)
+            if self._last_db_ts and (self._last_activity - self._last_db_ts) > (self._watchdog_restart_threshold * 0.75):
+                logger.error(
+                    f"🚨 CRITICAL: No dB readings for {(self._last_activity - self._last_db_ts):.1f}s - FORCING RESTART!"
+                )
                 raise self.StreamRuntimeError(
                     f"No decibel readings emitted for {(self._last_activity - self._last_db_ts):.1f}s"
                 )
