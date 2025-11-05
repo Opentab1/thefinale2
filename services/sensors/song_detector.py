@@ -42,22 +42,27 @@ except ImportError as e:
 
 class SongDetector:
     """Class for handling background song detection using ShazamIO"""
-    def __init__(self, enabled=True, detection_interval=60):
+    def __init__(self, enabled=True, detection_interval=60, use_buffer_mode=False):
         """
         Initialize the song detector
         
         Args:
             enabled: Whether song detection is enabled
-            detection_interval: Seconds between detection attempts
+            detection_interval: Seconds between detection attempts (only used in auto-record mode)
+            use_buffer_mode: If True, detection loop won't auto-record but will wait for external buffer calls
         """
-        self.enabled = enabled and SOUNDDEVICE_AVAILABLE and SHAZAMIO_AVAILABLE
+        self.enabled = enabled and SHAZAMIO_AVAILABLE
+        self.use_buffer_mode = use_buffer_mode
         
         if self.enabled:
-            logging.info("Song detection enabled")
+            if self.use_buffer_mode:
+                logging.info("Song detection enabled (buffer mode - external buffer calls)")
+            else:
+                logging.info("Song detection enabled (auto-record mode)")
         else:
             if not SHAZAMIO_AVAILABLE:
                 logging.warning("ShazamIO not available. Song detection disabled.")
-            if not SOUNDDEVICE_AVAILABLE:
+            if not self.use_buffer_mode and not SOUNDDEVICE_AVAILABLE:
                 logging.warning("sounddevice not available. Song detection disabled.")
         
         # Audio parameters
@@ -180,25 +185,33 @@ class SongDetector:
         
         while self.detection_active:
             try:
-                # Update heartbeat
+                # Update heartbeat (required for watchdog)
                 self.last_heartbeat = time.time()
                 
-                # Check if it's time for a new detection
-                current_time = time.time()
-                if current_time - self.last_detection_time >= self.detection_interval:
-                    logging.info("Starting song recognition...")
-                    self.detect_song()
-                    self.last_detection_time = current_time
-                
-                # Sleep to avoid consuming CPU
-                time.sleep(5)
+                if self.use_buffer_mode:
+                    # In buffer mode, we just maintain heartbeat for watchdog
+                    # External code will call detect_song_from_buffer() when needed
+                    time.sleep(5)
+                else:
+                    # Auto-record mode: Check if it's time for a new detection
+                    current_time = time.time()
+                    if current_time - self.last_detection_time >= self.detection_interval:
+                        logging.info("Starting song recognition...")
+                        self.detect_song()
+                        self.last_detection_time = current_time
+                    
+                    # Sleep to avoid consuming CPU
+                    time.sleep(5)
             except Exception as e:
                 logging.error(f"Error in detection loop: {e}")
                 time.sleep(5)  # Continue even after errors
     
     def detect_song(self):
-        """Record audio and detect song"""
+        """Record audio and detect song (only works in auto-record mode)"""
         if not self.enabled:
+            return
+        if self.use_buffer_mode:
+            logging.warning("detect_song() called but detector is in buffer mode. Use detect_song_from_buffer() instead.")
             return
             
         try:
@@ -235,6 +248,56 @@ class SongDetector:
             
         except Exception as e:
             logging.error(f"Error recording audio: {e}")
+    
+    def detect_song_from_buffer(self, audio_buffer, sample_rate=44100):
+        """
+        Detect song from pre-recorded audio buffer
+        
+        Args:
+            audio_buffer: numpy array of audio data (int16)
+            sample_rate: Sample rate of the audio (default: 44100)
+        
+        Returns:
+            bool: True if detection was started successfully
+        """
+        if not self.enabled:
+            return False
+        
+        try:
+            import numpy as np
+            
+            # Ensure buffer is numpy array
+            if not isinstance(audio_buffer, np.ndarray):
+                audio_buffer = np.array(audio_buffer, dtype=np.int16)
+            
+            # Create temporary file for the recording
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_filename = temp_file.name
+            
+            # Save to WAV file
+            with wave.open(temp_filename, 'wb') as wf:
+                wf.setnchannels(self.channels)
+                wf.setsampwidth(2)  # 16-bit audio
+                wf.setframerate(sample_rate)
+                wf.writeframes(audio_buffer.tobytes())
+            
+            logging.debug(f"Audio buffer saved to {temp_filename} for song detection")
+            
+            # Process in a separate thread
+            processing_thread = threading.Thread(
+                target=self._process_audio_file,
+                args=(temp_filename,),
+                daemon=True
+            )
+            processing_thread.start()
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error detecting song from buffer: {e}")
+            import traceback
+            logging.debug(traceback.format_exc())
+            return False
     
     def _ensure_event_loop(self):
         """Ensure we have a working event loop for async operations"""

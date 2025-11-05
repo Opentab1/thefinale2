@@ -377,19 +377,28 @@ class PulseHub:
                 
                 # Check song detector health
                 song_stats = self.audio_monitor.get_song_detection_stats()
-                detection_active = song_stats.get("active", False)
-                last_error = song_stats.get("last_error")
                 
-                # Check if song detector thread is alive (if SongDetector is being used directly)
+                # Check if song detector is enabled and threads are alive
                 if hasattr(self.audio_monitor, 'song_detector') and self.audio_monitor.song_detector:
-                    if hasattr(self.audio_monitor.song_detector, 'detection_thread'):
-                        thread_alive = (
-                            self.audio_monitor.song_detector.detection_thread is not None and
-                            self.audio_monitor.song_detector.detection_thread.is_alive()
-                        )
-                        if not thread_alive:
-                            logger.warning("⚠️ Song detector thread is not alive")
-                            consecutive_failures += 1
+                    if self.audio_monitor.song_detector.enabled:
+                        # Check if detection thread is alive
+                        if hasattr(self.audio_monitor.song_detector, 'detection_thread'):
+                            thread_alive = (
+                                self.audio_monitor.song_detector.detection_thread is not None and
+                                self.audio_monitor.song_detector.detection_thread.is_alive()
+                            )
+                            if not thread_alive:
+                                logger.warning("⚠️ Song detector thread is not alive")
+                                consecutive_failures += 1
+                        # Check if watchdog thread is alive
+                        if hasattr(self.audio_monitor.song_detector, 'watchdog_thread'):
+                            watchdog_alive = (
+                                self.audio_monitor.song_detector.watchdog_thread is not None and
+                                self.audio_monitor.song_detector.watchdog_thread.is_alive()
+                            )
+                            if not watchdog_alive:
+                                logger.warning("⚠️ Song detector watchdog thread is not alive")
+                                consecutive_failures += 1
                 
                 # If consecutive failures detected, restart audio monitor
                 if consecutive_failures >= 3:
