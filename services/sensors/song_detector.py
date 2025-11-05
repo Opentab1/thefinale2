@@ -161,13 +161,16 @@ class SongDetector:
                 if self.detection_thread is None or not self.detection_thread.is_alive():
                     logging.error("🚨 CRITICAL: Song detection thread died! Restarting IMMEDIATELY...")
                     self.thread_restart_count += 1
-                    self._last_restart_time = time.time()
                     
                     # CRITICAL: Only rate limit if we're restarting too frequently (more than once per second)
                     now = time.time()
-                    if self._last_restart_time > 0 and (now - self._last_restart_time) < 1.0:
+                    time_since_last_restart = now - self._last_restart_time if self._last_restart_time > 0 else float('inf')
+                    if time_since_last_restart < 1.0:
                         # Restarting too fast - wait a bit
                         time.sleep(0.5)
+                    
+                    # Update restart time AFTER the check
+                    self._last_restart_time = time.time()
                     
                     # ALWAYS restart - no matter what
                     try:
