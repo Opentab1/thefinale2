@@ -38,6 +38,8 @@ pydub==0.25.1
 sounddevice==0.4.6
 shazamio>=0.4.0
 aiohttp<4.0.0  # shazamio dependency pin for stability on aarch64
+# Python 3.13+ compatibility: audioop was removed from stdlib
+audioop-lts>=0.2.1; python_version >= '3.13'
 
 # Smart Home Integrations
 google-auth==2.25.2
