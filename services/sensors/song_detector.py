@@ -83,10 +83,10 @@ class SongDetector:
         # CRITICAL FIX: Watchdog for thread health monitoring
         self.watchdog_thread = None
         self.watchdog_active = False
-        self.watchdog_interval = 10.0  # Check every 10 seconds
+        self.watchdog_interval = 5.0  # Check every 5 seconds (ULTRA AGGRESSIVE)
         self.last_heartbeat = time.time()
         self.thread_restart_count = 0
-        self.max_restarts_per_hour = 10
+        self.max_restarts_per_hour = 20  # Allow more restarts (was 10)
         
         # CRITICAL FIX: Reusable event loop to prevent resource leaks
         self._event_loop = None
@@ -95,6 +95,13 @@ class SongDetector:
         self._shazam_instance = None
         self._shazam_created_at = 0.0
         self._shazam_refresh_interval = 3600.0  # Refresh every hour
+        
+        # CRITICAL: Circuit breaker for external API failures
+        self._api_failure_count = 0
+        self._api_last_failure_time = 0
+        self._api_circuit_open = False
+        self._api_circuit_reset_time = 300  # Reset circuit after 5 minutes
+        self._api_max_failures_before_open = 3  # Open circuit after 3 consecutive failures
         
         # Start detection thread if enabled
         if self.enabled:
@@ -171,13 +178,16 @@ class SongDetector:
                 
                 # Check heartbeat - thread should update this every loop iteration
                 heartbeat_age = time.time() - self.last_heartbeat
-                if heartbeat_age > (self.detection_interval * 2 + 30):  # Allow 2x interval + buffer
-                    logging.warning(f"⚠️ Song detection thread heartbeat stale ({heartbeat_age:.1f}s). Thread may be stuck.")
-                    # Force restart
+                # CRITICAL: Much more aggressive heartbeat checking (30s instead of 2x interval + 30)
+                if heartbeat_age > 30:  # HARDCODED: Thread must respond within 30s
+                    logging.error(f"🚨 CRITICAL: Song detection thread heartbeat stale ({heartbeat_age:.1f}s). FORCING RESTART!")
+                    # Force restart immediately
                     self.detection_active = False
                     if self.detection_thread and self.detection_thread.is_alive():
-                        self.detection_thread.join(timeout=2.0)
+                        # Don't wait long - kill and restart
+                        self.detection_thread.join(timeout=0.5)
                     self.start_detection_thread()
+                    self.thread_restart_count += 1
                     
             except Exception as e:
                 logging.error(f"Error in song detector watchdog: {e}")
@@ -196,6 +206,11 @@ class SongDetector:
                 # Update heartbeat (required for watchdog)
                 self.last_heartbeat = time.time()
                 
+                # CRITICAL: Verify event loop is still healthy
+                if not self._ensure_event_loop():
+                    logging.error("🚨 Event loop died! Recreating...")
+                    # Will be recreated on next ensure_event_loop call
+                
                 if self.use_buffer_mode:
                     # In buffer mode, we just maintain heartbeat for watchdog
                     # External code will call detect_song_from_buffer() when needed
@@ -211,7 +226,11 @@ class SongDetector:
                     # Sleep to avoid consuming CPU
                     time.sleep(5)
             except Exception as e:
-                logging.error(f"Error in detection loop: {e}")
+                logging.error(f"🚨 CRITICAL ERROR in detection loop: {e}")
+                import traceback
+                logging.error(traceback.format_exc())
+                # Update heartbeat even on error so watchdog knows we're alive
+                self.last_heartbeat = time.time()
                 time.sleep(5)  # Continue even after errors
     
     def detect_song(self):
@@ -407,6 +426,18 @@ class SongDetector:
     
     async def _recognize_song(self, audio_file):
         """Recognize song using ShazamIO (async)"""
+        # CRITICAL: Check circuit breaker before attempting API call
+        if self._api_circuit_open:
+            time_since_open = time.time() - self._api_last_failure_time
+            if time_since_open < self._api_circuit_reset_time:
+                logging.debug(f"⚠️ API circuit breaker OPEN - skipping call (resets in {self._api_circuit_reset_time - time_since_open:.1f}s)")
+                return None
+            else:
+                # Reset circuit breaker
+                logging.info("✅ API circuit breaker RESET - attempting API call")
+                self._api_circuit_open = False
+                self._api_failure_count = 0
+        
         try:
             # CRITICAL FIX: Use reusable Shazam instance to prevent resource leaks
             current_time = time.time()
@@ -436,19 +467,39 @@ class SongDetector:
                 shazam.recognize(audio_file),
                 timeout=10.0
             )
+            # Success - reset circuit breaker failure count
+            self._api_failure_count = 0
             return result
         except asyncio.TimeoutError:
             logging.warning("⚠️ Shazam recognition timed out after 10s")
+            self._handle_api_failure("timeout")
             # Reset instance on timeout
             self._shazam_instance = None
             self._shazam_created_at = 0.0
             return None
         except Exception as e:
             logging.error(f"Shazam recognition error: {e}")
+            self._handle_api_failure(str(e))
             # Reset instance on error
             self._shazam_instance = None
             self._shazam_created_at = 0.0
             return None
+    
+    def _handle_api_failure(self, error_msg):
+        """Handle API failures with circuit breaker pattern"""
+        self._api_failure_count += 1
+        self._api_last_failure_time = time.time()
+        
+        if self._api_failure_count >= self._api_max_failures_before_open:
+            self._api_circuit_open = True
+            logging.error(
+                f"🚨 API CIRCUIT BREAKER OPENED after {self._api_failure_count} failures. "
+                f"Will retry in {self._api_circuit_reset_time}s"
+            )
+        else:
+            logging.warning(
+                f"⚠️ API failure {self._api_failure_count}/{self._api_max_failures_before_open}: {error_msg}"
+            )
     
     def get_latest_song(self):
         """Get the latest detected song information"""
