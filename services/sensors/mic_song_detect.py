@@ -1279,6 +1279,14 @@ class AudioMonitor:
         self.stop_monitoring()
         self._stream_restart_request.clear()
         
+        # CRITICAL FIX: Stop song detector if it exists
+        if hasattr(self, 'song_detector') and self.song_detector is not None:
+            try:
+                self.song_detector.stop()
+                logger.info("Song detector stopped during cleanup")
+            except Exception as e:
+                logger.warning(f"Error stopping song detector during cleanup: {e}")
+        
         # Cleanup Shazam instance and its ClientSession
         try:
             self._reset_shazam_instance(reason="cleanup")

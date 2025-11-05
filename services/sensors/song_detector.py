@@ -75,18 +75,80 @@ class SongDetector:
         # Lock for thread safety
         self.lock = threading.Lock()
         
+        # CRITICAL FIX: Watchdog for thread health monitoring
+        self.watchdog_thread = None
+        self.watchdog_active = False
+        self.watchdog_interval = 10.0  # Check every 10 seconds
+        self.last_heartbeat = time.time()
+        self.thread_restart_count = 0
+        self.max_restarts_per_hour = 10
+        
+        # CRITICAL FIX: Reusable event loop to prevent resource leaks
+        self._event_loop = None
+        self._event_loop_thread = None
+        self._event_loop_lock = threading.Lock()
+        self._shazam_instance = None
+        self._shazam_created_at = 0.0
+        self._shazam_refresh_interval = 3600.0  # Refresh every hour
+        
         # Start detection thread if enabled
         if self.enabled:
             self.start_detection_thread()
+            self._start_watchdog()
 
     def start_detection_thread(self):
         """Start background thread for song detection"""
         if self.detection_thread is None or not self.detection_thread.is_alive():
             self.detection_active = True
-            self.detection_thread = threading.Thread(target=self._detection_loop)
+            self.last_heartbeat = time.time()  # Reset heartbeat
+            self.detection_thread = threading.Thread(target=self._detection_loop, name="SongDetectorLoop")
             self.detection_thread.daemon = True
             self.detection_thread.start()
             logging.info("Song detection thread started")
+    
+    def _start_watchdog(self):
+        """Start watchdog thread to monitor and restart detection thread if it dies"""
+        if self.watchdog_thread is None or not self.watchdog_thread.is_alive():
+            self.watchdog_active = True
+            self.watchdog_thread = threading.Thread(target=self._watchdog_loop, name="SongDetectorWatchdog")
+            self.watchdog_thread.daemon = True
+            self.watchdog_thread.start()
+            logging.info("Song detector watchdog started")
+    
+    def _watchdog_loop(self):
+        """Watchdog loop to monitor thread health and restart if needed"""
+        while self.watchdog_active and self.enabled:
+            try:
+                time.sleep(self.watchdog_interval)
+                
+                # Check if detection thread is alive
+                if self.detection_thread is None or not self.detection_thread.is_alive():
+                    logging.error("⚠️ Song detection thread died! Restarting...")
+                    self.thread_restart_count += 1
+                    
+                    # Rate limit restarts
+                    if self.thread_restart_count > self.max_restarts_per_hour:
+                        logging.error(f"⚠️ Too many thread restarts ({self.thread_restart_count}). Disabling watchdog temporarily.")
+                        time.sleep(3600)  # Wait an hour before allowing more restarts
+                        self.thread_restart_count = 0
+                        continue
+                    
+                    # Restart the thread
+                    self.start_detection_thread()
+                
+                # Check heartbeat - thread should update this every loop iteration
+                heartbeat_age = time.time() - self.last_heartbeat
+                if heartbeat_age > (self.detection_interval * 2 + 30):  # Allow 2x interval + buffer
+                    logging.warning(f"⚠️ Song detection thread heartbeat stale ({heartbeat_age:.1f}s). Thread may be stuck.")
+                    # Force restart
+                    self.detection_active = False
+                    if self.detection_thread and self.detection_thread.is_alive():
+                        self.detection_thread.join(timeout=2.0)
+                    self.start_detection_thread()
+                    
+            except Exception as e:
+                logging.error(f"Error in song detector watchdog: {e}")
+                time.sleep(self.watchdog_interval)
     
     def _detection_loop(self):
         """Background thread for periodic song detection"""
@@ -97,15 +159,22 @@ class SongDetector:
         self.last_detection_time = time.time()
         
         while self.detection_active:
-            # Check if it's time for a new detection
-            current_time = time.time()
-            if current_time - self.last_detection_time >= self.detection_interval:
-                logging.info("Starting song recognition...")
-                self.detect_song()
-                self.last_detection_time = current_time
-            
-            # Sleep to avoid consuming CPU
-            time.sleep(5)
+            try:
+                # Update heartbeat
+                self.last_heartbeat = time.time()
+                
+                # Check if it's time for a new detection
+                current_time = time.time()
+                if current_time - self.last_detection_time >= self.detection_interval:
+                    logging.info("Starting song recognition...")
+                    self.detect_song()
+                    self.last_detection_time = current_time
+                
+                # Sleep to avoid consuming CPU
+                time.sleep(5)
+            except Exception as e:
+                logging.error(f"Error in detection loop: {e}")
+                time.sleep(5)  # Continue even after errors
     
     def detect_song(self):
         """Record audio and detect song"""
@@ -147,16 +216,63 @@ class SongDetector:
         except Exception as e:
             logging.error(f"Error recording audio: {e}")
     
+    def _ensure_event_loop(self):
+        """Ensure we have a working event loop for async operations"""
+        with self._event_loop_lock:
+            if self._event_loop is None or self._event_loop.is_closed():
+                if self._event_loop_thread and self._event_loop_thread.is_alive():
+                    # Loop closed but thread still alive - wait for it to finish
+                    self._event_loop_thread.join(timeout=2.0)
+                
+                # Create new event loop in dedicated thread
+                loop_ready = threading.Event()
+                loop = None
+                
+                def _loop_runner():
+                    nonlocal loop
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop_ready.set()
+                    loop.run_forever()
+                
+                thread = threading.Thread(target=_loop_runner, name="SongDetectorEventLoop", daemon=True)
+                thread.start()
+                
+                if loop_ready.wait(timeout=5.0):
+                    self._event_loop = loop
+                    self._event_loop_thread = thread
+                    logging.info("Song detector event loop created")
+                else:
+                    logging.error("Failed to create event loop within timeout")
+                    return False
+            
+            return True
+    
     def _process_audio_file(self, audio_file):
         """Process audio file with ShazamIO"""
         try:
-            # Create event loop for async operation
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # CRITICAL FIX: Use reusable event loop instead of creating new one each time
+            if not self._ensure_event_loop():
+                logging.error("Cannot process audio - event loop unavailable")
+                return
             
-            # Run Shazam recognition
-            result = loop.run_until_complete(self._recognize_song(audio_file))
-            loop.close()
+            # Schedule recognition on the event loop
+            import concurrent.futures
+            future = asyncio.run_coroutine_threadsafe(
+                self._recognize_song(audio_file),
+                self._event_loop
+            )
+            
+            # Wait for result with timeout
+            try:
+                result = future.result(timeout=15.0)
+            except concurrent.futures.TimeoutError:
+                logging.warning("⚠️ Song recognition timed out after 15s")
+                future.cancel()
+                result = None
+            except Exception as e:
+                logging.error(f"Error waiting for recognition result: {e}")
+                result = None
             
             # Process result
             if result and 'track' in result:
@@ -173,7 +289,7 @@ class SongDetector:
                 
                 logging.info(f"Song detected: {title} by {artist}")
             else:
-                logging.info("No song detected")
+                logging.debug("No song detected")
             
             # Clean up temporary file
             try:
@@ -183,15 +299,52 @@ class SongDetector:
                 
         except Exception as e:
             logging.error(f"Error processing audio: {e}")
+            import traceback
+            logging.debug(traceback.format_exc())
     
     async def _recognize_song(self, audio_file):
         """Recognize song using ShazamIO (async)"""
         try:
-            shazam = Shazam()
-            result = await shazam.recognize(audio_file)
+            # CRITICAL FIX: Use reusable Shazam instance to prevent resource leaks
+            current_time = time.time()
+            needs_refresh = (
+                self._shazam_instance is None or
+                (current_time - self._shazam_created_at) > self._shazam_refresh_interval
+            )
+            
+            if needs_refresh:
+                # Close old instance if it exists
+                if self._shazam_instance is not None:
+                    try:
+                        client = getattr(self._shazam_instance, 'client', None)
+                        if client and hasattr(client, 'close'):
+                            await asyncio.wait_for(client.close(), timeout=2.0)
+                    except Exception as e:
+                        logging.debug(f"Error closing old Shazam instance: {e}")
+                
+                # Create new instance
+                self._shazam_instance = Shazam()
+                self._shazam_created_at = current_time
+            
+            shazam = self._shazam_instance
+            
+            # CRITICAL FIX: Add timeout to prevent hanging
+            result = await asyncio.wait_for(
+                shazam.recognize(audio_file),
+                timeout=10.0
+            )
             return result
+        except asyncio.TimeoutError:
+            logging.warning("⚠️ Shazam recognition timed out after 10s")
+            # Reset instance on timeout
+            self._shazam_instance = None
+            self._shazam_created_at = 0.0
+            return None
         except Exception as e:
             logging.error(f"Shazam recognition error: {e}")
+            # Reset instance on error
+            self._shazam_instance = None
+            self._shazam_created_at = 0.0
             return None
     
     def get_latest_song(self):
@@ -202,6 +355,52 @@ class SongDetector:
     def stop(self):
         """Stop song detection thread"""
         self.detection_active = False
+        self.watchdog_active = False
+        
+        # Stop detection thread
         if self.detection_thread and self.detection_thread.is_alive():
-            self.detection_thread.join(timeout=1.0)
+            self.detection_thread.join(timeout=2.0)
             logging.info("Song detection thread stopped")
+        
+        # Stop watchdog
+        if self.watchdog_thread and self.watchdog_thread.is_alive():
+            self.watchdog_thread.join(timeout=2.0)
+            logging.info("Song detector watchdog stopped")
+        
+        # Clean up event loop
+        with self._event_loop_lock:
+            if self._event_loop and not self._event_loop.is_closed():
+                try:
+                    self._event_loop.call_soon_threadsafe(self._event_loop.stop)
+                except Exception:
+                    pass
+                if self._event_loop_thread:
+                    self._event_loop_thread.join(timeout=2.0)
+                try:
+                    self._event_loop.close()
+                except Exception:
+                    pass
+                self._event_loop = None
+                self._event_loop_thread = None
+        
+        # Clean up Shazam instance
+        if self._shazam_instance:
+            try:
+                # Try to close client if possible
+                client = getattr(self._shazam_instance, 'client', None)
+                if client and hasattr(client, 'close'):
+                    # Create temporary loop for cleanup
+                    cleanup_loop = asyncio.new_event_loop()
+                    try:
+                        cleanup_loop.run_until_complete(
+                            asyncio.wait_for(client.close(), timeout=2.0)
+                        )
+                    except Exception:
+                        pass
+                    finally:
+                        cleanup_loop.close()
+            except Exception:
+                pass
+            self._shazam_instance = None
+        
+        logging.info("Song detector stopped and cleaned up")
