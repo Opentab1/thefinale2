@@ -164,16 +164,18 @@ class SongDetector:
     def _watchdog_loop(self):
         """Watchdog loop to monitor thread health and restart if needed - CRITICAL: Must never fail"""
         consecutive_errors = 0
-        # CRITICAL: Watchdog should run even if ShazamIO is unavailable (degraded mode)
-        # It will monitor and restart when dependencies become available
-        while self.watchdog_active and (self.enabled or self.detection_thread is None):
+        # CRITICAL: Watchdog should ALWAYS run if watchdog_active is True
+        # It monitors thread health and can restart when dependencies become available
+        # CRITICAL FIX: Check if thread is None OR dead (not just None)
+        while self.watchdog_active:
             try:
                 time.sleep(self.watchdog_interval)
                 consecutive_errors = 0  # Reset on successful check
                 
                 # CRITICAL: Check if detection thread is alive - IMMEDIATE RESTART if dead
-                # Only check if we're supposed to have a detection thread
+                # Check if we should have a detection thread (enabled) and if it's dead or missing
                 if self.enabled:
+                    # We should have a detection thread - check if it's alive
                     if self.detection_thread is None or not self.detection_thread.is_alive():
                         logging.error("🚨 CRITICAL: Song detection thread died! Restarting IMMEDIATELY...")
                         self.thread_restart_count += 1
@@ -196,38 +198,47 @@ class SongDetector:
                             logging.error(f"❌ Failed to restart detection thread: {restart_error}")
                             # Try again next cycle
                             continue
-                    
-                    # CRITICAL: Check heartbeat - detect stuck threads IMMEDIATELY
-                    heartbeat_age = time.time() - self.last_heartbeat
-                    # In buffer mode, heartbeat should update every 5 seconds
-                    # In auto-record mode, heartbeat should update every detection_interval
-                    max_heartbeat_age = max(15.0, self.detection_interval * 2) if not self.use_buffer_mode else 15.0
-                    
-                    if heartbeat_age > max_heartbeat_age:
-                        logging.warning(f"🚨 CRITICAL: Song detection thread heartbeat stale ({heartbeat_age:.1f}s > {max_heartbeat_age}s). Thread may be stuck. FORCING RESTART!")
-                        # Force restart immediately
-                        self.detection_active = False
-                        if self.detection_thread and self.detection_thread.is_alive():
+                    else:
+                        # Thread exists and is alive - check heartbeat
+                        # CRITICAL: Check heartbeat - detect stuck threads IMMEDIATELY
+                        heartbeat_age = time.time() - self.last_heartbeat
+                        # In buffer mode, heartbeat should update every 5 seconds
+                        # In auto-record mode, heartbeat should update every detection_interval
+                        max_heartbeat_age = max(15.0, self.detection_interval * 2) if not self.use_buffer_mode else 15.0
+                        
+                        if heartbeat_age > max_heartbeat_age:
+                            logging.warning(f"🚨 CRITICAL: Song detection thread heartbeat stale ({heartbeat_age:.1f}s > {max_heartbeat_age}s). Thread may be stuck. FORCING RESTART!")
+                            # Force restart immediately
+                            self.detection_active = False
+                            if self.detection_thread and self.detection_thread.is_alive():
+                                try:
+                                    self.detection_thread.join(timeout=1.0)  # Shorter timeout
+                                except Exception:
+                                    pass
                             try:
-                                self.detection_thread.join(timeout=1.0)  # Shorter timeout
-                            except Exception:
-                                pass
-                        try:
-                            self.start_detection_thread()
-                            logging.info("✅ Song detection thread restarted after heartbeat timeout")
-                        except Exception as restart_error:
-                            logging.error(f"❌ Failed to restart after heartbeat timeout: {restart_error}")
+                                self.start_detection_thread()
+                                logging.info("✅ Song detection thread restarted after heartbeat timeout")
+                            except Exception as restart_error:
+                                logging.error(f"❌ Failed to restart after heartbeat timeout: {restart_error}")
                 else:
-                    # In degraded mode (ShazamIO unavailable), just keep watchdog running
-                    # It will attempt to start detection thread when ShazamIO becomes available
+                    # In degraded mode (ShazamIO unavailable), check if ShazamIO became available
+                    # CRITICAL FIX: Also check if we have a dead thread that needs cleanup
+                    if self.detection_thread is not None and not self.detection_thread.is_alive():
+                        # Thread exists but is dead - clean it up
+                        logging.debug("Cleaning up dead detection thread in degraded mode")
+                        self.detection_thread = None
+                    
                     # Check if ShazamIO became available
                     if SHAZAMIO_AVAILABLE:
                         logging.info("ShazamIO became available! Enabling detection...")
                         self.enabled = True
                         try:
                             self.start_detection_thread()
+                            logging.info("✅ Detection thread started after ShazamIO became available")
                         except Exception as e:
                             logging.error(f"Failed to start detection thread after ShazamIO became available: {e}")
+                            # Reset enabled flag if we can't start
+                            self.enabled = False
                     
             except Exception as e:
                 consecutive_errors += 1
@@ -568,9 +579,13 @@ class SongDetector:
         self.watchdog_active = False
         
         # Stop detection thread
-        if self.detection_thread and self.detection_thread.is_alive():
-            self.detection_thread.join(timeout=2.0)
-            logging.info("Song detection thread stopped")
+        if self.detection_thread:
+            try:
+                if hasattr(self.detection_thread, 'is_alive') and self.detection_thread.is_alive():
+                    self.detection_thread.join(timeout=2.0)
+                    logging.info("Song detection thread stopped")
+            except Exception as e:
+                logging.debug(f"Error stopping detection thread: {e}")
         
         # Stop watchdog
         if self.watchdog_thread and self.watchdog_thread.is_alive():
