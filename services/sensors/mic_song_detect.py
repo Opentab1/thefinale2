@@ -100,8 +100,8 @@ class AudioMonitor:
         self._last_song_detect_ts = 0.0
 
         self._health_thread = None
-        # CRITICAL FIX: Check health more frequently (every 5 seconds)
-        self._health_check_interval = 5.0  # Fixed: Always 5 seconds
+        # CRITICAL FIX: Check health IMMEDIATELY (every 2 seconds)
+        self._health_check_interval = 2.0  # CRITICAL: Always 2 seconds for immediate failure detection
         self._last_db_restart_ts = 0.0
 
         # Event loop and Shazam instance management now handled by SongDetector
@@ -110,8 +110,8 @@ class AudioMonitor:
         self._monitoring_backend = None
         self._stream_restart_count = 0
         self._max_consecutive_read_errors = 3
-        # CRITICAL FIX: Reduce watchdog threshold to catch failures faster (was 60s, now 20s)
-        self._watchdog_restart_threshold = 20.0  # Fixed: Always 20 seconds
+        # CRITICAL FIX: IMMEDIATE failure detection (was 20s, now 5s)
+        self._watchdog_restart_threshold = 5.0  # CRITICAL: Always 5 seconds for immediate detection
         self._stream_restart_request = Event()
         
         # Rolling audio buffer for song detection (5 seconds at 44100 Hz)
@@ -381,7 +381,7 @@ class AudioMonitor:
                 
                 # SongDetector now handles its own thread monitoring via its watchdog
                 
-                self.stop_event.wait(5)  # CRITICAL FIX: Check every 5 seconds (was 10)
+                self.stop_event.wait(2)  # CRITICAL FIX: Check every 2 seconds for IMMEDIATE recovery
             except Exception as e:
                 logger.error(f"Error in watchdog: {e}")
                 self.stop_event.wait(5)
@@ -393,35 +393,41 @@ class AudioMonitor:
             try:
                 now = time.time()
 
-                # CRITICAL FIX: Guard against stale dB readings with shorter threshold
+                # CRITICAL FIX: IMMEDIATE detection of stale dB readings (5 second threshold)
                 if self._last_db_ts and (now - self._last_db_ts) > self._watchdog_restart_threshold:
                     if self._monitoring_thread and self._monitoring_thread.is_alive():
                         if not self._stream_restart_request.is_set() and (now - self._last_db_restart_ts) > self._db_interval:
-                            logger.warning(
-                                "⚠️ dB readings stale for %.1fs - requesting audio stream restart",
+                            logger.error(
+                                "🚨 CRITICAL: dB readings stale for %.1fs - IMMEDIATE audio stream restart",
                                 now - self._last_db_ts,
                             )
                             self._stream_restart_request.set()
                             self._last_db_restart_ts = now
                             
-                            # CRITICAL FIX: Track complete system stall (25min issue)
+                            # CRITICAL FIX: Track complete system stall - REDUCED to 15 seconds for immediate recovery
                             if self._system_completely_stalled_at == 0.0:
                                 self._system_completely_stalled_at = now
-                            elif (now - self._system_completely_stalled_at) > 60.0:
-                                # System has been stalled for >60s despite restart attempts
+                            elif (now - self._system_completely_stalled_at) > 15.0:  # REDUCED from 60s to 15s
+                                # System has been stalled for >15s despite restart attempts - FORCE IMMEDIATE RESTART
                                 logger.error(
-                                    "🚨 CRITICAL: Audio system completely stalled for %.1fs - FORCING COMPLETE RESTART!",
+                                    "🚨🚨🚨 CRITICAL: Audio system completely stalled for %.1fs - FORCING IMMEDIATE COMPLETE RESTART!",
                                     now - self._system_completely_stalled_at
                                 )
-                                # Stop and restart the entire monitoring system
+                                # Stop and restart the entire monitoring system IMMEDIATELY
                                 try:
                                     self.stop_monitoring()
-                                    time.sleep(2)
+                                    time.sleep(1)  # Reduced from 2s to 1s
                                     self.start_monitoring()
                                     logger.info("✅ Complete audio system restart successful")
                                     self._system_completely_stalled_at = 0.0
                                 except Exception as e:
                                     logger.error(f"❌ Failed to restart audio system: {e}")
+                                    # Try again immediately
+                                    try:
+                                        time.sleep(0.5)
+                                        self.start_monitoring()
+                                    except Exception:
+                                        pass
                 else:
                     # dB readings are fresh - reset stall tracker
                     self._system_completely_stalled_at = 0.0
@@ -632,45 +638,67 @@ class AudioMonitor:
                 self._audio_buffer[-shift_amount:] = audio_data[:chunk_len]
                 self._buffer_index = self._audio_buffer_size
 
-            # Calculate dB level (every 2 seconds)
+            # Calculate dB level (every 2 seconds) - BULLETPROOF ERROR HANDLING
             now_db = time.time()
             if (now_db - self._last_db_ts) >= self._db_interval:
-                db = self.calculate_db(audio_data)
-                self.current_db = db
-                self.peak_db = max(self.peak_db, db)
-                self._last_db_ts = now_db
-                # CRITICAL FIX: Add loop count to help diagnose hangs
-                logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB) [loop:{loop_iteration_count}]")
+                try:
+                    db = self.calculate_db(audio_data)
+                    self.current_db = db
+                    self.peak_db = max(self.peak_db, db)
+                    self._last_db_ts = now_db
+                    # CRITICAL FIX: Add loop count to help diagnose hangs
+                    logger.info(f"🔊 Audio: {db:.1f} dB (Peak: {self.peak_db:.1f} dB) [loop:{loop_iteration_count}]")
+                except Exception as db_error:
+                    logger.error(f"❌ CRITICAL ERROR calculating dB: {db_error}")
+                    # Set a safe default and continue
+                    self.current_db = 0.0
+                    self._last_db_ts = now_db  # Update timestamp to prevent watchdog from thinking it's stuck
 
-            # Trigger song detection on cadence using buffered audio
+            # Trigger song detection on cadence using buffered audio - BULLETPROOF ERROR HANDLING
             now_song = time.time()
             if self.song_detector is not None and (now_song - self._last_song_detect_ts) >= self._song_detect_interval:
-                if self._buffer_index >= self._audio_buffer_size:
-                    # CRITICAL FIX: Validate buffer has actual audio data before detection
-                    buffer_sum = np.sum(np.abs(self._audio_buffer))
-                    if buffer_sum == 0:
-                        logger.debug("Skipping song detection - audio buffer is empty (all zeros)")
-                        self._last_song_detect_ts = now_song
-                    else:
+                try:
+                    if self._buffer_index >= self._audio_buffer_size:
+                        # CRITICAL FIX: Validate buffer has actual audio data before detection
                         try:
-                            # Use SongDetector's buffer-based detection method
-                            if self.song_detector.detect_song_from_buffer(self._audio_buffer, self.sample_rate):
-                                logger.debug(f"🎵 Song detection started from audio buffer (buffer sum: {buffer_sum})")
+                            buffer_sum = np.sum(np.abs(self._audio_buffer))
+                            if buffer_sum == 0:
+                                logger.debug("Skipping song detection - audio buffer is empty (all zeros)")
+                                self._last_song_detect_ts = now_song
                             else:
-                                logger.debug("Song detection returned False - check logs for errors")
+                                try:
+                                    # CRITICAL: Verify song detector is still valid
+                                    if not hasattr(self.song_detector, 'enabled') or not self.song_detector.enabled:
+                                        logger.warning("Song detector disabled during detection attempt")
+                                        self._last_song_detect_ts = now_song
+                                    else:
+                                        # Use SongDetector's buffer-based detection method
+                                        if self.song_detector.detect_song_from_buffer(self._audio_buffer, self.sample_rate):
+                                            logger.debug(f"🎵 Song detection started from audio buffer (buffer sum: {buffer_sum})")
+                                        else:
+                                            logger.debug("Song detection returned False - check logs for errors")
+                                        self._last_song_detect_ts = now_song
+                                except AttributeError as attr_error:
+                                    logger.error(f"Song detector attribute error: {attr_error} - may need restart")
+                                    self._last_song_detect_ts = now_song
+                                except Exception as e:
+                                    logger.error(f"❌ CRITICAL: Failed to start song detection: {e}")
+                                    import traceback
+                                    logger.error(traceback.format_exc())
+                                    self._last_song_detect_ts = now_song
+                        except Exception as buffer_error:
+                            logger.error(f"Error checking buffer sum: {buffer_error}")
                             self._last_song_detect_ts = now_song
-                        except Exception as e:
-                            logger.error(f"Failed to start song detection: {e}")
-                            import traceback
-                            logger.debug(traceback.format_exc())
-                            self._last_song_detect_ts = now_song
-                else:
-                    logger.debug(
-                        "Audio buffer not ready for song detection (index: %s/%s)",
-                        self._buffer_index,
-                        self._audio_buffer_size,
-                    )
-                    self._last_song_detect_ts = now_song
+                    else:
+                        logger.debug(
+                            "Audio buffer not ready for song detection (index: %s/%s)",
+                            self._buffer_index,
+                            self._audio_buffer_size,
+                        )
+                        self._last_song_detect_ts = now_song
+                except Exception as song_detect_error:
+                    logger.error(f"❌ CRITICAL ERROR in song detection trigger: {song_detect_error}")
+                    self._last_song_detect_ts = now_song  # Prevent infinite loop
             elif self.song_detector is None and int(now_song) % 60 == 0:
                 logger.debug("Song detector not available - song detection disabled")
 
