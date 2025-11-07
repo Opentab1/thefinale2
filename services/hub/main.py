@@ -468,6 +468,7 @@ class PulseHub:
             "song_detection": None
         }
         
+        # Get people counter data from direct access OR cache file (if running as separate service)
         if self.people_counter:
             # Current occupancy
             data["occupancy"] = self.people_counter.get_current_count()
@@ -479,6 +480,19 @@ class PulseHub:
                 data["exits"] = int(stats.get("exit_count", 0))
             except Exception:
                 pass
+        elif os.getenv('PULSE_DISABLE_CAMERA') == '1':
+            # Camera is running as separate service - read from cache file
+            try:
+                cache_file = Path("/opt/pulse/data/people_cache.json")
+                if cache_file.exists():
+                    with open(cache_file, 'r') as f:
+                        cache_data = json.load(f)
+                    data["occupancy"] = cache_data.get("occupancy", 0)
+                    data["entries"] = cache_data.get("entries", 0)
+                    data["exits"] = cache_data.get("exits", 0)
+                    logger.debug(f"People count from cache: occupancy={data['occupancy']}, entries={data['entries']}, exits={data['exits']}")
+            except Exception as e:
+                logger.debug(f"Could not read people cache: {e}")
         
         if self.bme280:
             # Use cached values (background thread keeps these updated)

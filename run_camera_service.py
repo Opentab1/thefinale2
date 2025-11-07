@@ -8,6 +8,7 @@ Isolated from other services for fault tolerance
 import logging
 import sys
 import os
+import json
 from pathlib import Path
 import time
 
@@ -56,6 +57,12 @@ def main():
     logger.info("People Counter: Continuous detection")
     logger.info("="*80)
     
+    # Create cache file path
+    data_dir = Path("/opt/pulse/data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    people_cache = data_dir / "people_cache.json"
+    logger.info(f"📁 Cache file: {people_cache}")
+    
     try:
         from services.sensors.camera_people import PeopleCounter
         
@@ -77,14 +84,41 @@ def main():
         logger.info("🎉 CAMERA SERVICE RUNNING")
         logger.info("="*80)
         
-        # Keep running and log status periodically
+        # Keep running, write cache files, and log status periodically
         last_status_log = 0
+        last_cache_write = 0
         
         while True:
-            time.sleep(30)
+            time.sleep(2)  # Check every 2 seconds for cache updates
             
             current_time = time.time()
-            if current_time - last_status_log >= 300:  # Log every 5 minutes
+            
+            # Write cache file every 5 seconds
+            if current_time - last_cache_write >= 5:
+                try:
+                    # Get current data
+                    current_count = people_counter.get_current_count()
+                    stats = people_counter.get_traffic_stats()
+                    
+                    # Write people cache
+                    cache_data = {
+                        "occupancy": current_count,
+                        "entries": stats.get('entry_count', 0),
+                        "exits": stats.get('exit_count', 0),
+                        "timestamp": current_time
+                    }
+                    
+                    with open(people_cache, 'w') as f:
+                        json.dump(cache_data, f, indent=2)
+                    
+                    logger.debug(f"📁 Cache updated: occupancy={current_count}, entries={cache_data['entries']}, exits={cache_data['exits']}")
+                    last_cache_write = current_time
+                    
+                except Exception as cache_err:
+                    logger.error(f"Error writing cache file: {cache_err}")
+            
+            # Log status every 5 minutes
+            if current_time - last_status_log >= 300:
                 # Get current count
                 current_count = people_counter.get_current_count()
                 stats = people_counter.get_traffic_stats()
