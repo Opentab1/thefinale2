@@ -483,16 +483,19 @@ class PulseHub:
         elif os.getenv('PULSE_DISABLE_CAMERA') == '1':
             # Camera is running as separate service - read from cache file
             try:
+                import json
                 cache_file = Path("/opt/pulse/data/people_cache.json")
                 if cache_file.exists():
                     with open(cache_file, 'r') as f:
                         cache_data = json.load(f)
-                    data["occupancy"] = cache_data.get("occupancy", 0)
-                    data["entries"] = cache_data.get("entries", 0)
-                    data["exits"] = cache_data.get("exits", 0)
-                    logger.debug(f"People count from cache: occupancy={data['occupancy']}, entries={data['entries']}, exits={data['exits']}")
+                    data["occupancy"] = int(cache_data.get("occupancy", 0))
+                    data["entries"] = int(cache_data.get("entries", 0))
+                    data["exits"] = int(cache_data.get("exits", 0))
+                    logger.info(f"👥 People from cache: occupancy={data['occupancy']}, entries={data['entries']}, exits={data['exits']}")
+                else:
+                    logger.warning(f"⚠️ People cache file not found: {cache_file}")
             except Exception as e:
-                logger.debug(f"Could not read people cache: {e}")
+                logger.error(f"❌ Could not read people cache: {e}", exc_info=True)
         
         if self.bme280:
             # Use cached values (background thread keeps these updated)
@@ -596,7 +599,7 @@ class PulseHub:
         if self.decibel_detector:
             reading = self.decibel_detector.get_latest_reading()
             data["noise_db"] = self._sanitize_environment_value(reading.get("db_value", 0))
-            logger.debug(f"dB reading: {reading.get('db_value', 0):.1f} dB")
+            logger.info(f"🔊 dB reading: {reading.get('db_value', 0):.1f} dB")
         elif os.getenv('PULSE_DISABLE_AUDIO') == '1':
             # Audio is running as separate service - read from cache file
             try:
@@ -606,9 +609,11 @@ class PulseHub:
                     with open(cache_file, 'r') as f:
                         reading = json.load(f)
                     data["noise_db"] = self._sanitize_environment_value(reading.get("db_value", 0))
-                    logger.debug(f"dB reading from cache: {reading.get('db_value', 0):.1f} dB")
+                    logger.info(f"🔊 dB from cache: {reading.get('db_value', 0):.1f} dB")
+                else:
+                    logger.warning(f"⚠️ Decibel cache not found: {cache_file}")
             except Exception as e:
-                logger.debug(f"Could not read decibel cache: {e}")
+                logger.error(f"❌ Could not read decibel cache: {e}", exc_info=True)
         
         # Get song info from simple detector OR cache file (if running as separate service)
         if self.song_detector:
@@ -621,9 +626,9 @@ class PulseHub:
             
             # Log song detection status for debugging
             if song_data and song_data.get("title") not in (None, "Unknown"):
-                logger.debug(f"Song detected: {song_data.get('title')} - {song_data.get('artist')}")
+                logger.info(f"🎵 Song detected: {song_data.get('title')} - {song_data.get('artist')}")
             else:
-                logger.debug("No song detected (title: Unknown or None)")
+                logger.info("🎵 No song detected")
         elif os.getenv('PULSE_DISABLE_AUDIO') == '1':
             # Audio is running as separate service - read from cache file
             try:
@@ -637,13 +642,14 @@ class PulseHub:
                         "interval_sec": 60,
                         "detector_enabled": True
                     }
-                    logger.debug(f"Song from cache: {song_data.get('title', 'Unknown')} - {song_data.get('artist', 'Unknown')}")
+                    logger.info(f"🎵 Song from cache: {song_data.get('title', 'Unknown')} - {song_data.get('artist', 'Unknown')}")
                 else:
                     # No cache file yet - return default
                     data["current_song"] = {"title": "Unknown", "artist": "Unknown", "timestamp": None}
                     data["song_detection"] = {"interval_sec": 60, "detector_enabled": True}
+                    logger.warning(f"⚠️ Song cache not found: {cache_file}")
             except Exception as e:
-                logger.debug(f"Could not read song cache: {e}")
+                logger.error(f"❌ Could not read song cache: {e}", exc_info=True)
                 data["current_song"] = {"title": "Unknown", "artist": "Unknown", "timestamp": None}
 
         # Fallback: if no song detected via mic, use music controller's current track
