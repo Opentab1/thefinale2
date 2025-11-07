@@ -10,6 +10,8 @@ User=pi
 WorkingDirectory=/opt/pulse
 Environment="PYTHONPATH=/opt/pulse:/opt/pulse/services"
 Environment="PYTHONUNBUFFERED=1"
+Environment="PULSE_DISABLE_AUDIO=1"
+Environment="PULSE_DISABLE_CAMERA=1"
 ExecStart=/opt/pulse/venv/bin/python3 /opt/pulse/run_hub_service.py
 Restart=always
 RestartSec=10
@@ -20,7 +22,7 @@ StandardOutput=append:/var/log/pulse/pulse-hub.log
 StandardError=append:/var/log/pulse/pulse-hub-error.log
 
 # Resource limits
-MemoryLimit=512M
+MemoryMax=512M
 
 [Install]
 WantedBy=multi-user.target pulse.service
