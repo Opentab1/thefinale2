@@ -31,7 +31,7 @@ export default function LiveOverview({ sensorData }) {
   const lastDetectionError = current_song?.last_detection_error ?? song_detection?.last_error
   const formattedInterval = formatSeconds(detectionIntervalSec, detectionIntervalSec >= 10 ? 1 : 2)
   const formattedLastDetection = formatSeconds(lastDetectionDurationSec, 2)
-  const lastDetectionTimeLabel = lastDetectionStartedAt ? new Date(lastDetectionStartedAt).toLocaleTimeString() : null
+  const lastDetectionTimeLabel = lastDetectionStartedAt ? new Date(lastDetectionStartedAt).toLocaleString() : null
 
   
 
@@ -106,9 +106,11 @@ export default function LiveOverview({ sensorData }) {
               <div className="text-xs text-gray-500 space-y-1 pt-2">
                 <p>Interval: {formattedInterval || '—'}s</p>
                 <p>
-                  Last detection: {formattedLastDetection ? `${formattedLastDetection}s` : '—'}
-                  {lastDetectionTimeLabel ? ` @ ${lastDetectionTimeLabel}` : ''}
+                  Last attempt: {lastDetectionTimeLabel || 'Not yet run'}
                 </p>
+                {formattedLastDetection && (
+                  <p>Duration: {formattedLastDetection}s</p>
+                )}
                 {detectionActive ? (
                   <p className="text-amber-400">Detection running…</p>
                 ) : lastDetectionError ? (
