@@ -21,14 +21,14 @@ function App() {
   const [safeMode, setSafeMode] = useState(false)
 
   useEffect(() => {
-    // Connect to WebSocket with better reconnection settings
+    // Connect with polling ONLY (simpler, more stable, no websocket upgrade issues)
     const newSocket = io(API_URL, {
       reconnection: true,
-      reconnectionDelay: 2000,        // Wait 2s before first reconnect attempt
-      reconnectionDelayMax: 10000,    // Max 10s between reconnect attempts
-      reconnectionAttempts: 10,       // Try 10 times before giving up
-      timeout: 20000,                 // 20s connection timeout
-      transports: ['polling', 'websocket'], // Try polling first, then upgrade to websocket
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 10000,
+      reconnectionAttempts: 10,
+      timeout: 20000,
+      transports: ['polling'],  // POLLING ONLY - no WebSocket upgrade
     })
     
     newSocket.on('connect', () => {
