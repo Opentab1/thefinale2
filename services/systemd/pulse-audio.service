@@ -19,8 +19,8 @@ TimeoutStartSec=30
 StandardOutput=append:/var/log/pulse/pulse-audio.log
 StandardError=append:/var/log/pulse/pulse-audio-error.log
 
-# Resource limits
-MemoryLimit=256M
+# Resource limits (Shazam needs more than 256MB for song recognition)
+MemoryMax=1G
 
 [Install]
 WantedBy=multi-user.target pulse.service
