@@ -228,6 +228,57 @@ def get_health():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/audio/stream')
+def audio_stream():
+    """Stream live audio from microphone (simple monitoring)"""
+    try:
+        import sounddevice as sd
+        import numpy as np
+        
+        def generate_audio():
+            """Generator that yields audio chunks"""
+            sample_rate = 16000  # 16kHz for web streaming
+            block_size = 4096
+            
+            # WAV header for 16-bit PCM audio
+            import struct
+            
+            def make_wav_header(sample_rate, channels=1, bits_per_sample=16):
+                byte_rate = sample_rate * channels * bits_per_sample // 8
+                block_align = channels * bits_per_sample // 8
+                
+                header = b'RIFF'
+                header += struct.pack('<I', 0)  # Placeholder for file size
+                header += b'WAVE'
+                header += b'fmt '
+                header += struct.pack('<I', 16)  # fmt chunk size
+                header += struct.pack('<H', 1)  # PCM format
+                header += struct.pack('<H', channels)
+                header += struct.pack('<I', sample_rate)
+                header += struct.pack('<I', byte_rate)
+                header += struct.pack('<H', block_align)
+                header += struct.pack('<H', bits_per_sample)
+                header += b'data'
+                header += struct.pack('<I', 0xFFFFFFFF)  # Placeholder for data size
+                
+                return header
+            
+            # Send WAV header first
+            yield make_wav_header(sample_rate)
+            
+            # Stream audio chunks
+            with sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=block_size) as stream:
+                while True:
+                    data, _ = stream.read(block_size)
+                    yield data.tobytes()
+        
+        return Response(generate_audio(), mimetype='audio/wav')
+        
+    except Exception as e:
+        logger.error(f"Error streaming audio: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/camera/snapshot')
 def camera_snapshot():
     """Return the latest snapshot saved by the people counter.
