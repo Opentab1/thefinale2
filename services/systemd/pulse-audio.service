@@ -1,0 +1,26 @@
+[Unit]
+Description=Pulse Audio Service (Decibel + Song Detection)
+After=network.target
+Requires=network.target
+PartOf=pulse.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse
+Environment="PYTHONPATH=/opt/pulse:/opt/pulse/services"
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/opt/pulse/venv/bin/python3 /opt/pulse/run_audio_service.py
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+
+# Logging
+StandardOutput=append:/var/log/pulse/pulse-audio.log
+StandardError=append:/var/log/pulse/pulse-audio-error.log
+
+# Resource limits
+MemoryLimit=256M
+
+[Install]
+WantedBy=multi-user.target pulse.service

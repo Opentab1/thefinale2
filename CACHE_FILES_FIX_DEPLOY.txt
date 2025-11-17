@@ -1,0 +1,84 @@
+╔══════════════════════════════════════════════════════════════╗
+║     🔧 CACHE FILES FIX - DEPLOY NOW                          ║
+╚══════════════════════════════════════════════════════════════╝
+
+✅ PROBLEM FIXED:
+   Audio service now shares data with hub via cache files!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📦 DEPLOY (Run on your Raspberry Pi):
+
+cd /opt/pulse
+git pull origin cursor/debug-and-stabilize-audio-features-on-raspberry-pi-702d
+sudo systemctl restart pulse-audio.service
+sudo systemctl restart pulse-hub-main.service
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔍 VERIFY (Should see data now!):
+
+# 1. Check cache files are being created
+ls -la /opt/pulse/data/*.json
+
+# 2. Check cache file contents
+cat /opt/pulse/data/decibel_cache.json
+cat /opt/pulse/data/song_cache.json
+
+# 3. Check hub is reading them
+sudo journalctl -u pulse-hub-main --since "2 minutes ago" | grep -iE "cache"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ EXPECTED RESULTS:
+
+Cache files exist:
+/opt/pulse/data/decibel_cache.json
+/opt/pulse/data/song_cache.json
+
+Decibel cache contains:
+{
+  "db_value": 48.5,
+  "timestamp": 1699218765.789,
+  "datetime": "2025-11-05 21:35:00"
+}
+
+Song cache contains:
+{
+  "title": "Song Name",
+  "artist": "Artist Name",
+  "timestamp": 1699218765.789
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 WHAT THIS FIXES:
+
+✅ Dashboard now shows dB readings (not dashes!)
+✅ Dashboard now shows detected songs
+✅ Data persists even when audio service restarts
+✅ Hub reads latest values from cache files
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎉 HOW IT WORKS:
+
+Audio Service:
+├─ Measures dB every 10 seconds
+├─ Detects songs every 60 seconds
+└─ Writes cache files every 5 seconds ← NEW!
+
+Hub Service:
+├─ Reads cache files every 30 seconds ← NEW!
+└─ Returns data to dashboard
+
+Dashboard:
+└─> Shows current audio data! ✅
+
+Even if audio crashes, hub has recent data!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 DEPLOY THOSE 4 COMMANDS NOW!
+
+╚══════════════════════════════════════════════════════════════╝
