@@ -1,0 +1,137 @@
+=================================================================
+EXACT COMMANDS TO IMPLEMENT SONG DETECTION FIX ON YOUR PI
+=================================================================
+
+Run these commands ON YOUR RASPBERRY PI (logged in as 'pi' user):
+
+──────────────────────────────────────────────────────────────────
+OPTION 1: AUTOMATED DEPLOYMENT (Recommended)
+──────────────────────────────────────────────────────────────────
+
+# 1. Navigate to pulse and pull latest code
+cd /opt/pulse
+git fetch origin
+git pull origin cursor/investigate-song-detection-fix-9bb7
+
+# 2. Run the deployment script
+bash DEPLOY_SONG_FIX_TO_PI.sh
+
+
+──────────────────────────────────────────────────────────────────
+OPTION 2: MANUAL STEP-BY-STEP (If you want to see each step)
+──────────────────────────────────────────────────────────────────
+
+# 1. Activate virtual environment
+source /opt/pulse/venv/bin/activate
+
+# 2. Navigate to pulse directory
+cd /opt/pulse
+
+# 3. Fetch and checkout the branch with the fix
+git fetch origin
+git checkout cursor/debug-and-stabilize-audio-features-on-raspberry-pi-702d
+
+# 4. Install/update dependencies
+pip install --upgrade shazamio sounddevice
+
+# 5. Create data directory for cache files
+sudo mkdir -p /opt/pulse/data
+sudo chown pi:pi /opt/pulse/data
+
+# 6. Stop old service
+sudo systemctl stop pulse.service
+
+# 7. Install new service files
+sudo cp services/systemd/pulse-audio.service /etc/systemd/system/
+sudo cp services/systemd/pulse-camera.service /etc/systemd/system/
+sudo cp services/systemd/pulse-hub-main.service /etc/systemd/system/
+sudo cp services/systemd/pulse.service /etc/systemd/system/
+
+# 8. Reload systemd
+sudo systemctl daemon-reload
+
+# 9. Enable services
+sudo systemctl enable pulse-audio.service
+sudo systemctl enable pulse-camera.service
+sudo systemctl enable pulse-hub-main.service
+
+# 10. Start services
+sudo systemctl start pulse-audio.service
+sudo systemctl start pulse-camera.service
+sudo systemctl start pulse-hub-main.service
+
+
+──────────────────────────────────────────────────────────────────
+VERIFY IT'S WORKING
+──────────────────────────────────────────────────────────────────
+
+# Check service status
+sudo systemctl status pulse-audio
+sudo systemctl status pulse-camera
+sudo systemctl status pulse-hub-main
+
+# Watch audio service logs (look for song detection)
+sudo journalctl -u pulse-audio -f
+
+# Watch all logs
+sudo journalctl -u pulse-audio -u pulse-camera -u pulse-hub-main -f
+
+
+──────────────────────────────────────────────────────────────────
+USEFUL COMMANDS AFTER DEPLOYMENT
+──────────────────────────────────────────────────────────────────
+
+# Restart all services
+sudo systemctl restart pulse.service
+
+# Stop all services
+sudo systemctl stop pulse.service
+
+# Start all services
+sudo systemctl start pulse.service
+
+# Check if data cache files are being created
+ls -lh /opt/pulse/data/
+
+# Check dashboard
+http://your-pi-ip:5000
+
+
+=================================================================
+WHAT THIS FIX DOES
+=================================================================
+
+✅ Replaces 1,569 lines of complex code with 510 lines of simple code
+✅ Uses fresh async event loops (no more stale loops after 10 minutes)
+✅ Splits into 3 independent services:
+   - pulse-audio.service (song detection + dB monitoring)
+   - pulse-camera.service (people counting)
+   - pulse-hub-main.service (dashboard + environmental sensors)
+✅ Camera crashes no longer kill audio
+✅ Based on proven "party_box" approach
+✅ Creates cache files for data persistence
+
+
+=================================================================
+TROUBLESHOOTING
+=================================================================
+
+If services don't start:
+
+1. Check logs for errors:
+   sudo journalctl -u pulse-audio -n 50
+
+2. Verify Python dependencies:
+   source /opt/pulse/venv/bin/activate
+   pip list | grep -E "shazamio|sounddevice"
+
+3. Check file permissions:
+   ls -la /opt/pulse/run_*_service.py
+   
+4. Manually test audio service:
+   source /opt/pulse/venv/bin/activate
+   cd /opt/pulse
+   python run_audio_service.py
+
+
+=================================================================
