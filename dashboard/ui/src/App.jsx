@@ -21,15 +21,8 @@ function App() {
   const [safeMode, setSafeMode] = useState(false)
 
   useEffect(() => {
-    // Connect with polling ONLY (simpler, more stable, no websocket upgrade issues)
-    const newSocket = io(API_URL, {
-      reconnection: true,
-      reconnectionDelay: 2000,
-      reconnectionDelayMax: 10000,
-      reconnectionAttempts: 10,
-      timeout: 20000,
-      transports: ['polling'],  // POLLING ONLY - no WebSocket upgrade
-    })
+    // Connect to WebSocket - use defaults (this is what worked on Nov 5-7)
+    const newSocket = io(API_URL)
     
     newSocket.on('connect', () => {
       console.log('✅ Connected to Pulse Hub')
