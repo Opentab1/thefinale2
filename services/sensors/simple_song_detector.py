@@ -64,7 +64,12 @@ class SongDetector:
         self.duration = 5  # 5 seconds of audio for Shazam
         
         # Song detection state
-        self.latest_song = {"title": "Unknown", "artist": "Unknown", "timestamp": None}
+        self.latest_song = {
+            "title": "Unknown", 
+            "artist": "Unknown", 
+            "timestamp": None,
+            "last_attempt_time": None  # When we last TRIED to detect (always updated)
+        }
         self.detection_thread = None
         self.detection_active = False
         self.last_detection_time = 0
@@ -113,6 +118,9 @@ class SongDetector:
         """Record audio and detect song"""
         if not self.enabled:
             return
+        
+        # Record the attempt time BEFORE trying
+        attempt_time = time.time()
             
         try:
             # Create temporary file for the recording
@@ -191,11 +199,15 @@ class SongDetector:
                     self.latest_song = {
                         "title": title,
                         "artist": artist,
-                        "timestamp": time.time()
+                        "timestamp": time.time(),
+                        "last_attempt_time": attempt_time
                     }
                 
                 logger.info(f"🎵 Song detected: {title} by {artist}")
             else:
+                # No song detected, but still update attempt time
+                with self.lock:
+                    self.latest_song["last_attempt_time"] = attempt_time
                 logger.debug("🎵 No song detected")
             
             # Clean up temporary file

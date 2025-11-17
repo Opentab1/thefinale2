@@ -26,12 +26,12 @@ export default function LiveOverview({ sensorData }) {
 
   const detectionIntervalSec = current_song?.detection_interval_sec ?? song_detection?.interval_sec
   const lastDetectionDurationSec = current_song?.last_detection_duration_sec ?? song_detection?.last_attempt_duration_sec
-  const lastDetectionStartedAt = current_song?.last_detection_started_at ?? song_detection?.last_attempt_started_at
+  const lastDetectionStartedAt = current_song?.last_detection_started_at ?? song_detection?.last_attempt_started_at ?? current_song?.last_attempt_time
   const detectionActive = current_song?.detection_active ?? song_detection?.active
   const lastDetectionError = current_song?.last_detection_error ?? song_detection?.last_error
   const formattedInterval = formatSeconds(detectionIntervalSec, detectionIntervalSec >= 10 ? 1 : 2)
   const formattedLastDetection = formatSeconds(lastDetectionDurationSec, 2)
-  const lastDetectionTimeLabel = lastDetectionStartedAt ? new Date(lastDetectionStartedAt).toLocaleString() : null
+  const lastDetectionTimeLabel = lastDetectionStartedAt ? new Date(lastDetectionStartedAt * 1000).toLocaleString() : null
 
   
 
