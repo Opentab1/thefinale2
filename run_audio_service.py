@@ -8,6 +8,7 @@ Isolated from other services for fault tolerance
 import logging
 import sys
 import os
+import json
 from pathlib import Path
 import time
 
@@ -57,6 +58,12 @@ def main():
     logger.info("Song Detector: Every 60 seconds")
     logger.info("="*80)
     
+    # Create cache directory
+    cache_dir = Path("/opt/pulse/data")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    decibel_cache = cache_dir / "decibel_cache.json"
+    song_cache = cache_dir / "song_cache.json"
+    logger.info(f"📁 Cache files: {decibel_cache}, {song_cache}")
     
     try:
         from services.sensors.simple_decibel_detector import DecibelDetector
@@ -82,10 +89,22 @@ def main():
             time.sleep(30)
             
             current_time = time.time()
-            if current_time - last_status_log >= 300:  # Log every 5 minutes
-                # Get latest readings
-                db_reading = decibel_detector.get_latest_reading()
-                song_info = song_detector.get_latest_song()
+            
+            # Get latest readings
+            db_reading = decibel_detector.get_latest_reading()
+            song_info = song_detector.get_latest_song()
+            
+            # Write cache files every loop (every 30 seconds)
+            try:
+                with open(decibel_cache, 'w') as f:
+                    json.dump(db_reading, f, indent=2)
+                with open(song_cache, 'w') as f:
+                    json.dump(song_info, f, indent=2)
+            except Exception as e:
+                logger.error(f"Error writing cache files: {e}")
+            
+            # Log status every 5 minutes
+            if current_time - last_status_log >= 300:
                 
                 logger.info("="*80)
                 logger.info("🎤 AUDIO SERVICE STATUS")
