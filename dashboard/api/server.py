@@ -630,7 +630,7 @@ def run_server(host='0.0.0.0', port=8080, debug=False):
     """Run the dashboard server with safe fallbacks."""
     start_broadcast_thread()
     try:
-        socketio.run(app, host=host, port=port, debug=debug)
+        socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
     except Exception as e:
         logger.error(f"SocketIO server failed ({e}); falling back to Flask built-in server")
         # Minimal fallback to keep HTTP API reachable
