@@ -1,38 +1,14 @@
-import React, { useEffect, useState, useRef } from 'react'
-import { Users, Music, Volume2, Thermometer, Droplet, Sun, Cloud, Headphones } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { Users, Music, Volume2, Thermometer, Droplet, Sun, Cloud } from 'lucide-react'
 
 export default function LiveOverview({ sensorData }) {
   const [snapshotUrl, setSnapshotUrl] = useState('')
-  const [isListening, setIsListening] = useState(false)
-  const audioRef = useRef(null)
-  
   useEffect(() => {
     const makeUrl = () => `/api/camera/snapshot?ts=${Date.now()}`
     setSnapshotUrl(makeUrl())
     const interval = setInterval(() => setSnapshotUrl(makeUrl()), 3000)
     return () => clearInterval(interval)
   }, [])
-  
-  const toggleAudioStream = () => {
-    if (isListening) {
-      // Stop audio
-      if (audioRef.current) {
-        audioRef.current.pause()
-        audioRef.current.src = ''
-      }
-      setIsListening(false)
-    } else {
-      // Start audio
-      if (audioRef.current) {
-        audioRef.current.src = `/api/audio/stream?t=${Date.now()}`
-        audioRef.current.play().catch(err => {
-          console.error('Error playing audio:', err)
-          setIsListening(false)
-        })
-      }
-      setIsListening(true)
-    }
-  }
   const {
     occupancy = 0,
     entries = 0,
@@ -120,25 +96,9 @@ export default function LiveOverview({ sensorData }) {
         />
         
         <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-3">
-              <Music className="w-8 h-8 text-green-500" />
-              <h3 className="text-lg font-semibold">Now Playing</h3>
-            </div>
-            <button
-              onClick={toggleAudioStream}
-              className={`flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors ${
-                isListening 
-                  ? 'bg-red-600 hover:bg-red-700' 
-                  : 'bg-blue-600 hover:bg-blue-700'
-              }`}
-              title={isListening ? 'Stop listening' : 'Listen live'}
-            >
-              <Headphones className="w-4 h-4" />
-              <span className="text-sm font-medium">
-                {isListening ? 'Stop' : 'Listen'}
-              </span>
-            </button>
+          <div className="flex items-center space-x-3 mb-4">
+            <Music className="w-8 h-8 text-green-500" />
+            <h3 className="text-lg font-semibold">Now Playing</h3>
           </div>
             <div className="space-y-1">
               <p className="font-medium">{current_song?.title || 'No song detected'}</p>
@@ -156,7 +116,6 @@ export default function LiveOverview({ sensorData }) {
                 ) : null}
               </div>
             </div>
-            <audio ref={audioRef} style={{ display: 'none' }} />
         </div>
 
         <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
