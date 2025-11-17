@@ -49,10 +49,10 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Disable all sensors in hub (they run as separate services)
+# Disable audio and camera in hub (they run as separate services)
+# Environmental sensors (BME280, light) run in hub since pulse-environmental.service doesn't exist
 os.environ['PULSE_DISABLE_AUDIO'] = '1'
 os.environ['PULSE_DISABLE_CAMERA'] = '1'
-os.environ['PULSE_DISABLE_ENVIRONMENTAL'] = '1'
 
 def run_hub():
     """Run the hub service"""
