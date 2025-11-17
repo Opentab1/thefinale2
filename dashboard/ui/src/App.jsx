@@ -21,17 +21,36 @@ function App() {
   const [safeMode, setSafeMode] = useState(false)
 
   useEffect(() => {
-    // Connect to WebSocket
-    const newSocket = io(API_URL)
+    // Connect to WebSocket with better reconnection settings
+    const newSocket = io(API_URL, {
+      reconnection: true,
+      reconnectionDelay: 2000,        // Wait 2s before first reconnect attempt
+      reconnectionDelayMax: 10000,    // Max 10s between reconnect attempts
+      reconnectionAttempts: 10,       // Try 10 times before giving up
+      timeout: 20000,                 // 20s connection timeout
+      transports: ['polling', 'websocket'], // Try polling first, then upgrade to websocket
+    })
     
     newSocket.on('connect', () => {
-      console.log('Connected to Pulse Hub')
+      console.log('✅ Connected to Pulse Hub')
       setConnected(true)
     })
     
-    newSocket.on('disconnect', () => {
-      console.log('Disconnected from Pulse Hub')
+    newSocket.on('disconnect', (reason) => {
+      console.log('❌ Disconnected from Pulse Hub:', reason)
       setConnected(false)
+    })
+    
+    newSocket.on('connect_error', (error) => {
+      console.error('Connection error:', error.message)
+    })
+    
+    newSocket.on('reconnect_attempt', (attempt) => {
+      console.log(`🔄 Reconnection attempt ${attempt}...`)
+    })
+    
+    newSocket.on('reconnect', (attemptNumber) => {
+      console.log(`✅ Reconnected after ${attemptNumber} attempts`)
     })
     
     newSocket.on('sensor_update', (data) => {
@@ -47,6 +66,7 @@ function App() {
     const interval = setInterval(fetchSystemStatus, 30000)
     
     return () => {
+      console.log('🛑 Cleaning up socket connection')
       newSocket.close()
       clearInterval(interval)
     }
