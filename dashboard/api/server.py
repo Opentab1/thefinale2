@@ -42,7 +42,15 @@ def _choose_async_mode() -> str:
     # (eventlet/gevent can be enabled later via PULSE_SIO_MODE)
     return 'threading'
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_choose_async_mode())
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins="*", 
+    async_mode=_choose_async_mode(),
+    ping_timeout=120,  # Increase from 60s to 120s
+    ping_interval=25,  # Ping every 25s to keep connection alive
+    logger=False,      # Reduce log noise
+    engineio_logger=False
+)
 
 # Initialize database and health monitor
 db = PulseDB()
@@ -230,17 +238,19 @@ def get_health():
 
 @app.route('/api/audio/stream')
 def audio_stream():
-    """Stream live audio from microphone (simple monitoring)"""
+    """
+    Stream recent audio clips (WITHOUT interfering with song detection)
+    
+    IMPORTANT: We DO NOT open the microphone here! That would conflict with
+    the audio service's song detection. Instead, we serve recent audio recordings.
+    """
     try:
-        import sounddevice as sd
-        import numpy as np
+        import time
+        import glob
         
         def generate_audio():
-            """Generator that yields audio chunks"""
-            sample_rate = 16000  # 16kHz for web streaming
-            block_size = 4096
-            
-            # WAV header for 16-bit PCM audio
+            """Generator that yields recent audio clips on loop"""
+            sample_rate = 44100  # Match song detector sample rate
             import struct
             
             def make_wav_header(sample_rate, channels=1, bits_per_sample=16):
@@ -248,29 +258,57 @@ def audio_stream():
                 block_align = channels * bits_per_sample // 8
                 
                 header = b'RIFF'
-                header += struct.pack('<I', 0)  # Placeholder for file size
+                header += struct.pack('<I', 0)  # Placeholder
                 header += b'WAVE'
                 header += b'fmt '
-                header += struct.pack('<I', 16)  # fmt chunk size
-                header += struct.pack('<H', 1)  # PCM format
+                header += struct.pack('<I', 16)
+                header += struct.pack('<H', 1)  # PCM
                 header += struct.pack('<H', channels)
                 header += struct.pack('<I', sample_rate)
                 header += struct.pack('<I', byte_rate)
                 header += struct.pack('<H', block_align)
                 header += struct.pack('<H', bits_per_sample)
                 header += b'data'
-                header += struct.pack('<I', 0xFFFFFFFF)  # Placeholder for data size
+                header += struct.pack('<I', 0xFFFFFFFF)
                 
                 return header
             
-            # Send WAV header first
+            # Send WAV header
             yield make_wav_header(sample_rate)
             
-            # Stream audio chunks
-            with sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=block_size) as stream:
-                while True:
-                    data, _ = stream.read(block_size)
-                    yield data.tobytes()
+            # Look for recent audio recordings from song detector
+            audio_cache_dir = Path('/tmp')
+            last_file = None
+            
+            while True:
+                try:
+                    # Find most recent .wav file (created by song detector)
+                    wav_files = glob.glob(str(audio_cache_dir / '*.wav'))
+                    if wav_files:
+                        newest_file = max(wav_files, key=lambda f: Path(f).stat().st_mtime)
+                        
+                        # Only serve if file is recent (within last 10 seconds)
+                        file_age = time.time() - Path(newest_file).stat().st_mtime
+                        if file_age < 10 and newest_file != last_file:
+                            last_file = newest_file
+                            
+                            # Read and yield the audio file
+                            try:
+                                with open(newest_file, 'rb') as f:
+                                    # Skip WAV header (44 bytes)
+                                    f.seek(44)
+                                    audio_data = f.read()
+                                    if audio_data:
+                                        yield audio_data
+                            except Exception as e:
+                                logger.debug(f"Error reading audio file: {e}")
+                    
+                    # Wait a bit before checking for new files
+                    time.sleep(0.5)
+                    
+                except Exception as e:
+                    logger.error(f"Error in audio stream loop: {e}")
+                    time.sleep(1)
         
         return Response(generate_audio(), mimetype='audio/wav')
         
