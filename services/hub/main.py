@@ -127,7 +127,10 @@ class PulseHub:
             logger.info("  - Disabled in config")
         
         logger.info("\n🌡️  Initializing BME280 Sensor...")
-        if modules.get('bme280'):
+        # Check if environmental sensors are disabled (for separate service)
+        if os.getenv('PULSE_DISABLE_ENVIRONMENTAL') == '1':
+            logger.info("  - Disabled (running as separate service)")
+        elif modules.get('bme280'):
             try:
                 # BME280Reader will automatically try both 0x76 and 0x77
                 self.bme280 = BME280Reader(address=0x76)
@@ -150,7 +153,10 @@ class PulseHub:
             logger.info("  - Disabled in config")
         
         logger.info("\n💡 Initializing Light Sensor...")
-        if modules.get('light_sensor'):
+        # Check if environmental sensors are disabled (for separate service)
+        if os.getenv('PULSE_DISABLE_ENVIRONMENTAL') == '1':
+            logger.info("  - Disabled (running as separate service)")
+        elif modules.get('light_sensor'):
             try:
                 self.light_sensor = LightSensor()
                 self.health_monitor.register_test("light_sensor", lambda: True)
@@ -592,7 +598,24 @@ class PulseHub:
 
         self._apply_environment_fallback(data)
         
-        if self.light_sensor:
+        # Read environmental sensors OR from cache file (if running as separate service)
+        if os.getenv('PULSE_DISABLE_ENVIRONMENTAL') == '1':
+            # Environmental sensors running as separate service - read from cache file
+            try:
+                import json
+                cache_file = Path("/opt/pulse/data/environmental_cache.json")
+                if cache_file.exists():
+                    with open(cache_file, 'r') as f:
+                        env_data = json.load(f)
+                    data["temperature_f"] = self._sanitize_environment_value(env_data.get("temperature_f"))
+                    data["temperature_c"] = self._sanitize_environment_value(env_data.get("temperature_c"))
+                    data["humidity"] = self._sanitize_environment_value(env_data.get("humidity"))
+                    data["pressure"] = self._sanitize_environment_value(env_data.get("pressure"))
+                    data["light_level"] = self._sanitize_environment_value(env_data.get("light_level"))
+                    logger.info(f"🌡️  Environmental cache: {data.get('temperature_f'):.1f}°F, {data.get('humidity'):.1f}%, {data.get('light_level'):.1f} lux")
+            except Exception as e:
+                logger.error(f"Error reading environmental cache: {e}")
+        elif self.light_sensor:
             data["light_level"] = self._sanitize_environment_value(self.light_sensor.get_light_level())
         
         # Get decibel reading from simple detector OR cache file (if running as separate service)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Pulse Hub Service - Standalone
-Runs hub coordination, dashboard, and environmental sensors
-(Audio and Camera run as separate services)
+Runs ONLY hub coordination, dashboard API, database, and automation
+(Audio, Camera, and Environmental sensors run as separate services)
 """
 
 import logging
@@ -49,22 +49,22 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Disable audio and camera in hub (they run as separate services)
+# Disable all sensors in hub (they run as separate services)
 os.environ['PULSE_DISABLE_AUDIO'] = '1'
 os.environ['PULSE_DISABLE_CAMERA'] = '1'
+os.environ['PULSE_DISABLE_ENVIRONMENTAL'] = '1'
 
 def run_hub():
     """Run the hub service"""
     logger.info("="*80)
     logger.info("🏠 STARTING PULSE HUB")
     logger.info("="*80)
-    logger.info("Note: Audio and Camera run as separate services")
-    logger.info("This service handles:")
-    logger.info("  - Temperature/Humidity (BME280)")
-    logger.info("  - Light Level")
+    logger.info("Note: All sensors run as separate services")
+    logger.info("This service handles ONLY:")
+    logger.info("  - Dashboard API (port 8080)")
     logger.info("  - Database logging")
-    logger.info("  - Dashboard API")
-    logger.info("  - Smart home controls")
+    logger.info("  - Smart home automation")
+    logger.info("  - Reading cache files from sensor services")
     logger.info("="*80)
     
     try:
@@ -116,10 +116,10 @@ def run_dashboard():
 def main():
     """Main entry point"""
     logger.info("\n" + "="*80)
-    logger.info("🏠 PULSE HUB SERVICE - INTEGRATED STARTUP")
+    logger.info("🏠 PULSE HUB SERVICE - STARTING")
     logger.info("="*80)
-    logger.info("Hub + Dashboard + Environmental Sensors")
-    logger.info("(Audio and Camera are separate services)")
+    logger.info("Dashboard + Database + Automation ONLY")
+    logger.info("(All sensors run as separate services)")
     logger.info("="*80 + "\n")
     
     # Create necessary directories

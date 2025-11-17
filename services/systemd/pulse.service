@@ -1,8 +1,8 @@
 [Unit]
 Description=Pulse System (All Services)
 After=network.target
-Requires=network.target pulse-audio.service pulse-camera.service pulse-hub-main.service
-Wants=pulse-audio.service pulse-camera.service pulse-hub-main.service
+Requires=network.target pulse-audio.service pulse-camera.service pulse-environmental.service pulse-hub-main.service
+Wants=pulse-audio.service pulse-camera.service pulse-environmental.service pulse-hub-main.service
 
 [Service]
 Type=oneshot
@@ -11,4 +11,4 @@ RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
-Also=pulse-audio.service pulse-camera.service pulse-hub-main.service
+Also=pulse-audio.service pulse-camera.service pulse-environmental.service pulse-hub-main.service

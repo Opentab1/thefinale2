@@ -1,0 +1,25 @@
+[Unit]
+Description=Pulse Environmental Sensors Service
+Documentation=https://github.com/Opentab1/thefinale2
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse
+ExecStart=/opt/pulse/venv/bin/python /opt/pulse/run_environmental_service.py
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pulse-environmental
+
+[Install]
+WantedBy=pulse.service
