@@ -113,7 +113,7 @@ class SongDetector:
                 # Use arecord command to record audio directly
                 cmd = [
                     'arecord',
-                    '-D', 'default',  # Use default device
+                    '-D', 'plughw:CARD=SF558,DEV=0',  # USB mic with software conversion
                     '-f', 'S16_LE',   # 16-bit signed little-endian
                     '-r', str(self.sample_rate),  # Sample rate
                     '-c', str(self.channels),     # Mono
