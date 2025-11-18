@@ -19,13 +19,10 @@ import subprocess
 import json
 from pathlib import Path
 
-# Try to import sound-related libraries
-try:
-    import sounddevice as sd
-    SOUNDDEVICE_AVAILABLE = True
-except ImportError:
-    SOUNDDEVICE_AVAILABLE = False
-    logging.warning("sounddevice library not available")
+import shutil
+
+# Check if arecord is available (bypass sounddevice/PortAudio)
+ARECORD_AVAILABLE = shutil.which('arecord') is not None
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +37,13 @@ class SongDetector:
             enabled: Whether song detection is enabled
             detection_interval: Seconds between detection attempts (default: 60)
         """
-        self.enabled = enabled and SOUNDDEVICE_AVAILABLE
+        self.enabled = enabled and ARECORD_AVAILABLE
         
         if self.enabled:
-            logger.info("✅ Song detection enabled (detection interval: %ds, crash-proof mode)", detection_interval)
+            logger.info("✅ Song detection enabled (detection interval: %ds, arecord mode)", detection_interval)
         else:
-            if not SOUNDDEVICE_AVAILABLE:
-                logger.warning("⚠️ sounddevice not available. Song detection disabled.")
+            if not ARECORD_AVAILABLE:
+                logger.warning("⚠️ arecord not available. Song detection disabled.")
         
         # Audio parameters
         self.sample_rate = 44100
@@ -109,34 +106,36 @@ class SongDetector:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                 temp_filename = temp_file.name
             
-            # Record audio
-            logger.debug(f"Recording {self.duration}s audio clip...")
+            # Record audio using arecord (bypasses PortAudio completely)
+            logger.debug(f"Recording {self.duration}s audio clip with arecord...")
             
             try:
-                recording = sd.rec(
-                    int(self.duration * self.sample_rate),
-                    samplerate=self.sample_rate,
-                    channels=self.channels,
-                    dtype='int16'
+                # Use arecord command to record audio directly
+                cmd = [
+                    'arecord',
+                    '-D', 'default',  # Use default device
+                    '-f', 'S16_LE',   # 16-bit signed little-endian
+                    '-r', str(self.sample_rate),  # Sample rate
+                    '-c', str(self.channels),     # Mono
+                    '-d', str(self.duration),     # Duration in seconds
+                    temp_filename
+                ]
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.duration + 2
                 )
-                sd.wait()
+                
+                if result.returncode != 0:
+                    logger.error(f"arecord failed: {result.stderr}")
+                    return
+                
+                logger.debug(f"Audio recorded to {temp_filename}")
                 
             except Exception as e:
-                logger.error(f"Error recording audio: {e}")
-                return
-            
-            # Save to WAV file
-            try:
-                with wave.open(temp_filename, 'wb') as wf:
-                    wf.setnchannels(self.channels)
-                    wf.setsampwidth(2)  # 16-bit audio
-                    wf.setframerate(self.sample_rate)
-                    wf.writeframes(recording.tobytes())
-                
-                logger.debug(f"Audio saved to {temp_filename}")
-                
-            except Exception as e:
-                logger.error(f"Error saving audio file: {e}")
+                logger.error(f"Error recording audio with arecord: {e}")
                 return
             
             # Process in subprocess (crash isolation!)
