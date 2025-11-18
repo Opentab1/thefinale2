@@ -77,8 +77,8 @@ def main():
         # Initialize detectors
         logger.info("Initializing audio detectors...")
         
-        decibel_detector = DecibelDetector(enabled=True, update_interval=10, mic_lock=mic_lock)
-        logger.info("✅ Decibel detector initialized")
+        decibel_detector = DecibelDetector(enabled=False, update_interval=10, mic_lock=mic_lock)
+        logger.info("⚠️ Decibel detector disabled (PortAudio conflict)")
         
         song_detector = SongDetector(enabled=True, detection_interval=60, mic_lock=mic_lock)
         logger.info("✅ Song detector initialized")
