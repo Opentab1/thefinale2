@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class DecibelDetector:
     """Simple, reliable decibel level detector"""
     
-    def __init__(self, enabled=True, update_interval=10, reference_pressure=0.00002):
+    def __init__(self, enabled=True, update_interval=10, reference_pressure=0.00002, mic_lock=None):
         """
         Initialize the decibel detector
         
@@ -40,8 +40,10 @@ class DecibelDetector:
             enabled: Whether decibel detection is enabled
             update_interval: Seconds between measurements (default: 10)
             reference_pressure: Reference pressure for dB calculation (default: 0.00002 Pa or 20µPa)
+            mic_lock: Shared lock for mic access (optional)
         """
         self.enabled = enabled and SOUNDDEVICE_AVAILABLE
+        self.mic_lock = mic_lock
         
         if self.enabled:
             logger.info("✅ Decibel detection enabled (update interval: %ds)", update_interval)
@@ -110,13 +112,24 @@ class DecibelDetector:
             logger.debug(f"Recording {self.duration}s audio clip for decibel calculation...")
             
             try:
-                recording = sd.rec(
-                    int(self.duration * self.sample_rate),
-                    samplerate=self.sample_rate,
-                    channels=self.channels,
-                    dtype='float32'
-                )
-                sd.wait()  # Wait for recording to complete
+                # Acquire mic lock if available
+                if self.mic_lock:
+                    acquired = self.mic_lock.acquire(blocking=False)
+                    if not acquired:
+                        logger.debug("Mic busy, skipping this reading")
+                        return
+                
+                try:
+                    recording = sd.rec(
+                        int(self.duration * self.sample_rate),
+                        samplerate=self.sample_rate,
+                        channels=self.channels,
+                        dtype='float32'
+                    )
+                    sd.wait()  # Wait for recording to complete
+                finally:
+                    if self.mic_lock:
+                        self.mic_lock.release()
                 
             except Exception as e:
                 logger.error(f"Error during audio recording: {e}")

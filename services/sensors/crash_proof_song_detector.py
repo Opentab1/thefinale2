@@ -29,15 +29,17 @@ logger = logging.getLogger(__name__)
 class SongDetector:
     """Crash-proof song detector using subprocess isolation"""
     
-    def __init__(self, enabled=True, detection_interval=60):
+    def __init__(self, enabled=True, detection_interval=60, mic_lock=None):
         """
         Initialize the song detector
         
         Args:
             enabled: Whether song detection is enabled
             detection_interval: Seconds between detection attempts (default: 60)
+            mic_lock: Shared lock for mic access (optional)
         """
         self.enabled = enabled and ARECORD_AVAILABLE
+        self.mic_lock = mic_lock
         
         if self.enabled:
             logger.info("✅ Song detection enabled (detection interval: %ds, arecord mode)", detection_interval)
@@ -110,29 +112,37 @@ class SongDetector:
             logger.debug(f"Recording {self.duration}s audio clip with arecord...")
             
             try:
-                # Use arecord command to record audio directly
-                cmd = [
-                    'arecord',
-                    '-D', 'plughw:CARD=SF558,DEV=0',  # USB mic with software conversion
-                    '-f', 'S16_LE',   # 16-bit signed little-endian
-                    '-r', str(self.sample_rate),  # Sample rate
-                    '-c', str(self.channels),     # Mono
-                    '-d', str(self.duration),     # Duration in seconds
-                    temp_filename
-                ]
+                # Acquire mic lock
+                if self.mic_lock:
+                    self.mic_lock.acquire()
                 
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.duration + 2
-                )
-                
-                if result.returncode != 0:
-                    logger.error(f"arecord failed: {result.stderr}")
-                    return
-                
-                logger.debug(f"Audio recorded to {temp_filename}")
+                try:
+                    # Use arecord command to record audio directly
+                    cmd = [
+                        'arecord',
+                        '-D', 'plughw:CARD=SF558,DEV=0',  # USB mic with software conversion
+                        '-f', 'S16_LE',   # 16-bit signed little-endian
+                        '-r', str(self.sample_rate),  # Sample rate
+                        '-c', str(self.channels),     # Mono
+                        '-d', str(self.duration),     # Duration in seconds
+                        temp_filename
+                    ]
+                    
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=self.duration + 2
+                    )
+                    
+                    if result.returncode != 0:
+                        logger.error(f"arecord failed: {result.stderr}")
+                        return
+                    
+                    logger.debug(f"Audio recorded to {temp_filename}")
+                finally:
+                    if self.mic_lock:
+                        self.mic_lock.release()
                 
             except Exception as e:
                 logger.error(f"Error recording audio with arecord: {e}")

@@ -69,14 +69,18 @@ def main():
     try:
         from services.sensors.simple_decibel_detector import DecibelDetector
         from services.sensors.crash_proof_song_detector import SongDetector
+        import threading
+        
+        # Shared lock for mic access
+        mic_lock = threading.Lock()
         
         # Initialize detectors
         logger.info("Initializing audio detectors...")
         
-        decibel_detector = DecibelDetector(enabled=True, update_interval=10)
+        decibel_detector = DecibelDetector(enabled=True, update_interval=10, mic_lock=mic_lock)
         logger.info("✅ Decibel detector initialized")
         
-        song_detector = SongDetector(enabled=True, detection_interval=60)
+        song_detector = SongDetector(enabled=True, detection_interval=60, mic_lock=mic_lock)
         logger.info("✅ Song detector initialized")
         
         logger.info("="*80)
