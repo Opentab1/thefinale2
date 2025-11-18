@@ -17,15 +17,15 @@ import logging
 import threading
 import numpy as np
 import math
+import subprocess
+import tempfile
+import wave
+import os
+import shutil
 from datetime import datetime
 
-# Try to import sound-related libraries
-try:
-    import sounddevice as sd
-    SOUNDDEVICE_AVAILABLE = True
-except ImportError:
-    SOUNDDEVICE_AVAILABLE = False
-    logging.warning("sounddevice library not available. Install with 'pip install sounddevice'")
+# Check if arecord is available
+ARECORD_AVAILABLE = shutil.which('arecord') is not None
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +42,14 @@ class DecibelDetector:
             reference_pressure: Reference pressure for dB calculation (default: 0.00002 Pa or 20µPa)
             mic_lock: Shared lock for mic access (optional)
         """
-        self.enabled = enabled and SOUNDDEVICE_AVAILABLE
+        self.enabled = enabled and ARECORD_AVAILABLE
         self.mic_lock = mic_lock
         
         if self.enabled:
-            logger.info("✅ Decibel detection enabled (update interval: %ds)", update_interval)
+            logger.info("✅ Decibel detection enabled (update interval: %ds, arecord mode)", update_interval)
         else:
-            if not SOUNDDEVICE_AVAILABLE:
-                logger.warning("⚠️ sounddevice not available. Decibel detection disabled.")
+            if not ARECORD_AVAILABLE:
+                logger.warning("⚠️ arecord not available. Decibel detection disabled.")
         
         # Audio parameters
         self.sample_rate = 44100
@@ -120,13 +120,35 @@ class DecibelDetector:
                         return
                 
                 try:
-                    recording = sd.rec(
-                        int(self.duration * self.sample_rate),
-                        samplerate=self.sample_rate,
-                        channels=self.channels,
-                        dtype='float32'
-                    )
-                    sd.wait()  # Wait for recording to complete
+                    # Create temp file for recording
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                        temp_filename = temp_file.name
+                    
+                    # Record with arecord
+                    cmd = [
+                        'arecord',
+                        '-D', 'plughw:CARD=SF558,DEV=0',
+                        '-f', 'S16_LE',
+                        '-r', str(self.sample_rate),
+                        '-c', str(self.channels),
+                        '-d', str(self.duration),
+                        temp_filename
+                    ]
+                    
+                    result = subprocess.run(cmd, capture_output=True, timeout=self.duration + 2)
+                    
+                    if result.returncode != 0:
+                        logger.error(f"arecord failed: {result.stderr}")
+                        return
+                    
+                    # Read WAV file
+                    with wave.open(temp_filename, 'rb') as wf:
+                        frames = wf.readframes(wf.getnframes())
+                        recording = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+                    
+                    # Clean up temp file
+                    os.remove(temp_filename)
+                    
                 finally:
                     if self.mic_lock:
                         self.mic_lock.release()
