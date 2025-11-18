@@ -68,7 +68,7 @@ def main():
     
     try:
         from services.sensors.simple_decibel_detector import DecibelDetector
-        from services.sensors.simple_song_detector import SongDetector
+        from services.sensors.crash_proof_song_detector import SongDetector
         
         # Initialize detectors
         logger.info("Initializing audio detectors...")
