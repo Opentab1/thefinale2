@@ -232,12 +232,16 @@ class SongDetector:
             
             # Open file and format exactly as API docs specify
             filename = os.path.basename(audio_file)
+            
+            # Try to read file and send with explicit content type
             with open(audio_file, 'rb') as f:
-                # Format: {'file': (filename, file_object, mime_type)}
-                files = {'file': (filename, f, 'audio/wav')}
-                
-                # POST request with 15 second timeout
-                response = requests.post(url, files=files, headers=headers, timeout=15.0)
+                file_content = f.read()
+            
+            # Use explicit tuple format with filename ending in .wav
+            files = {'file': (f'{filename}.wav' if not filename.endswith('.wav') else filename, file_content, 'audio/wav')}
+            
+            # POST request with 15 second timeout
+            response = requests.post(url, files=files, headers=headers, timeout=15.0)
             
             # Check response status
             if response.status_code == 200:
