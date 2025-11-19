@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-simple_song_detector.py - Simple, reliable song detection using ShazamIO
+simple_song_detector.py - Simple, reliable song detection using RapidAPI Shazam Core
 
-Based on proven party_box approach:
-- Fresh event loop created for EACH Shazam API call
-- Event loop closed immediately after use
-- No long-lived event loops (prevents staleness)
+Based on proven Nov 5th architecture with RapidAPI integration:
+- Simple HTTP POST requests (no async complexity)
+- Official Shazam Core API via RapidAPI
+- No rate limits with paid tier
 - Simple daemon thread (no complex watchdogs)
 
-This approach is proven to run indefinitely on Raspberry Pi without failures.
+This approach provides unlimited, reliable song detection 24/7.
 """
 
 import time
@@ -27,18 +27,20 @@ except ImportError:
     SOUNDDEVICE_AVAILABLE = False
     logging.warning("sounddevice library not available. Install with 'pip install sounddevice'")
 
-# Try to import ShazamIO
+# Try to import requests for RapidAPI
 try:
-    from shazamio import Shazam
-    SHAZAMIO_AVAILABLE = True
+    import requests
+    RAPIDAPI_AVAILABLE = True
+    RAPIDAPI_KEY = "de528fdc31mshb7f88b1b939f9b7p1db4cejsn1e64b438f142"
 except ImportError:
-    SHAZAMIO_AVAILABLE = False
-    logging.warning("ShazamIO library not available. Install with 'pip install shazamio'")
+    RAPIDAPI_AVAILABLE = False
+    RAPIDAPI_KEY = None
+    logging.warning("requests library not available. Install with 'pip install requests'")
 
 logger = logging.getLogger(__name__)
 
 class SongDetector:
-    """Simple, reliable song detector using ShazamIO with fresh event loops"""
+    """Simple, reliable song detector using RapidAPI Shazam Core"""
     
     def __init__(self, enabled=True, detection_interval=60):
         """
@@ -48,13 +50,13 @@ class SongDetector:
             enabled: Whether song detection is enabled
             detection_interval: Seconds between detection attempts (default: 60)
         """
-        self.enabled = enabled and SOUNDDEVICE_AVAILABLE and SHAZAMIO_AVAILABLE
+        self.enabled = enabled and SOUNDDEVICE_AVAILABLE and RAPIDAPI_AVAILABLE
         
         if self.enabled:
             logger.info("✅ Song detection enabled (detection interval: %ds)", detection_interval)
         else:
-            if not SHAZAMIO_AVAILABLE:
-                logger.warning("⚠️ ShazamIO not available. Song detection disabled.")
+            if not RAPIDAPI_AVAILABLE:
+                logger.warning("⚠️ RapidAPI not available. Song detection disabled.")
             if not SOUNDDEVICE_AVAILABLE:
                 logger.warning("⚠️ sounddevice not available. Song detection disabled.")
         
@@ -162,24 +164,17 @@ class SongDetector:
     
     def _process_audio_file(self, audio_file):
         """
-        Process audio file with ShazamIO
+        Process audio file with RapidAPI Shazam Core
         
-        KEY APPROACH (from party_box):
-        - Create FRESH event loop for this operation
-        - Run recognition
-        - Close loop immediately
-        - No long-lived loops = no staleness
+        KEY APPROACH:
+        - Simple HTTP POST to RapidAPI
+        - No async complexity
+        - Official Shazam database
+        - No rate limits (paid tier)
         """
         try:
-            # ✅ CREATE FRESH EVENT LOOP (party_box proven approach)
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            # Run Shazam recognition
-            result = loop.run_until_complete(self._recognize_song(audio_file))
-            
-            # ✅ CLOSE LOOP IMMEDIATELY (prevents staleness)
-            loop.close()
+            # Call RapidAPI (simple HTTP, no async/event loop needed)
+            result = self._recognize_song(audio_file)
             
             # Process result
             if result and 'track' in result:
@@ -213,30 +208,52 @@ class SongDetector:
             except:
                 pass
     
-    async def _recognize_song(self, audio_file):
+    def _recognize_song(self, audio_file):
         """
-        Recognize song using ShazamIO (async)
+        Recognize song using RapidAPI Shazam Core
         
-        Creates fresh Shazam instance for each call (no reuse)
+        API Documentation: https://rapidapi.com/tipsters/api/shazam-core
+        File format: {'file': (filename, file_object, 'audio/wav')}
+        Optimal: 2-4 seconds, 500-1500 KB, max 2 MB
         """
         try:
-            # Fresh Shazam instance for this call
-            shazam = Shazam()
+            url = "https://shazam-core.p.rapidapi.com/v1/tracks/recognize"
             
-            # Add timeout to prevent hanging
-            result = await asyncio.wait_for(
-                shazam.recognize(audio_file),
-                timeout=15.0
-            )
+            headers = {
+                "X-RapidAPI-Key": RAPIDAPI_KEY,
+                "X-RapidAPI-Host": "shazam-core.p.rapidapi.com"
+            }
             
-            return result
+            # Open file and format exactly as API docs specify
+            filename = os.path.basename(audio_file)
+            with open(audio_file, 'rb') as f:
+                # Format: {'file': (filename, file_object, mime_type)}
+                files = {'file': (filename, f, 'audio/wav')}
+                
+                # POST request with 15 second timeout
+                response = requests.post(url, files=files, headers=headers, timeout=15.0)
             
-        except asyncio.TimeoutError:
-            logger.warning("⚠️ Shazam recognition timed out after 15s")
+            # Check response status
+            if response.status_code == 200:
+                result = response.json()
+                logger.debug(f"✅ RapidAPI Success: {response.status_code}")
+                return result
+            else:
+                logger.warning(f"⚠️ RapidAPI returned status {response.status_code}")
+                logger.debug(f"Response: {response.text[:200]}")
+                return None
+            
+        except requests.Timeout:
+            logger.warning("⚠️ RapidAPI recognition timed out after 15s")
+            return None
+            
+        except requests.RequestException as e:
+            logger.error(f"RapidAPI request error: {e}")
             return None
             
         except Exception as e:
-            logger.error(f"Shazam recognition error: {e}")
+            logger.error(f"RapidAPI recognition error: {e}")
+            logger.exception(e)
             return None
     
     def get_latest_song(self):
