@@ -1,14 +1,16 @@
 [Unit]
 Description=Pulse System (All Services)
-After=network.target
-Requires=network.target pulse-audio.service pulse-camera.service pulse-environmental.service pulse-hub-main.service
-Wants=pulse-audio.service pulse-camera.service pulse-environmental.service pulse-hub-main.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-Type=oneshot
-ExecStart=/bin/true
-RemainAfterExit=yes
+Type=simple
+User=pi
+WorkingDirectory=/opt/pulse
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/pulse/.venv/bin/python /opt/pulse/run_pulse_system.py
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-Also=pulse-audio.service pulse-camera.service pulse-environmental.service pulse-hub-main.service
