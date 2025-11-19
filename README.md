@@ -189,6 +189,28 @@ sudo systemctl restart pulse.service
 
 ---
 
+## 🧪 Testing & Diagnostics
+
+- Quick song attempt without the daemon:
+  ```bash
+  cd /opt/pulse
+  python3 tools/song_detection_cli.py --log-level DEBUG
+  ```
+
+- Full diagnostic sweep (mic, config, RapidAPI, Shazam):
+  ```bash
+  cd /opt/pulse
+  python3 diagnose_song_detection.py
+  ```
+
+- Burn-in both services (default 15 min, logs land in `logs/burn_in_*.log`):
+  ```bash
+  cd /opt/pulse
+  python3 tools/burn_in_test.py --duration 3600 --audio --camera
+  ```
+
+---
+
 ## 🔍 Troubleshooting
 
 ### Services won't start

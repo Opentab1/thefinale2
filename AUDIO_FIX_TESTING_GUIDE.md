@@ -309,6 +309,23 @@ cd /opt/pulse
 python3 tools/song_detection_cli.py --log-level DEBUG
 ```
 
+### Burn-In / Soak Test (Audio + Camera)
+
+Once the quick checks pass, let both services run under supervision:
+
+```bash
+cd /opt/pulse
+# 1-hour burn-in for audio + camera
+python3 tools/burn_in_test.py --duration 3600 --audio --camera
+
+# Audio-only or camera-only runs:
+python3 tools/burn_in_test.py --duration 1800 --audio-only
+# or
+python3 tools/burn_in_test.py --duration 1800 --camera-only
+```
+
+Logs land in `logs/burn_in_audio.log` and `logs/burn_in_camera.log`. The script exits non‑zero if either service dies early.
+
 ### Problem: Service Won't Start
 
 **Check:**
