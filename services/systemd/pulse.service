@@ -8,7 +8,7 @@ Type=simple
 User=pi
 WorkingDirectory=/opt/pulse
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/pulse/.venv/bin/python /opt/pulse/run_pulse_system.py
+ExecStart=/opt/pulse/venv/bin/python /opt/pulse/run_pulse_system.py
 Restart=always
 RestartSec=5
 
