@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-simple_song_detector.py - Simple, reliable song detection using RapidAPI Shazam Core
+simple_song_detector.py - Crash-proof song detection using RapidAPI Shazam Core
 
-Based on proven Nov 5th architecture with RapidAPI integration:
-- Simple HTTP POST requests (no async complexity)
-- Official Shazam Core API via RapidAPI
+Based on proven Nov 5th architecture with critical fixes:
+- Uses arecord instead of sounddevice (bypasses PortAudio SIGABRT bug)
+- RapidAPI Shazam Core for unlimited detection
 - No rate limits with paid tier
-- Simple daemon thread (no complex watchdogs)
+- Stable 24/7 operation without crashes
 
-This approach provides unlimited, reliable song detection 24/7.
+This approach provides unlimited, reliable, CRASH-FREE song detection.
 """
 
 import time
@@ -18,14 +18,15 @@ import asyncio
 import wave
 import tempfile
 import os
+import subprocess
 
-# Try to import sound-related libraries
+# Check if arecord is available (always should be on Linux)
+ARECORD_AVAILABLE = True
 try:
-    import sounddevice as sd
-    SOUNDDEVICE_AVAILABLE = True
-except ImportError:
-    SOUNDDEVICE_AVAILABLE = False
-    logging.warning("sounddevice library not available. Install with 'pip install sounddevice'")
+    subprocess.run(['which', 'arecord'], capture_output=True, check=True)
+except (subprocess.CalledProcessError, FileNotFoundError):
+    ARECORD_AVAILABLE = False
+    logging.warning("arecord not available. Install alsa-utils package.")
 
 # Try to import requests for RapidAPI
 try:
@@ -50,15 +51,15 @@ class SongDetector:
             enabled: Whether song detection is enabled
             detection_interval: Seconds between detection attempts (default: 60)
         """
-        self.enabled = enabled and SOUNDDEVICE_AVAILABLE and RAPIDAPI_AVAILABLE
+        self.enabled = enabled and ARECORD_AVAILABLE and RAPIDAPI_AVAILABLE
         
         if self.enabled:
             logger.info("✅ Song detection enabled (detection interval: %ds)", detection_interval)
         else:
             if not RAPIDAPI_AVAILABLE:
                 logger.warning("⚠️ RapidAPI not available. Song detection disabled.")
-            if not SOUNDDEVICE_AVAILABLE:
-                logger.warning("⚠️ sounddevice not available. Song detection disabled.")
+            if not ARECORD_AVAILABLE:
+                logger.warning("⚠️ arecord not available. Song detection disabled.")
         
         # Audio parameters
         self.sample_rate = 44100
@@ -121,34 +122,33 @@ class SongDetector:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                 temp_filename = temp_file.name
             
-            # Record audio
+            # Record audio using arecord (bypasses PortAudio bug)
             logger.debug(f"Recording {self.duration}s audio clip for song detection...")
             
             try:
-                recording = sd.rec(
-                    int(self.duration * self.sample_rate),
-                    samplerate=self.sample_rate,
-                    channels=self.channels,
-                    dtype='int16'
-                )
-                sd.wait()  # Wait for recording to complete
+                # Use arecord to record directly to WAV file
+                # plughw:2,0 = USB mic (card 2: SF-558)
+                result = subprocess.run([
+                    'arecord',
+                    '-D', 'plughw:2,0',  # USB microphone
+                    '-f', 'S16_LE',      # 16-bit signed little-endian
+                    '-c', '1',            # Mono (1 channel)
+                    '-r', '44100',        # 44.1kHz sample rate
+                    '-d', str(self.duration),  # Duration in seconds
+                    temp_filename         # Output file
+                ], capture_output=True, timeout=self.duration + 2)
                 
-            except Exception as e:
-                logger.error(f"Error recording audio: {e}")
-                return
-            
-            # Save to WAV file
-            try:
-                with wave.open(temp_filename, 'wb') as wf:
-                    wf.setnchannels(self.channels)
-                    wf.setsampwidth(2)  # 16-bit audio
-                    wf.setframerate(self.sample_rate)
-                    wf.writeframes(recording.tobytes())
+                if result.returncode != 0:
+                    logger.error(f"arecord failed: {result.stderr.decode()}")
+                    return
                 
                 logger.debug(f"Audio saved to {temp_filename}")
                 
+            except subprocess.TimeoutExpired:
+                logger.error(f"arecord timed out after {self.duration + 2}s")
+                return
             except Exception as e:
-                logger.error(f"Error saving audio file: {e}")
+                logger.error(f"Error recording audio: {e}")
                 return
             
             # Process in a separate thread to avoid blocking
