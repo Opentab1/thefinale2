@@ -75,6 +75,17 @@ class SongDetector:
         self.last_detection_time = 0
         self.detection_interval = detection_interval
         
+        # 24/7 Operation tracking
+        self.total_attempts = 0
+        self.successful_detections = 0
+        self.failed_attempts = 0
+        self.api_errors = 0
+        self.last_api_error_time = 0
+        
+        # Rate limiting / backoff
+        self.consecutive_failures = 0
+        self.backoff_until = 0  # Timestamp when to resume after backoff
+        
         # Lock for thread safety
         self.lock = threading.Lock()
         
@@ -96,16 +107,29 @@ class SongDetector:
     
     def _detection_loop(self):
         """Background thread for periodic song detection"""
-        logger.info("🎵 Song detection loop started")
+        logger.info("🎵 Song detection loop started (24/7 operation mode)")
         
         while self.detection_active:
             try:
-                # Check if it's time for a new detection
                 current_time = time.time()
+                
+                # Check if we're in backoff period (rate limiting recovery)
+                if current_time < self.backoff_until:
+                    time.sleep(5)
+                    continue
+                
+                # Check if it's time for a new detection
                 if current_time - self.last_detection_time >= self.detection_interval:
                     logger.info("🎵 Starting song recognition...")
                     self.detect_song()
                     self.last_detection_time = current_time
+                    
+                    # Log stats every 100 attempts for 24/7 monitoring
+                    if self.total_attempts > 0 and self.total_attempts % 100 == 0:
+                        success_rate = (self.successful_detections / self.total_attempts) * 100
+                        logger.info(f"📊 24/7 Stats: {self.total_attempts} attempts, "
+                                   f"{self.successful_detections} songs ({success_rate:.1f}%), "
+                                   f"{self.failed_attempts} failed, {self.api_errors} API errors")
                 
                 # Sleep to avoid consuming CPU
                 time.sleep(5)
@@ -121,6 +145,10 @@ class SongDetector:
         
         # Record the attempt time BEFORE trying
         attempt_time = time.time()
+        
+        # Increment attempt counter for 24/7 tracking
+        with self.lock:
+            self.total_attempts += 1
             
         try:
             # Create temporary file for the recording
@@ -206,6 +234,8 @@ class SongDetector:
                         "timestamp": time.time(),
                         "last_attempt_time": attempt_time
                     }
+                    self.successful_detections += 1
+                    self.consecutive_failures = 0  # Reset failure counter on success
                 
                 logger.info(f"🎵 Song detected: {title} by {artist}")
             else:
@@ -222,6 +252,19 @@ class SongDetector:
                 
         except Exception as e:
             logger.error(f"Error processing audio: {e}")
+            
+            # Track failures for 24/7 monitoring
+            with self.lock:
+                self.failed_attempts += 1
+                self.consecutive_failures += 1
+                
+                # If too many consecutive failures, enter backoff period
+                if self.consecutive_failures >= 5:
+                    backoff_duration = min(300, self.consecutive_failures * 60)  # Max 5 min
+                    self.backoff_until = time.time() + backoff_duration
+                    logger.warning(f"⚠️ {self.consecutive_failures} consecutive failures. "
+                                 f"Backing off for {backoff_duration}s to protect API.")
+            
             # Clean up on error
             try:
                 if os.path.exists(audio_file):
@@ -249,16 +292,32 @@ class SongDetector:
             
         except asyncio.TimeoutError:
             logger.warning("⚠️ Shazam recognition timed out after 15s")
+            with self.lock:
+                self.api_errors += 1
+                self.last_api_error_time = time.time()
             return None
             
         except Exception as e:
             logger.error(f"Shazam recognition error: {e}")
+            with self.lock:
+                self.api_errors += 1
+                self.last_api_error_time = time.time()
             return None
     
     def get_latest_song(self):
         """Get the latest detected song information"""
         with self.lock:
-            return self.latest_song.copy()
+            # Include 24/7 operation stats
+            song_data = self.latest_song.copy()
+            song_data['stats'] = {
+                'total_attempts': self.total_attempts,
+                'successful_detections': self.successful_detections,
+                'failed_attempts': self.failed_attempts,
+                'api_errors': self.api_errors,
+                'success_rate': (self.successful_detections / self.total_attempts * 100) 
+                               if self.total_attempts > 0 else 0
+            }
+            return song_data
     
     def get_current_song(self):
         """Get current song (for backward compatibility)"""
