@@ -56,7 +56,7 @@ class DecibelDetector:
         # Audio parameters
         self.sample_rate = 44100
         self.channels = 1
-        self.duration = 0.2  # Short recording (0.2s) to avoid conflicts
+        self.duration = 1  # 1 second recording (arecord requires integer seconds)
         self.reference_pressure = reference_pressure
         
         # Detection state
