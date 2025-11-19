@@ -93,6 +93,21 @@ class SongDetector:
             )
             self.detection_thread.start()
             logger.info("✅ Song detection thread started")
+
+    def _update_last_attempt(self, attempt_time: float):
+        """Record the timestamp of the latest detection attempt."""
+        with self.lock:
+            self.latest_song["last_attempt_time"] = attempt_time
+
+    def _safe_remove_file(self, path: str):
+        """Remove a temporary file, ignoring errors."""
+        if not path:
+            return
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as exc:
+            logger.debug(f"Unable to remove temp file {path}: {exc}")
     
     def _detection_loop(self):
         """Background thread for periodic song detection"""
@@ -118,10 +133,11 @@ class SongDetector:
         """Record audio and detect song"""
         if not self.enabled:
             return
-        
-        # Record the attempt time BEFORE trying
+
         attempt_time = time.time()
-            
+        self._update_last_attempt(attempt_time)
+        temp_filename = None
+
         try:
             # Create temporary file for the recording
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
@@ -141,6 +157,7 @@ class SongDetector:
                 
             except Exception as e:
                 logger.error(f"Error recording audio: {e}")
+                self._safe_remove_file(temp_filename)
                 return
             
             # Save to WAV file
@@ -155,20 +172,22 @@ class SongDetector:
                 
             except Exception as e:
                 logger.error(f"Error saving audio file: {e}")
+                self._safe_remove_file(temp_filename)
                 return
             
             # Process in a separate thread to avoid blocking
             processing_thread = threading.Thread(
                 target=self._process_audio_file,
-                args=(temp_filename,),
+                args=(temp_filename, attempt_time),
                 daemon=True
             )
             processing_thread.start()
             
         except Exception as e:
             logger.error(f"Error in detect_song: {e}")
-    
-    def _process_audio_file(self, audio_file):
+            self._safe_remove_file(temp_filename)
+
+    def _process_audio_file(self, audio_file, attempt_time):
         """
         Process audio file with ShazamIO
         
@@ -178,17 +197,12 @@ class SongDetector:
         - Close loop immediately
         - No long-lived loops = no staleness
         """
+        loop = None
         try:
-            # ✅ CREATE FRESH EVENT LOOP (party_box proven approach)
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
-            # Run Shazam recognition
             result = loop.run_until_complete(self._recognize_song(audio_file))
-            
-            # ✅ CLOSE LOOP IMMEDIATELY (prevents staleness)
-            loop.close()
-            
+
             # Process result
             if result and 'track' in result:
                 track = result['track']
@@ -206,8 +220,7 @@ class SongDetector:
                 logger.info(f"🎵 Song detected: {title} by {artist}")
             else:
                 # No song detected, but still update attempt time
-                with self.lock:
-                    self.latest_song["last_attempt_time"] = attempt_time
+                self._update_last_attempt(attempt_time)
                 logger.debug("🎵 No song detected")
             
             # Clean up temporary file
@@ -219,11 +232,13 @@ class SongDetector:
         except Exception as e:
             logger.error(f"Error processing audio: {e}")
             # Clean up on error
-            try:
-                if os.path.exists(audio_file):
-                    os.remove(audio_file)
-            except:
-                pass
+        finally:
+            if loop is not None:
+                try:
+                    loop.close()
+                except Exception as exc:
+                    logger.debug(f"Event loop close failed: {exc}")
+            self._safe_remove_file(audio_file)
     
     async def _recognize_song(self, audio_file):
         """
