@@ -70,7 +70,9 @@ def run_hub():
     try:
         from services.hub.main import PulseHub
         
-        hub = PulseHub()
+        # Use local config path
+        config_path = PULSE_ROOT / "config" / "config.yaml"
+        hub = PulseHub(config_path=str(config_path))
         hub.start()
         
         # Store hub instance for dashboard
@@ -122,9 +124,11 @@ def main():
     logger.info("(All sensors run as separate services)")
     logger.info("="*80 + "\n")
     
-    # Create necessary directories
-    os.makedirs("/var/log/pulse", exist_ok=True)
-    os.makedirs("/opt/pulse/data", exist_ok=True)
+    # Create necessary directories (use local paths in dev mode)
+    log_dir = PULSE_ROOT / "logs" if PULSE_ROOT != Path('/opt/pulse') else Path("/var/log/pulse")
+    data_dir = PULSE_ROOT / "data" if PULSE_ROOT != Path('/opt/pulse') else Path("/opt/pulse/data")
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(data_dir, exist_ok=True)
     
     # Start hub in separate thread
     hub_thread = Thread(target=run_hub, daemon=True, name="HubThread")

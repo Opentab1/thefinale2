@@ -207,9 +207,9 @@ class PulseDB:
             else:
                 cursor.execute('''
                     SELECT SUM(count) as total FROM (
-                        SELECT DISTINCT ON (zone) count, zone 
+                        SELECT count, zone, MAX(timestamp) as max_ts
                         FROM occupancy 
-                        ORDER BY zone, timestamp DESC
+                        GROUP BY zone
                     )
                 ''')
             result = cursor.fetchone()
