@@ -216,6 +216,35 @@ sudo systemctl restart pulse.service
 
 ---
 
+## ⚡ Optional: Hailo AI Hat Setup
+
+If you have the official Hailo AI hat attached (Raspberry Pi 5), install Hailo’s runtime **after**
+running `./install.sh`:
+
+```bash
+# Remove any stale hailo list that points to “bookworm”
+sudo rm /etc/apt/sources.list.d/hailo*.list 2>/dev/null
+
+# Add Hailo’s published repo (currently bullseye)
+echo "deb https://hailo-files.s3.eu-west-2.amazonaws.com/debian bullseye main" | \
+  sudo tee /etc/apt/sources.list.d/hailo.list
+
+sudo apt update
+sudo apt install hailort hailort-tools
+```
+
+Verify the hat is detected:
+
+```bash
+hailortcli fw-control identify
+ls /dev/hailo0
+```
+
+When `/dev/hailo0` exists the people detector automatically switches to the Hailo backend (`model_type="hailo"`),
+so entries/exits and doorway stats use the accelerator without any extra configuration.
+
+---
+
 ## 🔍 Troubleshooting
 
 ### Services won't start
