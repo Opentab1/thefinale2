@@ -29,9 +29,24 @@ from sensors.pan_tilt import PanTiltController
 logger = logging.getLogger(__name__)
 
 class PulseHub:
-    def __init__(self, config_path: str = "/opt/pulse/config/config.yaml"):
+    def __init__(self, config_path: str = None):
+        # Auto-detect config path
+        if config_path is None:
+            # Try workspace first, then /opt/pulse
+            if Path("/workspace/config/config.yaml").exists():
+                config_path = "/workspace/config/config.yaml"
+            else:
+                config_path = "/opt/pulse/config/config.yaml"
         self.config_path = config_path
         self.config = self._load_config()
+        
+        # Auto-detect data directory
+        if Path("/workspace/data").exists():
+            self.data_dir = Path("/workspace/data")
+        else:
+            self.data_dir = Path("/opt/pulse/data")
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        
         self.db = PulseDB()
         self.health_monitor = HealthMonitor()
         
@@ -490,7 +505,7 @@ class PulseHub:
             # Camera is running as separate service - read from cache file
             try:
                 import json
-                cache_file = Path("/opt/pulse/data/people_cache.json")
+                cache_file = self.data_dir / "people_cache.json"
                 if cache_file.exists():
                     with open(cache_file, 'r') as f:
                         cache_data = json.load(f)
@@ -603,7 +618,7 @@ class PulseHub:
             # Environmental sensors running as separate service - read from cache file
             try:
                 import json
-                cache_file = Path("/opt/pulse/data/environmental_cache.json")
+                cache_file = self.data_dir / "environmental_cache.json"
                 if cache_file.exists():
                     with open(cache_file, 'r') as f:
                         env_data = json.load(f)
@@ -627,7 +642,7 @@ class PulseHub:
             # Audio is running as separate service - read from cache file
             try:
                 import json
-                cache_file = Path("/opt/pulse/data/decibel_cache.json")
+                cache_file = self.data_dir / "decibel_cache.json"
                 if cache_file.exists():
                     with open(cache_file, 'r') as f:
                         reading = json.load(f)
@@ -656,7 +671,7 @@ class PulseHub:
             # Audio is running as separate service - read from cache file
             try:
                 import json
-                cache_file = Path("/opt/pulse/data/song_cache.json")
+                cache_file = self.data_dir / "song_cache.json"
                 if cache_file.exists():
                     with open(cache_file, 'r') as f:
                         song_data = json.load(f)
