@@ -154,7 +154,8 @@ sudo systemctl restart pulse-environmental
 │   └── api/                      # Flask backend
 │
 └── config/
-    └── config.yaml               # System configuration
+    ├── config.yaml               # Core system configuration
+    └── song_detection.json       # Audio provider + RapidAPI settings
 ```
 
 ---
@@ -175,6 +176,10 @@ smart_integrations:
   nest: false          # Nest thermostat
   spotify: false       # Spotify control
 ```
+
+Song detection specifics (provider, recording duration, RapidAPI host/key) live in
+`/opt/pulse/config/song_detection.json`. Set the `api_key` there or export the
+environment variable referenced by `api_key_env` (defaults to `PULSE_RAPIDAPI_KEY`).
 
 After changing config:
 

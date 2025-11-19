@@ -278,7 +278,12 @@ class RapidAPIRecognizer(SongRecognizer):
 class SongDetector:
     """Song detector that can use ShazamIO or RapidAPI."""
 
-    def __init__(self, enabled: bool = True, detection_interval: Optional[int] = 60):
+    def __init__(
+        self,
+        enabled: bool = True,
+        detection_interval: Optional[int] = 60,
+        auto_start: bool = True,
+    ):
         self.lock = threading.Lock()
         self.config, self.config_path = load_song_config()
 
@@ -330,11 +335,12 @@ class SongDetector:
             "config_path": str(self.config_path) if self.config_path else None,
         }
 
+        self.auto_start = auto_start
         self.detection_thread: Optional[threading.Thread] = None
         self.detection_active = False
         self.last_detection_time = 0.0
 
-        if self.enabled:
+        if self.enabled and self.auto_start:
             logger.info(
                 "✅ Song detection enabled via %s (interval=%ss, sample_rate=%s)",
                 self.provider,
@@ -342,7 +348,7 @@ class SongDetector:
                 self.sample_rate,
             )
             self.start_detection_thread()
-        else:
+        elif not self.enabled:
             logger.warning("Song detection disabled (provider=%s)", self.provider)
 
     def _build_recognizer(self, provider: str) -> Optional[SongRecognizer]:
@@ -385,6 +391,34 @@ class SongDetector:
                 os.remove(path)
         except Exception as exc:
             logger.debug(f"Unable to remove temp file {path}: {exc}")
+
+    def _record_audio_clip(self) -> Optional[str]:
+        temp_filename: Optional[str] = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_filename = temp_file.name
+
+            logger.debug("Recording %ds audio clip for song detection...", self.duration)
+            recording = sd.rec(
+                int(self.duration * self.sample_rate),
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype="int16",
+            )
+            sd.wait()
+
+            with wave.open(temp_filename, "wb") as wf:
+                wf.setnchannels(self.channels)
+                wf.setsampwidth(2)
+                wf.setframerate(self.sample_rate)
+                wf.writeframes(recording.tobytes())
+
+            return temp_filename
+
+        except Exception as exc:
+            logger.error(f"Error recording audio: {exc}")
+            self._safe_remove_file(temp_filename)
+            return None
 
     def _in_cooldown(self) -> bool:
         if not self.cooldown_until:
@@ -429,38 +463,30 @@ class SongDetector:
 
         attempt_time = time.time()
         self._update_last_attempt(attempt_time)
-        temp_filename = None
+        temp_filename = self._record_audio_clip()
+        if not temp_filename:
+            self._record_failure("Recording failed")
+            return
 
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                temp_filename = temp_file.name
+        processing_thread = threading.Thread(
+            target=self._process_audio_file,
+            args=(temp_filename, attempt_time),
+            daemon=True,
+        )
+        processing_thread.start()
 
-            logger.debug("Recording %ds audio clip for song detection...", self.duration)
-
-            recording = sd.rec(
-                int(self.duration * self.sample_rate),
-                samplerate=self.sample_rate,
-                channels=self.channels,
-                dtype="int16",
-            )
-            sd.wait()
-
-            with wave.open(temp_filename, "wb") as wf:
-                wf.setnchannels(self.channels)
-                wf.setsampwidth(2)
-                wf.setframerate(self.sample_rate)
-                wf.writeframes(recording.tobytes())
-
-            processing_thread = threading.Thread(
-                target=self._process_audio_file,
-                args=(temp_filename, attempt_time),
-                daemon=True,
-            )
-            processing_thread.start()
-
-        except Exception as exc:
-            logger.error(f"Error in detect_song: {exc}")
-            self._safe_remove_file(temp_filename)
+    def detect_song_blocking(self) -> Dict[str, Any]:
+        """Record and detect synchronously (for CLI/testing)."""
+        if not self.recognizer:
+            raise SongRecognitionError("Song recognizer not configured")
+        attempt_time = time.time()
+        self._update_last_attempt(attempt_time)
+        temp_filename = self._record_audio_clip()
+        if not temp_filename:
+            self._record_failure("Recording failed")
+            return self.get_latest_song()
+        self._process_audio_file(temp_filename, attempt_time)
+        return self.get_latest_song()
 
     def _process_audio_file(self, audio_file: str, attempt_time: float):
         try:

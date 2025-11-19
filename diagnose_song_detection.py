@@ -10,6 +10,18 @@ import subprocess
 import json
 from pathlib import Path
 import time
+import tempfile
+import wave
+
+REPO_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "services"))
+
+from services.sensors.simple_song_detector import (  # noqa: E402
+    load_song_config,
+    RapidAPIRecognizer,
+    SongRecognitionError,
+)
 
 print("="*80)
 print("🎵 PULSE SONG DETECTION DIAGNOSTIC TOOL")
@@ -37,6 +49,14 @@ def warning(message):
 
 def info(message):
     print(f"{BLUE}ℹ{RESET} {message}")
+
+def create_silence_wav(path: Path, duration: int = 1, sample_rate: int = 44100):
+    frames = b"\x00\x00" * int(sample_rate * duration)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(frames)
 
 # Track issues
 issues = []
@@ -74,6 +94,36 @@ except ImportError:
     failure("numpy NOT installed")
     issues.append("numpy library missing")
     print(f"   → Fix: pip install numpy")
+
+print()
+print("STEP 1B: Song Detection Configuration")
+print("-" * 80)
+
+song_config, song_config_path = load_song_config()
+if song_config_path:
+    success(f"Loaded song_detection config from {song_config_path}")
+else:
+    warning("song_detection.json not found. Using built-in defaults.")
+
+provider = (song_config.get("provider") or "shazamio").lower()
+rapid_cfg = song_config.get("rapidapi", {})
+rapid_enabled = rapid_cfg.get("enabled", True)
+rapid_env_var = rapid_cfg.get("api_key_env", "PULSE_RAPIDAPI_KEY")
+rapid_key = rapid_cfg.get("api_key") or os.environ.get(rapid_env_var, "").strip()
+
+info(f"Configured provider: {provider}")
+info(f"Detection interval (sec): {song_config.get('detection_interval_seconds', 60)}")
+
+if rapid_enabled:
+    check("RapidAPI key configured")
+    if rapid_key:
+        success("RapidAPI key present (env or config)")
+    else:
+        failure("RapidAPI key missing")
+        issues.append("RapidAPI key missing (set in config/song_detection.json or env)")
+        print(f"   → Set {rapid_env_var} or add api_key to song_detection.json")
+else:
+    info("RapidAPI integration disabled in config.")
 
 print()
 print("STEP 2: Checking Audio Hardware")
@@ -251,27 +301,71 @@ else:
     issues.append("Song cache file missing - service may not be writing it")
     print(f"   → Expected location: {song_cache}")
 
+# Check song health file
+check("Song health file")
+song_health = data_dir / "song_health.json"
+if song_health.exists():
+    success("Song health file exists")
+    try:
+        with open(song_health, "r") as f:
+            health = json.load(f)
+        print(f"   Status: {health.get('status')}")
+        print(f"   Provider: {health.get('provider')}")
+        print(f"   Failure streak: {health.get('failure_streak')}")
+        if health.get("last_error"):
+            warning(f"   Last error: {health.get('last_error')}")
+            warnings_list.append("Song detector reporting recent errors")
+    except Exception as e:
+        warning(f"Cannot read song health file: {e}")
+else:
+    warning("Song health file missing (create after first successful run)")
+    warnings_list.append("Song health file missing")
+
 print()
-print("STEP 6: Testing Shazam API")
+print("STEP 6: Testing Recognition APIs")
 print("-" * 80)
 
+if rapid_enabled:
+    check("RapidAPI credential smoke test")
+    temp_path = None
+    try:
+        recognizer = RapidAPIRecognizer(rapid_cfg)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            temp_path = Path(tmp.name)
+        create_silence_wav(temp_path, duration=1)
+        result = recognizer.recognize(str(temp_path))
+        if result:
+            success("RapidAPI responded and returned song metadata (key valid)")
+        else:
+            success("RapidAPI responded (no match, but key accepted)")
+    except SongRecognitionError as e:
+        failure(f"RapidAPI test failed: {e}")
+        issues.append("RapidAPI credentials failing")
+    except Exception as e:
+        failure(f"RapidAPI test error: {e}")
+        issues.append("RapidAPI connectivity error")
+    finally:
+        if temp_path:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+else:
+    info("RapidAPI disabled; skipping API smoke test.")
+
+print()
 check("Shazam API connection test")
 try:
     import asyncio
     from shazamio import Shazam
     
-    print()
-    info("Testing Shazam API (creating event loop)...")
-    
     async def test_shazam():
         try:
             shazam = Shazam()
-            # This is just a connectivity test - won't actually recognize anything
             return True
         except Exception as e:
             return str(e)
     
-    # Create fresh event loop (party_box approach)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     result = loop.run_until_complete(test_shazam())

@@ -114,18 +114,18 @@ def main():
                 logger.info("="*80)
                 logger.info(f"🔊 Decibel: {db_reading.get('db_value', 0):.1f} dB")
                 
-                  if song_info.get('title') != 'Unknown':
-                      logger.info(f"🎵 Song: {song_info.get('title')} - {song_info.get('artist')}")
-                  else:
-                      logger.info("🎵 Song: None detected")
-                  health = song_detector.get_health_status()
-                  logger.info(
-                      "🎵 Song health → provider=%s status=%s failures=%s last_error=%s",
-                      health.get('provider'),
-                      health.get('status'),
-                      health.get('failure_streak'),
-                      health.get('last_error'),
-                  )
+                if song_info.get('title') != 'Unknown':
+                    logger.info(f"🎵 Song: {song_info.get('title')} - {song_info.get('artist')}")
+                else:
+                    logger.info("🎵 Song: None detected")
+                health = song_detector.get_health_status()
+                logger.info(
+                    "🎵 Song health → provider=%s status=%s failures=%s last_error=%s",
+                    health.get('provider'),
+                    health.get('status'),
+                    health.get('failure_streak'),
+                    health.get('last_error'),
+                )
                 
                 logger.info(f"✅ Decibel thread: {'Running' if decibel_detector.detection_thread and decibel_detector.detection_thread.is_alive() else 'Dead'}")
                 logger.info(f"✅ Song thread: {'Running' if song_detector.detection_thread and song_detector.detection_thread.is_alive() else 'Dead'}")

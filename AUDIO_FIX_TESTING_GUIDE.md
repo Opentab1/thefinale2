@@ -299,6 +299,14 @@ sudo journalctl -u pulse-hub | grep "Song detection enabled"
 
 # 3. Verify network access (Shazam API needs internet)
 ping -c 3 google.com
+
+# 4. Confirm RapidAPI key/config (if using RapidAPI provider)
+cat /opt/pulse/config/song_detection.json
+echo "$PULSE_RAPIDAPI_KEY" | head -c 4 && echo "... (redacted)"
+
+# 5. Run the CLI tester for a single attempt
+cd /opt/pulse
+python3 tools/song_detection_cli.py --log-level DEBUG
 ```
 
 ### Problem: Service Won't Start
