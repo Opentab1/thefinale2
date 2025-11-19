@@ -17,15 +17,19 @@ import logging
 import threading
 import numpy as np
 import math
+import subprocess
+import wave
+import tempfile
+import os
 from datetime import datetime
 
-# Try to import sound-related libraries
+# Check if arecord is available (always should be on Linux)
+ARECORD_AVAILABLE = True
 try:
-    import sounddevice as sd
-    SOUNDDEVICE_AVAILABLE = True
-except ImportError:
-    SOUNDDEVICE_AVAILABLE = False
-    logging.warning("sounddevice library not available. Install with 'pip install sounddevice'")
+    subprocess.run(['which', 'arecord'], capture_output=True, check=True)
+except (subprocess.CalledProcessError, FileNotFoundError):
+    ARECORD_AVAILABLE = False
+    logging.warning("arecord not available. Install alsa-utils package.")
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +45,13 @@ class DecibelDetector:
             update_interval: Seconds between measurements (default: 10)
             reference_pressure: Reference pressure for dB calculation (default: 0.00002 Pa or 20µPa)
         """
-        self.enabled = enabled and SOUNDDEVICE_AVAILABLE
+        self.enabled = enabled and ARECORD_AVAILABLE
         
         if self.enabled:
             logger.info("✅ Decibel detection enabled (update interval: %ds)", update_interval)
         else:
-            if not SOUNDDEVICE_AVAILABLE:
-                logger.warning("⚠️ sounddevice not available. Decibel detection disabled.")
+            if not ARECORD_AVAILABLE:
+                logger.warning("⚠️ arecord not available. Decibel detection disabled.")
         
         # Audio parameters
         self.sample_rate = 44100
@@ -101,34 +105,57 @@ class DecibelDetector:
                 time.sleep(5)  # Wait longer on error
     
     def measure_decibel(self):
-        """Record audio and calculate decibel level"""
+        """Record audio and calculate decibel level using arecord"""
         if not self.enabled:
             return
-            
+        
+        temp_filename = None
         try:
-            # Record audio sample
+            # Create temp file for recording
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_filename = temp_file.name
+            
+            # Record using arecord
             logger.debug(f"Recording {self.duration}s audio clip for decibel calculation...")
             
             try:
-                recording = sd.rec(
-                    int(self.duration * self.sample_rate),
-                    samplerate=self.sample_rate,
-                    channels=self.channels,
-                    dtype='float32'
-                )
-                sd.wait()  # Wait for recording to complete
+                result = subprocess.run([
+                    'arecord',
+                    '-D', 'plughw:2,0',  # USB microphone
+                    '-f', 'S16_LE',      # 16-bit signed little-endian
+                    '-c', '1',            # Mono
+                    '-r', '44100',        # 44.1kHz
+                    '-d', str(self.duration),
+                    temp_filename
+                ], capture_output=True, timeout=self.duration + 2)
                 
+                if result.returncode != 0:
+                    logger.error(f"arecord failed: {result.stderr.decode()}")
+                    return
+                
+                # Read WAV file
+                with wave.open(temp_filename, 'rb') as wf:
+                    frames = wf.readframes(wf.getnframes())
+                    audio_data = np.frombuffer(frames, dtype=np.int16).astype(float)
+                
+            except subprocess.TimeoutExpired:
+                logger.error(f"arecord timed out after {self.duration + 2}s")
+                return
             except Exception as e:
                 logger.error(f"Error during audio recording: {e}")
                 return
             
             # Calculate RMS value with protection against NaN and Inf
             try:
-                # Clip any extreme values
-                recording = np.clip(recording, -1.0, 1.0)
+                # Normalize to -1.0 to 1.0 range
+                if len(audio_data) > 0:
+                    audio_data = audio_data / 32768.0  # 16-bit max value
+                    audio_data = np.clip(audio_data, -1.0, 1.0)
+                else:
+                    audio_data = np.array([0.0])
                 
-                # Calculate RMS with protection
-                squared = np.square(recording)
+                # Calculate RMS
+                squared = np.square(audio_data)
                 mean_squared = np.mean(squared) if squared.size > 0 else 0.0
                 rms = np.sqrt(mean_squared) if mean_squared > 0 else 0.0
                 
@@ -146,10 +173,8 @@ class DecibelDetector:
             else:
                 db_value = 0
             
-            # Apply adjustment for rough calibration (calibrated for typical USB microphones)
-            # Offset reduced from +40 to -10 based on real-world testing
-            # Max raised from 100 to 150 to accommodate full dB range
-            adjusted_db = max(0, min(150, db_value - 10))  # Adjusted offset and cap at 150dB
+            # Apply adjustment for rough calibration
+            adjusted_db = max(0, min(150, db_value - 10))
             
             # Update latest reading
             with self.lock:
