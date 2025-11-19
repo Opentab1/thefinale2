@@ -188,6 +188,13 @@ class DecibelDetector:
             
         except Exception as e:
             logger.error(f"Error measuring decibel level: {e}")
+        finally:
+            # Clean up temp file
+            if temp_filename and os.path.exists(temp_filename):
+                try:
+                    os.remove(temp_filename)
+                except:
+                    pass
     
     def get_latest_reading(self):
         """Get the latest decibel reading"""
