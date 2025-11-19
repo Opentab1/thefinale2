@@ -123,7 +123,7 @@ class SongDetector:
                 temp_filename = temp_file.name
             
             # Record audio using arecord (bypasses PortAudio bug)
-            logger.debug(f"Recording {self.duration}s audio clip for song detection...")
+            logger.info(f"📼 Recording {self.duration}s audio clip for song detection...")
             
             try:
                 # Use arecord to record directly to WAV file
@@ -142,7 +142,7 @@ class SongDetector:
                     logger.error(f"arecord failed: {result.stderr.decode()}")
                     return
                 
-                logger.debug(f"Audio saved to {temp_filename}")
+                logger.info(f"✅ Audio recorded successfully")
                 
             except subprocess.TimeoutExpired:
                 logger.error(f"arecord timed out after {self.duration + 2}s")
@@ -178,7 +178,7 @@ class SongDetector:
             
             # Log what we received for debugging
             if result:
-                logger.debug(f"🔍 API response type: {type(result)}, has track: {'track' in result if isinstance(result, dict) else False}")
+                logger.info(f"🔍 RapidAPI responded: {type(result).__name__}, has track: {'track' in result if isinstance(result, dict) else False}")
             
             # Process result - check track exists AND is not None
             if result and isinstance(result, dict) and 'track' in result and result['track']:
@@ -196,7 +196,7 @@ class SongDetector:
                 logger.info(f"🎵 Song detected: {title} by {artist}")
             else:
                 # No song found - this is normal, not an error
-                logger.debug("🎵 No song detected (no match in database)")
+                logger.info("🎵 No song detected (no match in database)")
             
             # Clean up temporary file
             try:
