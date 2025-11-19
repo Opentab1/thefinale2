@@ -176,8 +176,12 @@ class SongDetector:
             # Call RapidAPI (simple HTTP, no async/event loop needed)
             result = self._recognize_song(audio_file)
             
-            # Process result
-            if result and 'track' in result:
+            # Log what we received for debugging
+            if result:
+                logger.debug(f"🔍 API response type: {type(result)}, has track: {'track' in result if isinstance(result, dict) else False}")
+            
+            # Process result - check track exists AND is not None
+            if result and isinstance(result, dict) and 'track' in result and result['track']:
                 track = result['track']
                 title = track.get('title', 'Unknown')
                 artist = track.get('subtitle', 'Unknown')
@@ -191,7 +195,8 @@ class SongDetector:
                 
                 logger.info(f"🎵 Song detected: {title} by {artist}")
             else:
-                logger.debug("🎵 No song detected")
+                # No song found - this is normal, not an error
+                logger.debug("🎵 No song detected (no match in database)")
             
             # Clean up temporary file
             try:
