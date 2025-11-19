@@ -179,6 +179,7 @@ class SongDetector:
             # Log what we received for debugging
             if result:
                 logger.info(f"🔍 RapidAPI responded: {type(result).__name__}, has track: {'track' in result if isinstance(result, dict) else False}")
+                logger.info(f"🔍 Full response: {result}")
             
             # Process result - check track exists AND is not None
             if result and isinstance(result, dict) and 'track' in result and result['track']:
