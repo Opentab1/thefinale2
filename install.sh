@@ -234,6 +234,22 @@ systemctl enable pulse.service || true
 systemctl enable pulse-firstboot.service || true
 systemctl enable pulse-health.service || true
 
+# Install Hailo runtime into the Pulse venv (optional, ignore if hat not present)
+echo -e "${YELLOW}[9/10] Installing Hailo runtime (if hardware present)...${NC}"
+if [ -d "$INSTALL_DIR/external/hailo-rpi5-examples" ]; then
+  (
+    set +e
+    cd "$INSTALL_DIR"
+    source .venv/bin/activate
+    cd external/hailo-rpi5-examples
+    chmod +x hailo_python_installation.sh
+    ./hailo_python_installation.sh --only-hailort || echo "Warning: Hailo runtime install skipped (hat not detected)"
+    deactivate
+  )
+else
+  echo "Hailo examples not found; skipping Hailo runtime install."
+fi
+
 echo -e "${YELLOW}[9/10] Configuring auto-login and kiosk mode...${NC}"
 
 # Configure auto-login
