@@ -160,7 +160,7 @@ class SongDetector:
             # Process in a separate thread to avoid blocking
             processing_thread = threading.Thread(
                 target=self._process_audio_file,
-                args=(temp_filename,),
+                args=(temp_filename, attempt_time),
                 daemon=True
             )
             processing_thread.start()
@@ -168,7 +168,7 @@ class SongDetector:
         except Exception as e:
             logger.error(f"Error in detect_song: {e}")
     
-    def _process_audio_file(self, audio_file):
+    def _process_audio_file(self, audio_file, attempt_time):
         """
         Process audio file with ShazamIO
         
@@ -177,6 +177,10 @@ class SongDetector:
         - Run recognition
         - Close loop immediately
         - No long-lived loops = no staleness
+        
+        Args:
+            audio_file: Path to the audio file to process
+            attempt_time: Timestamp when detection attempt started
         """
         try:
             # ✅ CREATE FRESH EVENT LOOP (party_box proven approach)
