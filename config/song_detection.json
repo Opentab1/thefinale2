@@ -1,0 +1,37 @@
+{
+  "provider": "shazamio",
+  "detection_interval_seconds": 60,
+  "recording": {
+    "duration_seconds": 5,
+    "sample_rate": 44100,
+    "channels": 1
+  },
+  "rapidapi": {
+    "enabled": true,
+    "api_key": "",
+    "api_key_env": "PULSE_RAPIDAPI_KEY",
+    "scheme": "https",
+    "host": "shazam-core.p.rapidapi.com",
+    "endpoint": "/v1/tracks/identify",
+    "method": "POST",
+    "send_as": "base64_json",
+    "audio_field": "audio",
+    "payload_template": {},
+    "form_fields": {},
+    "query": {},
+    "headers": {},
+    "title_path": [
+      "track",
+      "title"
+    ],
+    "artist_path": [
+      "track",
+      "subtitle"
+    ],
+    "timeout_seconds": 25
+  },
+  "backoff": {
+    "max_failure_streak": 5,
+    "cooldown_seconds": 180
+  }
+}

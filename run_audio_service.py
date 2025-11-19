@@ -63,7 +63,8 @@ def main():
     cache_dir.mkdir(parents=True, exist_ok=True)
     decibel_cache = cache_dir / "decibel_cache.json"
     song_cache = cache_dir / "song_cache.json"
-    logger.info(f"📁 Cache files: {decibel_cache}, {song_cache}")
+    song_health = cache_dir / "song_health.json"
+    logger.info(f"📁 Cache files: {decibel_cache}, {song_cache}, {song_health}")
     
     try:
         from services.sensors.simple_decibel_detector import DecibelDetector
@@ -100,6 +101,8 @@ def main():
                     json.dump(db_reading, f, indent=2)
                 with open(song_cache, 'w') as f:
                     json.dump(song_info, f, indent=2)
+                with open(song_health, 'w') as f:
+                    json.dump(song_detector.get_health_status(), f, indent=2)
             except Exception as e:
                 logger.error(f"Error writing cache files: {e}")
             
@@ -111,10 +114,18 @@ def main():
                 logger.info("="*80)
                 logger.info(f"🔊 Decibel: {db_reading.get('db_value', 0):.1f} dB")
                 
-                if song_info.get('title') != 'Unknown':
-                    logger.info(f"🎵 Song: {song_info.get('title')} - {song_info.get('artist')}")
-                else:
-                    logger.info("🎵 Song: None detected")
+                  if song_info.get('title') != 'Unknown':
+                      logger.info(f"🎵 Song: {song_info.get('title')} - {song_info.get('artist')}")
+                  else:
+                      logger.info("🎵 Song: None detected")
+                  health = song_detector.get_health_status()
+                  logger.info(
+                      "🎵 Song health → provider=%s status=%s failures=%s last_error=%s",
+                      health.get('provider'),
+                      health.get('status'),
+                      health.get('failure_streak'),
+                      health.get('last_error'),
+                  )
                 
                 logger.info(f"✅ Decibel thread: {'Running' if decibel_detector.detection_thread and decibel_detector.detection_thread.is_alive() else 'Dead'}")
                 logger.info(f"✅ Song thread: {'Running' if song_detector.detection_thread and song_detector.detection_thread.is_alive() else 'Dead'}")
