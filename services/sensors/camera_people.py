@@ -9,9 +9,10 @@ import cv2
 import numpy as np
 from threading import Thread, Event
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict
 import os
 from .person_tracker_adapter import PersonTracker
+from .door_zones import get_zone_config
 try:
     # Prefer the maintained detector in the detector/ subpackage
     from .detector.person_detector import PersonDetector
@@ -36,6 +37,9 @@ class PeopleCounter:
         self.current_count = 0
         self.entry_count = 0
         self.exit_count = 0
+        self._last_events: List[Dict] = []
+        self.door_config = None
+        self.zone_name = "Main Floor"
         self._last_snapshot_ts = 0.0
         self._snapshot_interval_seconds = 1.0
         # Snapshot path (writable fallback in dev)
@@ -253,12 +257,38 @@ class PeopleCounter:
             logger.error(f"Motion detection error: {e}")
             return 0, []
     
+    def _configure_door_zone(self, zone_name: str):
+        try:
+            config = get_zone_config(zone_name)
+        except Exception as exc:
+            logger.warning(f"Door zone config load failed for {zone_name}: {exc}")
+            config = None
+        if not config:
+            self.door_config = None
+            return
+        self.door_config = config
+        try:
+            self.tracker.configure_crossover_line(config)
+            logger.info(
+                "Doorway zone enabled for '%s' (orientation=%s, position=%.2f, entry_zone=%s)",
+                zone_name,
+                config.get("orientation"),
+                config.get("position"),
+                config.get("entry_zone"),
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to configure tracker crossover line: {exc}")
+            self.door_config = None
+
     def start_counting(self, camera_index: int = 0, zone: str = "Main Floor"):
         """Start continuous people counting"""
         if self.running:
             logger.warning("Counter already running")
             return
         
+        self.zone_name = zone or "Main Floor"
+        self._configure_door_zone(self.zone_name)
+
         self.running = True
         self.stop_event.clear()
         
@@ -313,9 +343,26 @@ class PeopleCounter:
 
                     # Update tracker for stable counts and entry/exit tracking
                     annotated_frame, stats = self.tracker.process_detections(detections, frame)
-                    self.current_count = int(stats.get('current', raw_count))
                     self.entry_count = int(stats.get('entries', self.entry_count))
                     self.exit_count = int(stats.get('exits', self.exit_count))
+                    if self.door_config:
+                        self.current_count = max(0, self.entry_count - self.exit_count)
+                    else:
+                        self.current_count = int(stats.get('current', raw_count))
+                    events = stats.get('events') or []
+                    if events:
+                        self._last_events = events
+                        for event in events:
+                            logger.info(
+                                "Doorway %s %s from %s to %s (track=%s)",
+                                self.zone_name,
+                                event.get('type'),
+                                event.get('from_label') or event.get('from_zone'),
+                                event.get('to_label') or event.get('to_zone'),
+                                event.get('track_id'),
+                            )
+                    else:
+                        self._last_events = []
                     logger.debug(
                         f"Count: {self.current_count}, Entry: {self.entry_count}, Exit: {self.exit_count}"
                     )
@@ -359,7 +406,8 @@ class PeopleCounter:
             "current_count": self.current_count,
             "entry_count": self.entry_count,
             "exit_count": self.exit_count,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "latest_events": self._last_events,
         }
     
     def reset_stats(self):

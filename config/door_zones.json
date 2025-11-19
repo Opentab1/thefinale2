@@ -1,0 +1,21 @@
+{
+  "defaults": {
+    "orientation": "horizontal",
+    "position": 0.5,
+    "entry_zone": "A",
+    "label_a": "outside",
+    "label_b": "inside",
+    "hysteresis_px": 12
+  },
+  "doorways": [
+    {
+      "zone": "Main Floor",
+      "orientation": "horizontal",
+      "position": 0.5,
+      "entry_zone": "A",
+      "label_a": "outside",
+      "label_b": "inside",
+      "hysteresis_px": 12
+    }
+  ]
+}

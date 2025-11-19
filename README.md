@@ -181,6 +181,11 @@ Song detection specifics (provider, recording duration, RapidAPI host/key) live 
 `/opt/pulse/config/song_detection.json`. Set the `api_key` there or export the
 environment variable referenced by `api_key_env` (defaults to `PULSE_RAPIDAPI_KEY`).
 
+Doorway/entry counting uses `/opt/pulse/config/door_zones.json`. Each doorway entry lets you
+define the line orientation (horizontal/vertical), its normalized position in the frame,
+and which side counts as the “entry” direction. Adjust these numbers after mounting the
+ceiling camera so crossings fire accurate entry/exit events.
+
 After changing config:
 
 ```bash
