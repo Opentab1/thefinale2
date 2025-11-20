@@ -137,10 +137,13 @@ def app_callback(pad, info, user_data):
             del user_data.previous_positions[track_id]
     
     # === CRITICAL: ALL DRAWING MUST BE INSIDE THIS BLOCK ===
+    print(f"DEBUG: user_data.use_frame = {user_data.use_frame}, frame is None: {frame is None}, width: {width}, height: {height}")
     if user_data.use_frame:
+        print(f"DEBUG: Drawing line at center_y={center_y}")
         # *** DRAW HORIZONTAL GREEN LINE FIRST ***
         if width is not None and height is not None:
             cv2.line(frame, (0, center_y), (width, center_y), (0, 255, 0), 5)
+            print(f"DEBUG: Line drawn from (0,{center_y}) to ({width},{center_y})")
         
         # Draw bounding boxes and tracking info for each detected person
         for detection in detections:
