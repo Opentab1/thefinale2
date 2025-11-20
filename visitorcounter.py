@@ -70,11 +70,6 @@ def app_callback(pad, info, user_data):
     # Calculate horizontal line position (middle of frame)
     center_y = height // 2 if height is not None else 0
     
-    # *** DRAW THE GREEN LINE FIRST (so it appears under everything else) ***
-    if frame is not None and width is not None and height is not None:
-        # Draw THICK HORIZONTAL GREEN LINE across middle of frame
-        cv2.line(frame, (0, center_y), (width, center_y), (0, 255, 0), 5)
-    
     # Update crossing cooldowns
     for track_id in list(user_data.crossing_cooldown.keys()):
         user_data.crossing_cooldown[track_id] += 1
@@ -127,23 +122,6 @@ def app_callback(pad, info, user_data):
                 
                 # Update position for next frame
                 user_data.previous_positions[track_id] = bbox_center_y
-                
-                # Draw bounding box on frame if available
-                if frame is not None:
-                    x1 = int(bbox.xmin() * width)
-                    y1 = int(bbox.ymin() * height)
-                    x2 = int(bbox.xmax() * width)
-                    y2 = int(bbox.ymax() * height)
-                    
-                    # Draw box (cyan color)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
-                    
-                    # Draw track ID above box
-                    cv2.putText(frame, f"ID:{track_id}", (x1, y1 - 10), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-                    
-                    # Draw center point
-                    cv2.circle(frame, (int((x1 + x2) / 2), bbox_center_y), 5, (0, 255, 255), -1)
     
     # Clean up old tracks (not seen for a while)
     active_track_ids = set()
@@ -158,45 +136,72 @@ def app_callback(pad, info, user_data):
         if track_id not in active_track_ids:
             del user_data.previous_positions[track_id]
     
-    # Add additional visualizations
-    if frame is not None and width is not None and height is not None:
+    # === CRITICAL: ALL DRAWING MUST BE INSIDE THIS BLOCK ===
+    if user_data.use_frame:
+        # *** DRAW HORIZONTAL GREEN LINE FIRST ***
+        if width is not None and height is not None:
+            cv2.line(frame, (0, center_y), (width, center_y), (0, 255, 0), 5)
+        
+        # Draw bounding boxes and tracking info for each detected person
+        for detection in detections:
+            if detection.get_label() == "person":
+                bbox = detection.get_bbox()
+                track = detection.get_objects_typed(hailo.HAILO_UNIQUE_ID)
+                if len(track) == 1 and width is not None and height is not None:
+                    track_id = track[0].get_id()
+                    x1 = int(bbox.xmin() * width)
+                    y1 = int(bbox.ymin() * height)
+                    x2 = int(bbox.xmax() * width)
+                    y2 = int(bbox.ymax() * height)
+                    bbox_center_y = int((bbox.ymin() + bbox.ymax()) / 2 * height)
+                    
+                    # Draw bounding box (cyan color)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
+                    
+                    # Draw track ID above box
+                    cv2.putText(frame, f"ID:{track_id}", (x1, y1 - 10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                    
+                    # Draw center point
+                    cv2.circle(frame, (int((x1 + x2) / 2), bbox_center_y), 5, (0, 255, 255), -1)
+        
         # Add "ENTRY" and "EXIT" zone labels
-        cv2.putText(frame, "ENTRY ZONE", (10, center_y - 20), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        cv2.putText(frame, "EXIT ZONE", (10, center_y + 40), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        if width is not None and height is not None:
+            cv2.putText(frame, "ENTRY ZONE", (10, center_y - 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(frame, "EXIT ZONE", (10, center_y + 40), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         
         # Display counts in BOTTOM RIGHT corner
-        text_x = width - 250
-        text_y_base = height - 80
+        if width is not None and height is not None:
+            text_x = width - 250
+            text_y_base = height - 80
+            
+            # Background rectangles for better visibility
+            cv2.rectangle(frame, (text_x - 10, text_y_base - 35), 
+                         (width - 10, height - 10), (0, 0, 0), -1)
+            cv2.rectangle(frame, (text_x - 10, text_y_base - 35), 
+                         (width - 10, height - 10), (0, 255, 0), 2)
+            
+            # Entry count (green)
+            cv2.putText(frame, f"ENTRIES: {user_data.entry_count}", 
+                       (text_x, text_y_base), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            
+            # Exit count (green)
+            cv2.putText(frame, f"EXITS:   {user_data.exit_count}", 
+                       (text_x, text_y_base + 40), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            
+            # Current detection count (top left)
+            cv2.putText(frame, f"People Detected: {detection_count}", 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            
+            # Frame counter (top left)
+            cv2.putText(frame, f"Frame: {user_data.get_count()}", 
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         
-        # Background rectangles for better visibility
-        cv2.rectangle(frame, (text_x - 10, text_y_base - 35), 
-                     (width - 10, height - 10), (0, 0, 0), -1)
-        cv2.rectangle(frame, (text_x - 10, text_y_base - 35), 
-                     (width - 10, height - 10), (0, 255, 0), 2)
-        
-        # Entry count (green)
-        cv2.putText(frame, f"ENTRIES: {user_data.entry_count}", 
-                   (text_x, text_y_base), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        
-        # Exit count (green)
-        cv2.putText(frame, f"EXITS:   {user_data.exit_count}", 
-                   (text_x, text_y_base + 40), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        
-        # Current detection count (top left)
-        cv2.putText(frame, f"People Detected: {detection_count}", 
-                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        
-        # Frame counter (top left)
-        cv2.putText(frame, f"Frame: {user_data.get_count()}", 
-                   (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-    
-    # Convert frame and send to display pipeline
-    if frame is not None and user_data.use_frame:
-        # Convert frame to BGR for display
+        # Convert frame to BGR and send to display pipeline
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         user_data.set_frame(frame)
     
