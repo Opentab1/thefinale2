@@ -70,6 +70,11 @@ def app_callback(pad, info, user_data):
     # Calculate horizontal line position (middle of frame)
     center_y = height // 2 if height is not None else 0
     
+    # *** DRAW THE GREEN LINE FIRST (so it appears under everything else) ***
+    if frame is not None and width is not None and height is not None:
+        # Draw THICK HORIZONTAL GREEN LINE across middle of frame
+        cv2.line(frame, (0, center_y), (width, center_y), (0, 255, 0), 5)
+    
     # Update crossing cooldowns
     for track_id in list(user_data.crossing_cooldown.keys()):
         user_data.crossing_cooldown[track_id] += 1
@@ -153,11 +158,8 @@ def app_callback(pad, info, user_data):
         if track_id not in active_track_ids:
             del user_data.previous_positions[track_id]
     
-    # Visualize on frame
-    if user_data.use_frame and frame is not None:
-        # Draw HORIZONTAL GREEN LINE across middle of frame
-        cv2.line(frame, (0, center_y), (width, center_y), (0, 255, 0), 3)
-        
+    # Add additional visualizations
+    if frame is not None and width is not None and height is not None:
         # Add "ENTRY" and "EXIT" zone labels
         cv2.putText(frame, "ENTRY ZONE", (10, center_y - 20), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
@@ -191,7 +193,9 @@ def app_callback(pad, info, user_data):
         # Frame counter (top left)
         cv2.putText(frame, f"Frame: {user_data.get_count()}", 
                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        
+    
+    # Convert frame and send to display pipeline
+    if frame is not None and user_data.use_frame:
         # Convert frame to BGR for display
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         user_data.set_frame(frame)
