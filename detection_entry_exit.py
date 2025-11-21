@@ -130,7 +130,7 @@ def app_callback(pad, info, user_data):
     
     if user_data.use_frame:
         # Draw the vertical center line
-        cv2.line(frame, (center_x, 0), (center_x, height), (0, 255, 255), 2)  # Yellow line
+        cv2.line(frame, (center_x, 0), (center_x, height), (0, 255, 0), 4)  # Green line
         
         # Display detection count
         cv2.putText(frame, f"Detections: {detection_count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
