@@ -71,9 +71,9 @@ def app_callback(pad, info, user_data):
     exits_detection = hailo.HailoDetection(exits_bbox, f"EXITS: {user_data.exit_count}", 1.0)
     roi.add_object(exits_detection)
     
-    # Create horizontal line across the center
-    line_bbox = hailo.HailoBBox(0.0, 0.495, 1.0, 0.01)  # thin horizontal line
-    line_detection = hailo.HailoDetection(line_bbox, "---LINE---", 1.0)
+    # Create horizontal line across the center (much thicker)
+    line_bbox = hailo.HailoBBox(0.0, 0.48, 1.0, 0.04)  # thicker horizontal line
+    line_detection = hailo.HailoDetection(line_bbox, "========== LINE ==========", 1.0)
     roi.add_object(line_detection)
 
     # Track active IDs in this frame
