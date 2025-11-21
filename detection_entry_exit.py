@@ -129,16 +129,12 @@ def app_callback(pad, info, user_data):
         del user_data.tracks[tid]
     
     if user_data.use_frame:
-        # Draw the vertical center line
-        cv2.line(frame, (center_x, 0), (center_x, height), (0, 255, 0), 4)  # Green line
-        
         # Display detection count
         cv2.putText(frame, f"Detections: {detection_count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
-        # Display entry/exit counts
-        cv2.putText(frame, f"Entries: {user_data.entry_count}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(frame, f"Exits: {user_data.exit_count}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(frame, f"Current: {user_data.entry_count - user_data.exit_count}", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        # Display entry/exit counts in bottom right
+        cv2.putText(frame, f"Entries: {user_data.entry_count}", (width - 250, height - 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(frame, f"Exits: {user_data.exit_count}", (width - 250, height - 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
         # Example of how to use the new_variable and new_function from the user_data
         # Let's print the new_variable and the result of the new_function to the frame
