@@ -48,8 +48,8 @@ def app_callback(pad, info, user_data):
     # Get the caps from the pad
     format, width, height = get_caps_from_pad(pad)
 
-    # Calculate center line position
-    center_x = width // 2 if width else 0
+    # Calculate center line position (horizontal)
+    center_y = height // 2 if height else 0
 
     # If the user_data.use_frame is set to True, we can get the video frame from the buffer
     frame = None
@@ -62,14 +62,19 @@ def app_callback(pad, info, user_data):
     detections = roi.get_objects_typed(hailo.HAILO_DETECTION)
     
     # Create dummy detection boxes to display entry/exit text
-    # Bottom-right position for better visibility
-    entries_bbox = hailo.HailoBBox(0.70, 0.85, 0.28, 0.06)  # bottom right
+    # Top-left position
+    entries_bbox = hailo.HailoBBox(0.01, 0.02, 0.15, 0.05)
     entries_detection = hailo.HailoDetection(entries_bbox, f"ENTRIES: {user_data.entry_count}", 1.0)
     roi.add_object(entries_detection)
     
-    exits_bbox = hailo.HailoBBox(0.70, 0.92, 0.28, 0.06)  # below entries
+    exits_bbox = hailo.HailoBBox(0.01, 0.08, 0.15, 0.05)
     exits_detection = hailo.HailoDetection(exits_bbox, f"EXITS: {user_data.exit_count}", 1.0)
     roi.add_object(exits_detection)
+    
+    # Create horizontal line across the center
+    line_bbox = hailo.HailoBBox(0.0, 0.495, 1.0, 0.01)  # thin horizontal line
+    line_detection = hailo.HailoDetection(line_bbox, "---LINE---", 1.0)
+    roi.add_object(line_detection)
 
     # Track active IDs in this frame
     active_tracks = set()
@@ -100,8 +105,8 @@ def app_callback(pad, info, user_data):
                 
                 # Initialize track if new
                 if track_id not in user_data.tracks:
-                    # Determine initial side
-                    initial_side = 'left' if centroid_x < center_x else 'right'
+                    # Determine initial side (top or bottom of horizontal line)
+                    initial_side = 'top' if centroid_y < center_y else 'bottom'
                     user_data.tracks[track_id] = {
                         'centroids': [(centroid_x, centroid_y)],
                         'last_side': initial_side
@@ -115,18 +120,18 @@ def app_callback(pad, info, user_data):
                     if len(track_data['centroids']) > user_data.max_centroid_history:
                         track_data['centroids'].pop(0)
                     
-                    # Check for line crossing
-                    current_side = 'left' if centroid_x < center_x else 'right'
+                    # Check for line crossing (horizontal line)
+                    current_side = 'top' if centroid_y < center_y else 'bottom'
                     last_side = track_data['last_side']
                     
                     # Detect crossing
                     if last_side != current_side:
-                        if last_side == 'left' and current_side == 'right':
-                            # Left to right = ENTRY
+                        if last_side == 'top' and current_side == 'bottom':
+                            # Top to bottom = ENTRY
                             user_data.entry_count += 1
                             string_to_print += f">>> ENTRY detected! ID: {track_id} | Total Entries: {user_data.entry_count}\n"
-                        elif last_side == 'right' and current_side == 'left':
-                            # Right to left = EXIT
+                        elif last_side == 'bottom' and current_side == 'top':
+                            # Bottom to top = EXIT
                             user_data.exit_count += 1
                             string_to_print += f"<<< EXIT detected! ID: {track_id} | Total Exits: {user_data.exit_count}\n"
                         
