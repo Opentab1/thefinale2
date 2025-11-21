@@ -62,12 +62,12 @@ def app_callback(pad, info, user_data):
     detections = roi.get_objects_typed(hailo.HAILO_DETECTION)
     
     # Create a dummy detection box in top-left corner to hold our text
-    # Using bbox with very small area in top-left
-    entries_bbox = hailo.HailoBBox(0.01, 0.05, 0.001, 0.001)  # tiny box at top
+    # Using larger bbox for more visible labels
+    entries_bbox = hailo.HailoBBox(0.01, 0.02, 0.15, 0.05)  # larger box at top
     entries_detection = hailo.HailoDetection(entries_bbox, f"Entries: {user_data.entry_count}", 1.0)
     roi.add_object(entries_detection)
     
-    exits_bbox = hailo.HailoBBox(0.01, 0.10, 0.001, 0.001)  # tiny box slightly below
+    exits_bbox = hailo.HailoBBox(0.01, 0.08, 0.15, 0.05)  # larger box slightly below
     exits_detection = hailo.HailoDetection(exits_bbox, f"Exits: {user_data.exit_count}", 1.0)
     roi.add_object(exits_detection)
 
