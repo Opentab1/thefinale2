@@ -61,14 +61,14 @@ def app_callback(pad, info, user_data):
     roi = hailo.get_roi_from_buffer(buffer)
     detections = roi.get_objects_typed(hailo.HAILO_DETECTION)
     
-    # Create a dummy detection box in top-left corner to hold our text
-    # Using larger bbox for more visible labels
-    entries_bbox = hailo.HailoBBox(0.01, 0.02, 0.15, 0.05)  # larger box at top
-    entries_detection = hailo.HailoDetection(entries_bbox, f"Entries: {user_data.entry_count}", 1.0)
+    # Create dummy detection boxes to display entry/exit text
+    # Bottom-right position for better visibility
+    entries_bbox = hailo.HailoBBox(0.70, 0.85, 0.28, 0.06)  # bottom right
+    entries_detection = hailo.HailoDetection(entries_bbox, f"ENTRIES: {user_data.entry_count}", 1.0)
     roi.add_object(entries_detection)
     
-    exits_bbox = hailo.HailoBBox(0.01, 0.08, 0.15, 0.05)  # larger box slightly below
-    exits_detection = hailo.HailoDetection(exits_bbox, f"Exits: {user_data.exit_count}", 1.0)
+    exits_bbox = hailo.HailoBBox(0.70, 0.92, 0.28, 0.06)  # below entries
+    exits_detection = hailo.HailoDetection(exits_bbox, f"EXITS: {user_data.exit_count}", 1.0)
     roi.add_object(exits_detection)
 
     # Track active IDs in this frame
