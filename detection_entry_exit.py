@@ -60,6 +60,12 @@ def app_callback(pad, info, user_data):
     # Get the detections from the buffer
     roi = hailo.get_roi_from_buffer(buffer)
     detections = roi.get_objects_typed(hailo.HAILO_DETECTION)
+    
+    # Add entry/exit text to the ROI as metadata
+    entries_text = hailo.HailoClassification("stats", f"Entries: {user_data.entry_count}")
+    exits_text = hailo.HailoClassification("stats", f"Exits: {user_data.exit_count}")
+    roi.add_object(entries_text)
+    roi.add_object(exits_text)
 
     # Track active IDs in this frame
     active_tracks = set()
