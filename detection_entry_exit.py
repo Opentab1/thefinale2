@@ -132,9 +132,10 @@ def app_callback(pad, info, user_data):
         # Display detection count
         cv2.putText(frame, f"Detections: {detection_count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
-        # Display entry/exit counts on screen
-        cv2.putText(frame, f"Entries: {user_data.entry_count}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(frame, f"Exits: {user_data.exit_count}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        # Display entry/exit counts with background for visibility
+        cv2.rectangle(frame, (5, 50), (300, 130), (0, 0, 0), -1)  # Black background
+        cv2.putText(frame, f"Entries: {user_data.entry_count}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(frame, f"Exits: {user_data.exit_count}", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
         # Example of how to use the new_variable and new_function from the user_data
         # Let's print the new_variable and the result of the new_function to the frame
