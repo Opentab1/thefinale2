@@ -43,7 +43,7 @@ def app_callback(pad, info, user_data):
 
     # Using the user_data to count the number of frames
     user_data.increment()
-    string_to_print = f"Frame count: {user_data.get_count()}\n"
+    string_to_print = f"Frame count: {user_data.get_count()} | Entries: {user_data.entry_count} | Exits: {user_data.exit_count}\n"
 
     # Get the caps from the pad
     format, width, height = get_caps_from_pad(pad)
@@ -132,9 +132,9 @@ def app_callback(pad, info, user_data):
         # Display detection count
         cv2.putText(frame, f"Detections: {detection_count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
-        # Display entry/exit counts in bottom right
-        cv2.putText(frame, f"Entries: {user_data.entry_count}", (width - 250, height - 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(frame, f"Exits: {user_data.exit_count}", (width - 250, height - 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        # Display entry/exit counts on screen
+        cv2.putText(frame, f"Entries: {user_data.entry_count}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(frame, f"Exits: {user_data.exit_count}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
         # Example of how to use the new_variable and new_function from the user_data
         # Let's print the new_variable and the result of the new_function to the frame
