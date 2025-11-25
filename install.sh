@@ -58,7 +58,7 @@ apt-get install -y \
     libopenblas-dev \
     libportaudio2 \
     portaudio19-dev \
-    libsndfile1 \
+    libcap-dev \
     i2c-tools \
     python3-libgpiod \
     chromium \
